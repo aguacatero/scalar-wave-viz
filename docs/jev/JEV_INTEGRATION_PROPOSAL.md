@@ -4,47 +4,32 @@
 
 **Proposal only. Do not treat Jev as a physics authority.**
 
-This proposal asks for a deep review of Jev as an epistemic-status and claim-language gate. The repository deliberately mixes established equations/data, numerical models, predictions, and speculative extrapolations; Jev may be useful for consistently flagging when prose crosses those boundaries.
+Evaluate Jev only as an epistemic-status and claim-language linter after source provenance and numerical validation are established by deterministic/expert methods.
 
-## Why this repo may benefit
+## Required deep-review skill stack
 
-The primary risk is not arithmetic—it is category slippage: a visualization assumption or speculative material property can be phrased as if it were measured physics. A constrained judge operating on structured claim provenance may improve labeling consistency and reviewer trust.
+Sources:
+- Matt Pocock: `https://github.com/mattpocock/skills`
+- K-Dense Scientific Agent Skills: `https://github.com/K-Dense-AI/scientific-agent-skills`
 
-**Working benefit hypothesis:** reduce overstatement and improve separation of measured, established, modeled, predicted, extrapolated, and unsupported claims.
+Use in order:
 
-## Candidate decision boundaries
+1. **Matt `research`** — map README/notebook/caption claim surfaces, numerical models, source/provenance metadata, and current validation paths. Output `docs/jev/review/01_REPO_MAP.md`.
+2. **K-Dense `scientific-critical-thinking`** — red-team category slippage between measured, established theory, simulation output, prediction, extrapolation, and unsupported claim; inspect bias, causal overreach, and wording that exceeds evidence. Output `02_SCIENTIFIC_CRITIQUE.md`.
+3. **K-Dense `peer-review`** — review the proposed claim-status method for claim/evidence alignment, reproducibility, citation/source support, and specialist physics-review needs. Output `03_PEER_REVIEW.md`.
+4. **K-Dense `literature-review`** — use for bounded verification of relevant physical/material claims and provenance standards; do not use Jev or the literature-review skill to turn speculation into evidence. Output `04_METHOD_LITERATURE.md` when used.
+5. **K-Dense `experimental-design`** — design a benchmark comparing explicit provenance metadata + deterministic lint rules, human/expert labels, and Jev on development and untouched holdout claims. Include clearly established, model-dependent, speculative, and misleadingly phrased examples. Output `05_BENCHMARK_DESIGN.md`.
+6. **K-Dense `statistical-power`** — determine enough labeled claims to estimate false-overstatement and false-downgrade rates with useful precision. Output `06_SAMPLE_PRECISION.md`.
+7. **K-Dense `statistical-analysis`** — predefine overstatement detection, false downgrades of established facts, calibration, phrasing sensitivity, and added value beyond provenance metadata. Output `07_ANALYSIS_PLAN.md` and reuse after shadow mode.
+8. **Matt `domain-modeling`** — define measured, established theory, model output, prediction, speculative extrapolation, unsupported, provenance, qualification, and human review. Output `08_DECISION_MODEL.md`.
+9. **Matt `codebase-design`** — design one offline/lint-style Jev seam after provenance and numerical checks, with fake adapter, logs, model/question versioning, and no automatic scientific upgrade. Output `09_ARCHITECTURE.md`.
+10. **Matt `grill-with-docs`** — resolve label taxonomy, acceptable false-downgrade/overstatement rates, shadow behavior, and what always requires expert review. Output `10_DECISIONS.md`.
+11. Create `docs/jev/DEEP_REVIEW.md` with `GO | MODIFY | NO-GO`, claim-surface inventory, deterministic provenance requirements, scientific critique, benchmark/holdout plan, specialist review needs, shadow-linter design, and implementation plan only if justified.
+12. **After GO/MODIFY:** Matt `to-spec`; after implementation Matt `code-review`; then K-Dense `statistical-analysis` on untouched/shadow results.
 
-1. Scientific sentence/claim → epistemic category.
-2. Notebook output → simulation result versus physical inference.
-3. Measured isotope/material property versus theoretical prediction versus speculative parameter.
-4. README/caption wording → appropriately qualified versus overstated.
-5. Claim with mixed provenance → human/scientific review.
+## Jev constraints
 
-## What Jev must not do
-
-- calculate or validate FDTD/nuclear-physics mathematics;
-- determine whether a cited scientific value is correct without verified source data;
-- turn simulation behavior into experimental evidence;
-- establish scalar-wave or exotic-material physics;
-- infer properties of Moscovium beyond supplied sources/models;
-- replace unit tests, numerical validation, literature verification, or expert review.
-
-## Proposed record
-
-```json
-{
-  "claim": "A stable Moscovium isotope would nearly trap the modeled wave.",
-  "claim_context": "README description of simulation preset",
-  "provenance": [
-    {"component": "isotope stability", "status": "model_prediction", "source": "..."},
-    {"component": "wave speed preset", "status": "speculative_parameter", "source": "project assumption"}
-  ],
-  "simulation_support": true,
-  "experimental_support": false
-}
-```
-
-Source/provenance status must be determined by verified metadata, not guessed by Jev.
+Jev must not validate physics mathematics, verify source values from memory, convert simulation behavior into experimental evidence, establish scalar-wave/exotic-material physics, infer Moscovium properties beyond supplied sources, or replace numerical tests/literature verification/expert review.
 
 ## Candidate questions
 
@@ -52,43 +37,9 @@ Source/provenance status must be determined by verified metadata, not guessed by
 - `claim_is_model_dependent` → yes/no
 - `claim_contains_speculative_component` → yes/no
 - `wording_overstates_available_support` → yes/no
-- `recommended_epistemic_label` → choice: `measured`, `established_theory`, `model_output`, `prediction`, `speculative_extrapolation`, `unsupported`, `human_review`
+- `recommended_epistemic_label` → `measured | established_theory | model_output | prediction | speculative_extrapolation | unsupported | human_review`
 - `qualification_required` → yes/no
 
-## Benchmark requirement
+## Review instruction
 
-Build a gold set from README/notebook claims and label them independently using source provenance. Include clearly established statements, model results, predictions, deliberate speculation, and misleadingly phrased examples.
-
-Compare Jev to deterministic provenance labels and simple keyword rules. Measure overstatement detection, false downgrades of established facts, calibration, consistency across equivalent phrasing, and whether the system adds value beyond explicit metadata.
-
-## Shadow mode
-
-Run Jev as a linter that emits review findings only. It should not rewrite notebooks/README automatically. Human review decides whether wording changes are appropriate.
-
-## Architecture requirements
-
-- Provenance/source verification precedes Jev.
-- Mathematical/numerical validation remains deterministic.
-- One Jev adapter or offline lint command.
-- `OPENROUTER_API_KEY` via secret store only.
-- Pin/log model version during benchmark.
-- Version question sets.
-- API failure produces no claim-status upgrade.
-
-## Required deep-review deliverable
-
-Create `docs/jev/DEEP_REVIEW.md` with:
-
-1. `GO`, `MODIFY`, or `NO-GO`.
-2. Inventory of claim-generation surfaces (README/notebooks/captions).
-3. Deterministic provenance labeling that should be implemented first.
-4. Minimal record/question set.
-5. Gold-set benchmark design.
-6. False-overstatement and false-downgrade analysis.
-7. Shadow-linter design.
-8. Expected scientific-communication benefit.
-9. Implementation plan only if justified.
-
-## Review instruction for Claude/Codex
-
-Assume explicit provenance metadata plus deterministic linting may be sufficient. Recommend Jev only if repeated semantic wording judgments remain and benchmark evidence shows it catches meaningful epistemic slippage without creating false authority.
+Assume explicit provenance metadata plus deterministic linting may be sufficient. Keep Jev only if repeated semantic wording judgments remain and untouched benchmark evidence shows it catches meaningful epistemic slippage without creating false authority.
