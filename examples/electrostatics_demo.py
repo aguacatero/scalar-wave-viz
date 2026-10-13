@@ -15,6 +15,24 @@ from electrostatics_baseline import (electrode_pair_in_grounded_box,
                                      parallel_plate_benchmark)
 
 
+def display_field_data(result):
+    """Mask fixed-potential conductors and show directional arrows only in vacuum.
+
+    Gradient samples on/inside fixed conducting cells are not trustworthy
+    physical interior fields. Vector lengths are normalized for direction;
+    the color scale, not arrow length, displays field magnitude.
+    """
+    magnitude = np.hypot(result.ex_v_per_m, result.ey_v_per_m)
+    hidden = result.fixed_mask
+    ux = np.divide(result.ex_v_per_m, magnitude, out=np.zeros_like(magnitude),
+                   where=magnitude > 0)
+    uy = np.divide(result.ey_v_per_m, magnitude, out=np.zeros_like(magnitude),
+                   where=magnitude > 0)
+    return (np.ma.array(magnitude, mask=hidden),
+            np.ma.array(ux, mask=hidden | (magnitude == 0)),
+            np.ma.array(uy, mask=hidden | (magnitude == 0)))
+
+
 def render(output: str = 'electrostatics_baseline.png') -> Path:
     result = electrode_pair_in_grounded_box(n=101)
     plate = parallel_plate_benchmark(1000.0, 0.001, 1e-4)
@@ -26,14 +44,18 @@ def render(output: str = 'electrostatics_baseline.png') -> Path:
     image = axes[0].contourf(x, y, result.potential_v, levels=25, cmap='coolwarm')
     fig.colorbar(image, ax=axes[0],label='Potential (V)')
     axes[0].set(title='A · Dirichlet potential',xlabel='x (mm)',ylabel='y (mm)',aspect='equal')
-    field = np.hypot(result.ex_v_per_m,result.ey_v_per_m)
-    image2 = axes[1].contourf(x,y,field/1000,levels=25,cmap='viridis')
-    fig.colorbar(image2, ax=axes[1],label='|E| (kV/m)')
+    field, unit_ex, unit_ey = display_field_data(result)
+    image2 = axes[1].contourf(x, y, field/1000, levels=25, cmap='viridis')
+    fig.colorbar(image2, ax=axes[1], label='|E| (kV/m), vacuum only')
     stride = 8
-    axes[1].quiver(x[::stride,::stride],y[::stride,::stride],
-                   result.ex_v_per_m[::stride,::stride],result.ey_v_per_m[::stride,::stride],
-                   color='white',alpha=0.65)
-    axes[1].set(title='B · Electric field',xlabel='x (mm)',ylabel='y (mm)',aspect='equal')
+    axes[1].quiver(x[::stride, ::stride], y[::stride, ::stride],
+                   unit_ex[::stride, ::stride], unit_ey[::stride, ::stride],
+                   color='white', alpha=0.7, scale_units='xy', scale=1.0)
+    for axis, color in ((axes[0], 'black'), (axes[1], 'white')):
+        axis.contour(x, y, result.fixed_mask.astype(float), levels=[0.5],
+                     colors=[color], linewidths=0.9)
+    axes[1].set(title='B · Vacuum field (arrows = direction only)',
+                xlabel='x (mm)', ylabel='y (mm)', aspect='equal')
     # Analytic forces are from a SEPARATE ideal parallel-plate example.
     micro_n = 1e6
     axes[2].bar(['Positive plate', 'Negative plate', 'Net pair'],
