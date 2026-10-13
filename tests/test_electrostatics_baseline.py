@@ -70,6 +70,17 @@ class LaplaceTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             electrode_pair_in_grounded_box(left_center_x_m=-0.02)
 
+    def test_visualization_masks_electrode_and_grounded_boundary_fields(self):
+        from examples.electrostatics_demo import display_field_data
+        solution = electrode_pair_in_grounded_box(n=41)
+        magnitude, unit_ex, unit_ey = display_field_data(solution)
+        for result in (magnitude, unit_ex, unit_ey):
+            self.assertTrue(np.all(np.ma.getmaskarray(result)[solution.fixed_mask]))
+            self.assertTrue(np.all(np.isfinite(result.compressed())))
+        direction_norm = np.hypot(unit_ex.filled(0), unit_ey.filled(0))
+        self.assertLessEqual(float(np.max(direction_norm)), 1.000000000001)
+        self.assertTrue(np.all(direction_norm[solution.fixed_mask] == 0))
+
 
 if __name__ == '__main__':
     unittest.main()
