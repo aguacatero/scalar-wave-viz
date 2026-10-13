@@ -3,3 +3,4 @@ matplotlib
 ipywidgets
 ipympl
 plotly
+scipy
