@@ -7,6 +7,7 @@ The ideal parallel plate benchmark is a separate analytic reference.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Sequence
 
 import numpy as np
 from scipy.sparse import coo_matrix
@@ -29,35 +30,125 @@ class PlateBenchmark:
 
 
 def parallel_plate_benchmark(voltage_v: float, gap_m: float, area_m2: float) -> PlateBenchmark:
-    """Ideal parallel plates, neglecting fringing; opposing attraction sums to zero."""
+    """Ideal parallel plates, neglecting fringing; opposing attraction sums to zero.
+
+    Coordinate convention:
+      Positive plate at x = 0, negative plate at x = gap.
+      Force on positive plate is along +x (attracted toward negative plate): +p * A.
+      Force on negative plate is along -x (attracted toward positive plate): -p * A.
+      Net pair force is the explicit sum: force_pos + force_neg == 0.0 (Newton's 3rd Law).
+    """
     if not all(np.isfinite(v) for v in (voltage_v, gap_m, area_m2)):
         raise ValueError('Inputs must be finite')
     if gap_m <= 0 or area_m2 <= 0:
         raise ValueError('Gap and area must be positive')
     e_field = voltage_v / gap_m
     pressure = 0.5 * EPSILON_0_F_PER_M * e_field**2
-    force = pressure * area_m2
+    force_pos = pressure * area_m2
+    force_neg = -pressure * area_m2
+    net_force = force_pos + force_neg
     energy = 0.5 * EPSILON_0_F_PER_M * e_field**2 * area_m2 * gap_m
-    return PlateBenchmark(voltage_v, gap_m, area_m2, e_field, pressure,
-                          force, -force, 0.0, energy)
+    return PlateBenchmark(
+        voltage_v=voltage_v,
+        gap_m=gap_m,
+        area_m2=area_m2,
+        electric_field_v_per_m=e_field,
+        pressure_pa=pressure,
+        force_on_positive_plate_n=force_pos,
+        force_on_negative_plate_n=force_neg,
+        net_pair_force_n=net_force,
+        stored_energy_j=energy,
+    )
+
+
+def verify_plate_force_virtual_work(
+    voltage_v: float, gap_m: float, area_m2: float, delta_gap_m: float = 1e-8
+) -> dict[str, float]:
+    """Independently cross-check parallel-plate attraction via virtual work and energy derivatives.
+
+    Distinguishes two thermodynamic ensembles:
+    1. Fixed Charge Q (isolated capacitor):
+       U_Q(g) = Q^2 / (2 * C(g)) = Q^2 * g / (2 * epsilon_0 * A)
+       Force along gap direction tending to increase gap:
+         F_g = - dU_Q / dg = - 0.5 * epsilon_0 * (V/g)^2 * A (attractive, pulling inward)
+
+    2. Fixed Voltage V (connected to external voltage source / battery):
+       U_V(g) = 0.5 * C(g) * V^2
+       When gap increases by dg:
+         dW_source = V * dQ = V^2 * dC = 2 * dU_V
+         dW_mech = F_g * dg = dW_source - dU_V = dU_V
+       Force tending to increase gap:
+         F_g = dU_V / dg = - 0.5 * epsilon_0 * (V/g)^2 * A (identical attractive magnitude)
+    """
+    if gap_m <= 0 or area_m2 <= 0 or delta_gap_m <= 0 or delta_gap_m >= gap_m:
+        raise ValueError('Invalid geometry for virtual work test')
+
+    def capacitance(g: float) -> float:
+        return EPSILON_0_F_PER_M * area_m2 / g
+
+    # Constant voltage energy and numerical derivative
+    u_v_plus = 0.5 * capacitance(gap_m + delta_gap_m) * voltage_v**2
+    u_v_minus = 0.5 * capacitance(gap_m - delta_gap_m) * voltage_v**2
+    du_v_dg = (u_v_plus - u_v_minus) / (2 * delta_gap_m)
+    f_gap_fixed_v = du_v_dg
+
+    # Constant charge energy and numerical derivative
+    q_fixed = capacitance(gap_m) * voltage_v
+    u_q_plus = q_fixed**2 / (2 * capacitance(gap_m + delta_gap_m))
+    u_q_minus = q_fixed**2 / (2 * capacitance(gap_m - delta_gap_m))
+    du_q_dg = (u_q_plus - u_q_minus) / (2 * delta_gap_m)
+    f_gap_fixed_q = -du_q_dg
+
+    expected_magnitude = 0.5 * EPSILON_0_F_PER_M * (voltage_v / gap_m)**2 * area_m2
+
+    return {
+        'expected_magnitude_n': expected_magnitude,
+        'virtual_work_fixed_v_n': abs(f_gap_fixed_v),
+        'virtual_work_fixed_q_n': abs(f_gap_fixed_q),
+        'signed_f_gap_fixed_v_n': f_gap_fixed_v,
+        'signed_f_gap_fixed_q_n': f_gap_fixed_q,
+    }
 
 
 @dataclass(frozen=True)
 class FieldSolution:
     potential_v: np.ndarray
-    ex_v_per_m: np.ndarray
-    ey_v_per_m: np.ndarray
-    fixed_mask: np.ndarray
+    ex_v_per_m: np.ndarray             # Physical vacuum field; NaN outside vacuum interior
+    ey_v_per_m: np.ndarray             # Physical vacuum field; NaN outside vacuum interior
+    vacuum_mask: np.ndarray            # True for vacuum nodes where Laplace eq holds
+    conductor_mask: np.ndarray         # True for interior conductor electrodes
+    boundary_mask: np.ndarray          # True for external boundary (e.g. grounded box)
+    fixed_mask: np.ndarray             # conductor_mask | boundary_mask (backward compatible)
     grid_spacing_m: float
     max_discrete_residual_v: float
+    raw_gradient_x_v_per_m: np.ndarray # Discrete gradient of potential grid across all nodes
+    raw_gradient_y_v_per_m: np.ndarray # Discrete gradient of potential grid across all nodes
+
+    @property
+    def vacuum_e_magnitude_v_per_m(self) -> np.ndarray:
+        """Physical vacuum electric field magnitude; NaN on non-vacuum nodes."""
+        return np.hypot(self.ex_v_per_m, self.ey_v_per_m)
 
 
-def solve_dirichlet(fixed_mask: np.ndarray, fixed_potential_v: np.ndarray,
-                    grid_spacing_m: float) -> FieldSolution:
+def solve_dirichlet(
+    fixed_mask: np.ndarray,
+    fixed_potential_v: np.ndarray,
+    grid_spacing_m: float,
+    conductor_mask: np.ndarray | None = None,
+    boundary_mask: np.ndarray | None = None,
+) -> FieldSolution:
     """Solve Laplace's equation with a five-point finite-difference stencil.
 
     Fixed values are Dirichlet. No force or charge claim follows from
     a potential-field picture without an explicitly defined system boundary.
+
+    Domain nodes are explicitly partitioned into:
+      - vacuum_mask: interior vacuum cells where Laplace eq holds (nabla^2 V = 0)
+      - conductor_mask: interior conducting electrodes
+      - boundary_mask: external Dirichlet boundary (grounded outer enclosure)
+
+    Physical vacuum electric fields (ex_v_per_m, ey_v_per_m) are NaN on non-vacuum cells
+    to prevent fictitious interface-gradient samples from being mistaken for physical interior fields.
     """
     mask = np.asarray(fixed_mask, dtype=bool)
     values = np.asarray(fixed_potential_v, dtype=float)
@@ -71,9 +162,23 @@ def solve_dirichlet(fixed_mask: np.ndarray, fixed_potential_v: np.ndarray,
             mask[:, 0].all() and mask[:, -1].all()):
         raise ValueError('All outer boundary points must have fixed potentials')
 
-    unknown = np.argwhere(~mask)
+    if boundary_mask is None:
+        b_mask = np.zeros(mask.shape, dtype=bool)
+        b_mask[0, :] = b_mask[-1, :] = True
+        b_mask[:, 0] = b_mask[:, -1] = True
+    else:
+        b_mask = np.asarray(boundary_mask, dtype=bool)
+
+    if conductor_mask is None:
+        c_mask = mask & ~b_mask
+    else:
+        c_mask = np.asarray(conductor_mask, dtype=bool)
+
+    v_mask = ~mask
+
+    unknown = np.argwhere(v_mask)
     indexes = np.full(mask.shape, -1, dtype=int)
-    indexes[~mask] = np.arange(len(unknown))
+    indexes[v_mask] = np.arange(len(unknown))
     rows, cols, coefficients = [], [], []
     rhs = np.zeros(len(unknown))
     for k, (i, j) in enumerate(unknown):
@@ -88,14 +193,75 @@ def solve_dirichlet(fixed_mask: np.ndarray, fixed_potential_v: np.ndarray,
     if len(unknown):
         matrix = coo_matrix((coefficients, (rows, cols)),
                             shape=(len(unknown), len(unknown))).tocsr()
-        potential[~mask] = spsolve(matrix, rhs)
+        potential[v_mask] = spsolve(matrix, rhs)
     neighbor_sum = (potential[:-2, 1:-1] + potential[2:, 1:-1] +
                     potential[1:-1, :-2] + potential[1:-1, 2:])
     residual = 4 * potential[1:-1, 1:-1] - neighbor_sum
-    max_residual = float(np.max(np.abs(residual[~mask[1:-1,1:-1]]), initial=0.0))
-    ex = -np.gradient(potential, grid_spacing_m, axis=0, edge_order=2)
-    ey = -np.gradient(potential, grid_spacing_m, axis=1, edge_order=2)
-    return FieldSolution(potential, ex, ey, mask.copy(), grid_spacing_m, max_residual)
+    max_residual = float(np.max(np.abs(residual[v_mask[1:-1,1:-1]]), initial=0.0))
+
+    # Raw discrete gradient across entire grid
+    raw_ex = -np.gradient(potential, grid_spacing_m, axis=0, edge_order=2)
+    raw_ey = -np.gradient(potential, grid_spacing_m, axis=1, edge_order=2)
+
+    # Physical vacuum field: NaN outside vacuum interior
+    vac_ex = np.full_like(raw_ex, np.nan)
+    vac_ey = np.full_like(raw_ey, np.nan)
+    vac_ex[v_mask] = raw_ex[v_mask]
+    vac_ey[v_mask] = raw_ey[v_mask]
+
+    return FieldSolution(
+        potential_v=potential,
+        ex_v_per_m=vac_ex,
+        ey_v_per_m=vac_ey,
+        vacuum_mask=v_mask,
+        conductor_mask=c_mask,
+        boundary_mask=b_mask,
+        fixed_mask=mask.copy(),
+        grid_spacing_m=grid_spacing_m,
+        max_discrete_residual_v=max_residual,
+        raw_gradient_x_v_per_m=raw_ex,
+        raw_gradient_y_v_per_m=raw_ey,
+    )
+
+
+def evaluate_conductor_surface_interface(
+    solution: FieldSolution,
+) -> dict[str, float | int]:
+    """Evaluate one-sided interface electric field and electrostatic traction from the vacuum side.
+
+    In continuum electrostatics of ideal conductors:
+      - Physical interior field is E = 0.
+      - Normal field at surface: E_n = - dV/dn evaluated from the vacuum limit.
+      - Surface charge density: sigma = epsilon_0 * E_n.
+      - Electrostatic surface traction: T_n = 0.5 * epsilon_0 * E_n^2 (directed outward into vacuum).
+
+    This function samples interface vacuum nodes adjacent to conductors,
+    explicitly avoiding fictitious central-difference gradient through conductor interiors.
+    """
+    cond = solution.conductor_mask
+    vac = solution.vacuum_mask
+
+    # Interface vacuum nodes that are 4-neighbors of conductor nodes
+    up_neighbor_cond = np.zeros_like(cond)
+    up_neighbor_cond[1:, :] = cond[:-1, :]
+    down_neighbor_cond = np.zeros_like(cond)
+    down_neighbor_cond[:-1, :] = cond[1:, :]
+    left_neighbor_cond = np.zeros_like(cond)
+    left_neighbor_cond[:, 1:] = cond[:, :-1]
+    right_neighbor_cond = np.zeros_like(cond)
+    right_neighbor_cond[:, :-1] = cond[:, 1:]
+
+    interface_vac = vac & (up_neighbor_cond | down_neighbor_cond | left_neighbor_cond | right_neighbor_cond)
+    vac_mag = solution.vacuum_e_magnitude_v_per_m
+    interface_fields = vac_mag[interface_vac]
+    max_interface_e = float(np.max(interface_fields, initial=0.0))
+    max_traction_pa = 0.5 * EPSILON_0_F_PER_M * max_interface_e**2
+
+    return {
+        'interface_vacuum_node_count': int(np.sum(interface_vac)),
+        'max_interface_field_v_per_m': max_interface_e,
+        'max_traction_pa': max_traction_pa,
+    }
 
 
 def electrode_pair_in_grounded_box(
@@ -128,11 +294,160 @@ def electrode_pair_in_grounded_box(
         if (disk[0,:].any() or disk[-1,:].any() or
             disk[:,0].any() or disk[:,-1].any()):
             raise ValueError('Electrodes must not touch the grounded enclosure')
-    mask = np.zeros((n,n), dtype=bool)
-    mask[0,:] = mask[-1,:] = True
-    mask[:,0] = mask[:,-1] = True
-    mask |= left | right
-    fixed = np.zeros((n,n))
-    fixed[left] = left_voltage_v
-    fixed[right] = right_voltage_v
-    return solve_dirichlet(mask, fixed, h)
+
+    boundary_mask = np.zeros((n, n), dtype=bool)
+    boundary_mask[0, :] = boundary_mask[-1, :] = True
+    boundary_mask[:, 0] = boundary_mask[:, -1] = True
+
+    conductor_mask = left | right
+    fixed_mask = boundary_mask | conductor_mask
+
+    fixed_potential = np.zeros((n, n), dtype=float)
+    fixed_potential[left] = left_voltage_v
+    fixed_potential[right] = right_voltage_v
+
+    return solve_dirichlet(
+        fixed_mask, fixed_potential, h,
+        conductor_mask=conductor_mask,
+        boundary_mask=boundary_mask,
+    )
+
+
+@dataclass(frozen=True)
+class MeshRefinementResult:
+    n: int
+    grid_spacing_m: float
+    probe_x_m: float
+    probe_y_m: float
+    probe_potential_v: float
+    probe_ex_v_per_m: float
+    probe_ey_v_per_m: float
+    max_vacuum_e_v_per_m: float
+    max_conductor_raw_gradient_v_per_m: float
+    max_discrete_residual_v: float
+    potential_antisymmetry_error_v: float
+
+
+def electrode_pair_mesh_study(
+    n_list: Sequence[int] = (41, 81, 101, 161),
+    box_width_m: float = 0.04,
+    probe_xy_m: tuple[float, float] = (0.0, 0.0),
+) -> list[MeshRefinementResult]:
+    """Perform mesh-refinement study for cylindrical electrode pair in grounded enclosure.
+
+    Demonstrates that:
+    1. Probe field at fixed physical point (0, 0) separated from staircase boundaries converges smoothly.
+    2. Peak vacuum field on the staircase boundary varies significantly with n (grid sensitivity).
+    3. Fictitious gradient inside conductors on raw grid is nonzero while physical vacuum E is masked.
+    """
+    results: list[MeshRefinementResult] = []
+    for n in n_list:
+        sol = electrode_pair_in_grounded_box(n=n, box_width_m=box_width_m)
+        coords = np.linspace(-box_width_m / 2, box_width_m / 2, n)
+
+        ix = int(np.argmin(np.abs(coords - probe_xy_m[0])))
+        iy = int(np.argmin(np.abs(coords - probe_xy_m[1])))
+
+        probe_v = float(sol.potential_v[ix, iy])
+        probe_ex = float(sol.ex_v_per_m[ix, iy])
+        probe_ey = float(sol.ey_v_per_m[ix, iy])
+
+        vac_e = sol.vacuum_e_magnitude_v_per_m
+        max_vac_e = float(np.nanmax(vac_e))
+
+        raw_mag = np.hypot(sol.raw_gradient_x_v_per_m, sol.raw_gradient_y_v_per_m)
+        max_cond_raw = float(np.max(raw_mag[sol.conductor_mask])) if np.any(sol.conductor_mask) else 0.0
+
+        antisym_err = float(np.max(np.abs(sol.potential_v + sol.potential_v[::-1, :])))
+
+        results.append(MeshRefinementResult(
+            n=n,
+            grid_spacing_m=sol.grid_spacing_m,
+            probe_x_m=float(coords[ix]),
+            probe_y_m=float(coords[iy]),
+            probe_potential_v=probe_v,
+            probe_ex_v_per_m=probe_ex,
+            probe_ey_v_per_m=probe_ey,
+            max_vacuum_e_v_per_m=max_vac_e,
+            max_conductor_raw_gradient_v_per_m=max_cond_raw,
+            max_discrete_residual_v=sol.max_discrete_residual_v,
+            potential_antisymmetry_error_v=antisym_err,
+        ))
+    return results
+
+
+@dataclass(frozen=True)
+class CoaxialBenchmarkResult:
+    n: int
+    grid_spacing_m: float
+    probe_r_m: float
+    analytic_potential_v: float
+    numerical_potential_v: float
+    potential_error_v: float
+    analytic_field_er_v_per_m: float
+    numerical_field_ex_v_per_m: float
+    field_error_v_per_m: float
+
+
+def coaxial_cylinder_benchmark(
+    n_list: Sequence[int] = (41, 81, 161),
+    box_width_m: float = 0.04,
+    r_inner_m: float = 0.005,
+    r_outer_m: float = 0.015,
+    v_inner_v: float = 100.0,
+    v_outer_v: float = 0.0,
+    probe_r_m: float = 0.010,
+) -> list[CoaxialBenchmarkResult]:
+    """Source-backed analytic benchmark: coaxial cylinders in 2D Laplace solver.
+
+    Analytic potential in vacuum (r_inner <= r <= r_outer):
+      V(r) = V_inner + (V_outer - V_inner) * ln(r / r_inner) / ln(r_outer / r_inner)
+      E_r(r) = (V_inner - V_outer) / (ln(r_outer / r_inner) * r)
+
+    Verifies that potential and field errors at fixed physical probe point r_probe
+    decrease monotonically with grid refinement h.
+    """
+    benchmarks: list[CoaxialBenchmarkResult] = []
+
+    for n in n_list:
+        h = box_width_m / (n - 1)
+        coords = np.linspace(-box_width_m / 2, box_width_m / 2, n)
+        x, y = np.meshgrid(coords, coords, indexing='ij')
+        r = np.hypot(x, y)
+
+        inner = (r <= r_inner_m)
+        outer = (r >= r_outer_m)
+        outer[0, :] = outer[-1, :] = outer[:, 0] = outer[:, -1] = True
+
+        mask = inner | outer
+        fixed = np.zeros((n, n), dtype=float)
+        fixed[inner] = v_inner_v
+        fixed[outer] = v_outer_v
+
+        sol = solve_dirichlet(mask, fixed, h, conductor_mask=inner, boundary_mask=outer)
+
+        ix = int(np.argmin(np.abs(coords - probe_r_m)))
+        iy = (n - 1) // 2
+        actual_x = float(coords[ix])
+
+        analytic_v = v_inner_v + (v_outer_v - v_inner_v) * np.log(actual_x / r_inner_m) / np.log(r_outer_m / r_inner_m)
+        analytic_er = (v_inner_v - v_outer_v) / (np.log(r_outer_m / r_inner_m) * actual_x)
+
+        num_v = float(sol.potential_v[ix, iy])
+        num_ex = float(sol.ex_v_per_m[ix, iy])
+
+        err_v = abs(num_v - analytic_v)
+        err_ex = abs(num_ex - analytic_er)
+
+        benchmarks.append(CoaxialBenchmarkResult(
+            n=n,
+            grid_spacing_m=h,
+            probe_r_m=actual_x,
+            analytic_potential_v=analytic_v,
+            numerical_potential_v=num_v,
+            potential_error_v=err_v,
+            analytic_field_er_v_per_m=analytic_er,
+            numerical_field_ex_v_per_m=num_ex,
+            field_error_v_per_m=err_ex,
+        ))
+    return benchmarks

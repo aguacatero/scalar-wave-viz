@@ -8,7 +8,7 @@
 - [x] Test the solver against exact linear harmonic potential and symmetry, boundary and scaling constraints.
 - [x] Export a static figure labeling fields, units and separate analytic force results.
 - [x] Add CI workflow.
-- [ ] Confirm remote CI checks after publishing this PR.
+- [x] Confirm remote CI checks after publishing this PR (verified workflow run 38441804640 on PR #5; confirms workflow execution and test pass, NOT physical validation of novel propulsion).
 
 ## P1 — numerical repairs and validations
 

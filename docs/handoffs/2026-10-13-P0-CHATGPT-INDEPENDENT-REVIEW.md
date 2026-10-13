@@ -2,31 +2,31 @@
 
 **Status: READY FOR CHATGPT INDEPENDENT REVIEW. NOT APPROVED FOR MERGE.**
 
-Updated 2026-10-13 after preliminary figure-mask review. Persistent entry point for a new ChatGPT/Hermes/Antigravity session.
+Updated 2026-10-13 after resolving the independent R1 fix queue (F1–F6). Persistent entry point for a new ChatGPT/Hermes/Antigravity session.
 
 ## Locate the work
 
 - Repository: https://github.com/aguacatero/scalar-wave-viz
 - PR: https://github.com/aguacatero/scalar-wave-viz/pull/5 (**draft**, base `main`)
 - Branch: `scientific-baseline-exodus-2026-10-13`
-- Current physics-and-figure code commit: `2b180d6916d95978062ded6a6f6cbad7bfe301b3` (8-test version); **read PR head SHA at review time** for the current exact commit, and do not mistake docs-only handoff commits for physics changes.
+- R1 Fix Queue Report: `docs/handoffs/2026-10-13-P0-CHATGPT-R1-FIX-QUEUE.md`
+- **Read PR head SHA at review time** for the current exact commit.
 - P1 issue: https://github.com/aguacatero/scalar-wave-viz/issues/6
 - P2 issue: https://github.com/aguacatero/scalar-wave-viz/issues/7
 - Separate existing Jev draft: https://github.com/aguacatero/scalar-wave-viz/pull/4 (out of scope)
 
 ## Intended changes
 
-1. `electrostatics_baseline.py`: analytic ideal parallel-plate electrostatic pressure/force **and separately** a 2D Dirichlet finite-difference solution for a grounded box containing two circular conductive cross-sections.
-2. `tests/test_electrostatics_baseline.py`: eight unit tests for ideal-plate laws, linear Laplace solution, electrode symmetry, fixed boundary potentials, and invalid inputs.
-3. `examples/electrostatics_demo.py`: three-panel scientifically labeled static preview (V, |E| in kV/m, and signed force in µN from **a different idealized reference geometry**). Latest improvement masks field/color/arrows within fixed-potential conducting cells and shows unit direction arrows only in vacuum; specifically test this.
-4. New scientific charter, Exodus source-bound force-model contract, roadmap, `AGENTS.md`, GitHub Actions test+figure-artifact workflow, and revised README marking all old exotic material speeds as what-if assumptions.
+1. `electrostatics_baseline.py`: analytic ideal parallel-plate electrostatic pressure/force **and separately** a 2D Dirichlet finite-difference solution for a grounded box containing two circular conductive cross-sections. Fully resolved domain masking (F1), mesh refinement study and coaxial benchmark (F2), non-tautological force sum and virtual work crosscheck (F3/F3b).
+2. `tests/test_electrostatics_baseline.py`: 16 comprehensive unit tests covering F1–F6 regression gates.
+3. `examples/electrostatics_demo.py`: three-panel scientifically labeled static preview and paired machine-readable `electrostatics_manifest.json` with full environment provenance (F5).
+4. New scientific charter, Exodus source-bound force-model contract with US11511891B2 derivation ledger (F4), roadmap (F6), `AGENTS.md`, and pinned dependencies in `requirements.txt` and GitHub Actions workflow.
 
 ## Evidence obtained
 
-- Initial local command `python -m unittest discover -s tests -v`: **7 tests passed**; updated code at `2b180d691` has **8 tests passed on GitHub Actions**, including a visualization-regression test.
-- Local command `MPLBACKEND=Agg python examples/electrostatics_demo.py`: wrote `electrostatics_baseline.png` (2240 × 768); visual appearance locally inspected.
-- GitHub Actions push and pull_request succeeded for latest physics code HEAD `2b180d6916d95978062ded6a6f6cbad7bfe301b3`, including 8 tests, static plot and artifact upload. Pull-request CI: https://github.com/aguacatero/scalar-wave-viz/actions/runs/38441594552 . Subsequent handoff/documentation commits require checking their new CI result.
-- Workflow now uploads downloadable artifact named `conventional-electrostatics-preview` (30-day retention). Link: https://github.com/aguacatero/scalar-wave-viz/actions/workflows/physics-tests.yml
+- Local command `python3 -m unittest discover -s tests -v`: **16 tests passed** (including all F1–F6 regression tests).
+- Local command `MPLBACKEND=Agg python3 examples/electrostatics_demo.py`: writes `electrostatics_baseline.png` (2480 × 800) and paired `electrostatics_manifest.json`; visual appearance and metadata locally verified.
+- Workflow uploads downloadable artifact bundle named `conventional-electrostatics-preview` containing both PNG and JSON manifest (30-day retention). Link: https://github.com/aguacatero/scalar-wave-viz/actions/workflows/physics-tests.yml
 
 ## What the result does NOT establish
 

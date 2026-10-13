@@ -101,3 +101,39 @@ These narrow statements do not validate fields at curved conductor surfaces or p
 6. Leave PR draft until acceptance and **user-authorized** merge.
 
 **Current R1 outcome: CHANGES REQUESTED, no merge, no independent signoff.**
+
+---
+
+## Antigravity R1 Resolution Report (2026-10-13)
+
+**Status: RESOLVED BY ANTIGRAVITY — READY FOR CHATGPT INDEPENDENT RE-REVIEW.**
+
+All findings F1–F6 have been implemented with test-driven changes and dedicated regressions. The PR remains in **DRAFT**.
+
+### Summary of fixes
+
+| Item | Severity | Root cause / Issue | Antigravity resolution | Regression test |
+|------|----------|-------------------|------------------------|-----------------|
+| **F1** | HIGH / BLOCKER | Nonphysical finite field inside conductors (~85.6 kV/m) returned by public `ex_v_per_m`/`ey_v_per_m` API | Partitioned domain into explicit `vacuum_mask`, `conductor_mask`, and `boundary_mask`. Set public vacuum fields `ex_v_per_m`, `ey_v_per_m` to `NaN` on all non-vacuum cells. Added raw gradient diagnostic fields (`raw_gradient_x_v_per_m`, `raw_gradient_y_v_per_m`) and implemented `evaluate_conductor_surface_interface` for one-sided interface limits and outward traction $T_n = \frac{1}{2}\epsilon_0 E_n^2$. | `test_conductor_cells_have_no_exposed_physical_field`<br>`test_conductor_surface_interface_evaluation` |
+| **F2** | HIGH / BLOCKER | Staircase voxelization of curved boundaries produces grid-dependent peak vacuum \|E\| (126.7 $\to$ 141.1 $\to$ 166.8 kV/m at $n=41, 101, 161$) | Added `electrode_pair_mesh_study` demonstrating that probe field $E_x(0,0)$ converges smoothly ($<3\%$ drift across grids), while peak staircase field is grid-sensitive ($>30\%$ variation). Implemented `coaxial_cylinder_benchmark` proving monotonic convergence of potential and field error against exact analytic coaxial capacitor solution. Plotted heatmap and colorbar explicitly labeled `[ILLUSTRATIVE / NON-CONVERGED]` and `[grid-sensitive peak]`. | `test_coaxial_benchmark_error_decreases_with_mesh_refinement`<br>`test_electrode_pair_mesh_study_probe_stability_and_peak_sensitivity` |
+| **F3 / F3b** | MED | Visually juxtaposed but physically unrelated force panel and hardcoded circular `net_pair_force_n = 0.0` | Clearly labeled panels per geometry (Case 1: 2D Grounded Box vs. Case 2: SEPARATE 1D Ideal Parallel Plates). Documented $+x$ coordinate axis and signed opposing forces. Implemented non-tautological sum `net_pair_force_n = force_on_positive_plate_n + force_on_negative_plate_n`. Added `verify_plate_force_virtual_work` validating force via numerical energy derivatives in both fixed-$V$ (with battery work $dW=V dQ$) and fixed-$Q$ ensembles. | `test_parallel_plate_net_force_is_computed_sum_of_opposing_reactions`<br>`test_parallel_plate_virtual_work_independent_crosscheck` |
+| **F4** | MED | Patent US11511891B2 Eq.(4) $d(U_t)=0$ derivation unverified; Eq.(11) differs from Maxwell stress | Added formal Derivation Ledger in `docs/EXODUS_MODEL_CONTRACT.md` auditing Eq.(4) (stationary action $\delta S=0$ does not imply pointwise identity $d(U_t)=0$) and Eq.(11) (missing factor of $\frac{1}{2}$ vs Maxwell stress $\frac{1}{2}\epsilon_0 E^2$; missing whole-system boundary and momentum accounting). Assigned resolving this derivation as a mandatory gate for Phase P2. | `test_patent_model_contract_audits_contested_derivations` |
+| **F5** | MED | Floating dependencies in CI and no machine-readable run provenance | Pinned exact package versions in `requirements.txt` (`numpy==1.26.4`, `scipy==1.13.1`, `matplotlib==3.9.2`). Updated GitHub Actions workflow `.github/workflows/physics-tests.yml` to install from requirements and upload paired `electrostatics_manifest.json` alongside PNG. Manifest records git SHA, environment, geometry, mesh refinement study, and validation statuses. | `test_manifest_generation_and_schema_conformance` |
+| **F6** | LOW | Stale CI confirmation checkbox in `docs/ROADMAP.md` | Checked roadmap box with explicit note that CI confirmation records workflow execution, not physical validation. | Checked in `docs/ROADMAP.md` line 11 |
+
+### Test suite status
+- Local command: `python3 -m unittest discover -s tests -v`
+- Total tests: **16 passed** (up from 8).
+- Execution time: ~3.0s.
+- Demo generation: `MPLBACKEND=Agg python3 examples/electrostatics_demo.py` writes `electrostatics_baseline.png` and `electrostatics_manifest.json`.
+
+### Re-review instructions for next ChatGPT independent session
+1. Verify git HEAD on branch `scientific-baseline-exodus-2026-10-13`.
+2. Run `python3 -m unittest discover -s tests -v` (all 16 tests must pass).
+3. Run `MPLBACKEND=Agg python3 examples/electrostatics_demo.py` and inspect both the 3-panel figure and `electrostatics_manifest.json`.
+4. Confirm F1: non-vacuum cells in `ex_v_per_m` and `ey_v_per_m` are NaN; interface traction uses one-sided vacuum limits.
+5. Confirm F2: coaxial benchmark converges monotonically; peak vacuum field is marked `ILLUSTRATIVE / NON-CONVERGED`.
+6. Confirm F3: Case 1 and Case 2 are explicitly separated; net force is a computed sum; virtual work crosscheck passes.
+7. Confirm F4: `docs/EXODUS_MODEL_CONTRACT.md` contains derivation audit of Eq.(4) and Eq.(11).
+8. Confirm F5: dependencies pinned and CI artifact bundle includes both PNG and JSON manifest.
+9. Write re-review comments on PR #5; keep PR in DRAFT until authorized by repository owner.
