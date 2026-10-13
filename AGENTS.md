@@ -21,5 +21,6 @@ Read [docs/SCIENCE_CHARTER.md](docs/SCIENCE_CHARTER.md), [docs/EXODUS_MODEL_CONT
 ## Current starting point
 
 - Draft [PR #5](https://github.com/aguacatero/scalar-wave-viz/pull/5): scientific charter and conventional electrostatic baseline.
+- **CURRENT BLOCKING REVIEW (2026-10-13):** [Independent R1 findings and Antigravity fix queue](docs/handoffs/2026-10-13-P0-CHATGPT-R1-FIX-QUEUE.md), linked to [PR #5 review](https://github.com/aguacatero/scalar-wave-viz/pull/5#pullrequestreview-5508073654). **Changes requested; do not merge**. Read and resolve F1–F6 before any P1/P2 implementation or independent re-review.
 - Next work **after independent review**: P1 numerical validation and Maxwell stress/whole-apparatus accounting, then P2 reproducible patent-figure geometry and separate patent claims.
 - The existing [PR #4](https://github.com/aguacatero/scalar-wave-viz/pull/4) about Jev classification is distinct; Jev must not decide physical validity.
