@@ -2,14 +2,14 @@
 
 **Status: READY FOR CHATGPT INDEPENDENT REVIEW. NOT APPROVED FOR MERGE.**
 
-Updated 2026-10-13 after resolving the independent R1 fix queue (F1–F6). Persistent entry point for a new ChatGPT/Hermes/Antigravity session.
+Updated 2026-10-13 after resolving the independent R2 fix queue (R2-F1 through R2-F5). Persistent entry point for a new ChatGPT/Hermes/Antigravity session.
 
 ## Locate the work
 
 - Repository: https://github.com/aguacatero/scalar-wave-viz
 - PR: https://github.com/aguacatero/scalar-wave-viz/pull/5 (**draft**, base `main`)
 - Branch: `scientific-baseline-exodus-2026-10-13`
-- R1 Fix Queue Report: `docs/handoffs/2026-10-13-P0-CHATGPT-R1-FIX-QUEUE.md`
+- R1/R2 Fix Queue Report: `docs/handoffs/2026-10-13-P0-CHATGPT-R1-FIX-QUEUE.md`
 - **Read PR head SHA at review time** for the current exact commit.
 - P1 issue: https://github.com/aguacatero/scalar-wave-viz/issues/6
 - P2 issue: https://github.com/aguacatero/scalar-wave-viz/issues/7
@@ -17,15 +17,15 @@ Updated 2026-10-13 after resolving the independent R1 fix queue (F1–F6). Persi
 
 ## Intended changes
 
-1. `electrostatics_baseline.py`: analytic ideal parallel-plate electrostatic pressure/force **and separately** a 2D Dirichlet finite-difference solution for a grounded box containing two circular conductive cross-sections. Fully resolved domain masking (F1), mesh refinement study and coaxial benchmark (F2), non-tautological force sum and virtual work crosscheck (F3/F3b).
-2. `tests/test_electrostatics_baseline.py`: 16 comprehensive unit tests covering F1–F6 regression gates.
-3. `examples/electrostatics_demo.py`: three-panel scientifically labeled static preview and paired machine-readable `electrostatics_manifest.json` with full environment provenance (F5).
-4. New scientific charter, Exodus source-bound force-model contract with US11511891B2 derivation ledger (F4), roadmap (F6), `AGENTS.md`, and pinned dependencies in `requirements.txt` and GitHub Actions workflow.
+1. `electrostatics_baseline.py`: analytic ideal parallel-plate electrostatic pressure/force **and separately** a 2D Dirichlet finite-difference solution for a grounded box containing two circular conductive cross-sections. Fully resolved domain masking (F1), mesh refinement study and coaxial benchmark (F2), non-tautological force sum and virtual work crosscheck (F3/F3b), strict mask partition validation (R2-F4), and true face-normal interface traction evaluation avoiding tangential gradient conflation (R2-F1).
+2. `tests/test_electrostatics_baseline.py`: 20 comprehensive unit tests covering all F1–F6 and R2-F1 through R2-F5 regression gates.
+3. `examples/electrostatics_demo.py`: three-panel scientifically labeled static preview (clean Panel C layout with ample headroom, R2-F5) and paired machine-readable `electrostatics_manifest.json` dynamically derived from typed `GroundedBoxConfig` run configuration (R2-F3).
+4. New scientific charter, Exodus source-bound force-model contract with US11511891B2 derivation ledger (F4), roadmap (F6), `AGENTS.md`, and pinned dependencies in `requirements.txt` and GitHub Actions workflow (R2-F2).
 
 ## Evidence obtained
 
-- Local command `python3 -m unittest discover -s tests -v`: **16 tests passed** (including all F1–F6 regression tests).
-- Local command `MPLBACKEND=Agg python3 examples/electrostatics_demo.py`: writes `electrostatics_baseline.png` (2480 × 800) and paired `electrostatics_manifest.json`; visual appearance and metadata locally verified.
+- Local command `python3 -m unittest discover -s tests -v`: **20 tests passed** (including all F1–F6 and R2-F1 through R2-F5 regression tests).
+- Local command `MPLBACKEND=Agg python3 examples/electrostatics_demo.py`: writes `electrostatics_baseline.png` (2480 × 832) and paired `electrostatics_manifest.json`; visual appearance and metadata locally verified.
 - Workflow uploads downloadable artifact bundle named `conventional-electrostatics-preview` containing both PNG and JSON manifest (30-day retention). Link: https://github.com/aguacatero/scalar-wave-viz/actions/workflows/physics-tests.yml
 
 ## What the result does NOT establish

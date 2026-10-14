@@ -20,6 +20,7 @@ import scipy
 
 from electrostatics_baseline import (
     FieldSolution,
+    GroundedBoxConfig,
     PlateBenchmark,
     coaxial_cylinder_benchmark,
     electrode_pair_in_grounded_box,
@@ -78,12 +79,16 @@ def generate_manifest(
     study_results: list,
     coax_benchmarks: list,
     output_png: str,
+    config_2d: GroundedBoxConfig | None = None,
 ) -> dict:
     """Build machine-readable run manifest with provenance, parameters, and validation status."""
     git_sha = get_git_commit()
     vw_check = verify_plate_force_virtual_work(
         plate_result.voltage_v, plate_result.gap_m, plate_result.area_m2
     )
+
+    # Resolve configuration dynamically from result or passed config (R2-F3)
+    active_config = config_2d or result_2d.config or GroundedBoxConfig()
 
     study_table = [
         {
@@ -137,19 +142,19 @@ def generate_manifest(
                     'Conductor interior field is masked (E=0). Not an isolated thruster. Not patent geometry.'
                 ),
                 'geometry': {
-                    'enclosure_width_m': 0.04,
+                    'enclosure_width_m': float(active_config.box_width_m),
                     'boundary_condition': 'Grounded outer enclosure (0 V Dirichlet)',
                     'left_electrode': {
-                        'center_x_m': -0.008,
-                        'center_y_m': 0.0,
-                        'radius_m': 0.003,
-                        'voltage_v': 500.0,
+                        'center_x_m': float(active_config.left_electrode.center_x_m),
+                        'center_y_m': float(active_config.left_electrode.center_y_m),
+                        'radius_m': float(active_config.left_electrode.radius_m),
+                        'voltage_v': float(active_config.left_electrode.voltage_v),
                     },
                     'right_electrode': {
-                        'center_x_m': 0.008,
-                        'center_y_m': 0.0,
-                        'radius_m': 0.003,
-                        'voltage_v': -500.0,
+                        'center_x_m': float(active_config.right_electrode.center_x_m),
+                        'center_y_m': float(active_config.right_electrode.center_y_m),
+                        'radius_m': float(active_config.right_electrode.radius_m),
+                        'voltage_v': float(active_config.right_electrode.voltage_v),
                     },
                 },
                 'discretization': {
@@ -195,25 +200,27 @@ def generate_manifest(
 def render(
     output_png: str = 'electrostatics_baseline.png',
     output_json: str = 'electrostatics_manifest.json',
+    config_2d: GroundedBoxConfig | None = None,
 ) -> tuple[Path, Path]:
-    result = electrode_pair_in_grounded_box(n=101)
+    cfg = config_2d or GroundedBoxConfig(n=101)
+    result = electrode_pair_in_grounded_box(config=cfg)
     plate = parallel_plate_benchmark(1000.0, 0.001, 1e-4)
-    study = electrode_pair_mesh_study(n_list=(41, 81, 101, 161))
-    coax_bench = coaxial_cylinder_benchmark(n_list=(41, 81, 161))
+    study = electrode_pair_mesh_study(n_list=(41, 81, 101, 161), box_width_m=cfg.box_width_m)
+    coax_bench = coaxial_cylinder_benchmark(n_list=(41, 81, 161), box_width_m=cfg.box_width_m)
 
     n = result.potential_v.shape[0]
     length_m = result.grid_spacing_m * (n - 1)
     coords_mm = np.linspace(-length_m / 2, length_m / 2, n) * 1000
     x, y = np.meshgrid(coords_mm, coords_mm, indexing='ij')
 
-    fig, axes = plt.subplots(1, 3, figsize=(15.5, 5.0), layout='constrained')
+    fig, axes = plt.subplots(1, 3, figsize=(15.5, 5.2), layout='constrained')
 
     # Panel A: Potential
     image0 = axes[0].contourf(x, y, result.potential_v, levels=25, cmap='coolwarm')
     fig.colorbar(image0, ax=axes[0], label='Potential (V)')
     axes[0].contour(x, y, result.fixed_mask.astype(float), levels=[0.5], colors=['black'], linewidths=0.9)
     axes[0].set(
-        title='A · Case 1: Grounded Box (±500 V)\nDirichlet Potential (V)',
+        title=f'A · Case 1: Grounded Box (±{abs(cfg.left_electrode.voltage_v):.0f} V)\nDirichlet Potential (V)',
         xlabel='x (mm)',
         ylabel='y (mm)',
         aspect='equal',
@@ -222,7 +229,7 @@ def render(
     # Panel B: Electric Field (masked conductors and explicit non-convergence label)
     field_mag, unit_ex, unit_ey = display_field_data(result)
     image1 = axes[1].contourf(x, y, field_mag / 1000.0, levels=25, cmap='viridis')
-    cbar1 = fig.colorbar(image1, ax=axes[1], label='|E| (kV/m), vacuum only [grid-sensitive peak]')
+    fig.colorbar(image1, ax=axes[1], label='|E| (kV/m), vacuum only [grid-sensitive peak]')
     stride = 8
     axes[1].quiver(
         x[::stride, ::stride],
@@ -242,7 +249,7 @@ def render(
         aspect='equal',
     )
 
-    # Panel C: Separate Ideal Parallel-Plate Analytic Benchmark
+    # Panel C: Separate Ideal Parallel-Plate Analytic Benchmark (R2-F5: clean headroom & label placement)
     micro_n = 1e6
     bar_labels = ['Pos. plate (+x)', 'Neg. plate (-x)', 'Net pair (sum)']
     bar_values = [
@@ -251,33 +258,53 @@ def render(
         plate.net_pair_force_n * micro_n,
     ]
     colors = ['#1f77b4', '#d62728', '#2ca02c']
-    bars = axes[2].bar(bar_labels, bar_values, color=colors, width=0.55)
+    bars = axes[2].bar(bar_labels, bar_values, color=colors, width=0.50)
     axes[2].axhline(0, color='black', lw=0.8, ls='--')
     axes[2].set_ylabel('Force along x-axis (µN)')
-    axes[2].tick_params(axis='x', rotation=15)
+    axes[2].set_ylim(-650, 650)
+    axes[2].tick_params(axis='x', rotation=12)
     axes[2].set_title('C · Case 2: SEPARATE 1D Ideal Plates\nAnalytic Forces (1 kV, 1 mm, 1 cm²)')
 
+    # Labels above/below bars with clear clearance
     for bar, val in zip(bars, bar_values):
-        va = 'bottom' if val >= 0 else 'top'
-        axes[2].annotate(
-            f'{val:+.1f} µN',
-            xy=(bar.get_x() + bar.get_width() / 2, val),
-            xytext=(0, 4 if val >= 0 else -10),
-            textcoords='offset points',
-            ha='center',
-            va=va,
-            fontsize=8.5,
-            fontweight='bold',
-        )
+        if val > 0:
+            axes[2].annotate(
+                f'{val:+.1f} µN',
+                xy=(bar.get_x() + bar.get_width() / 2, val),
+                xytext=(0, 6),
+                textcoords='offset points',
+                ha='center',
+                va='bottom',
+                fontsize=8.5,
+                fontweight='bold',
+            )
+        elif val < 0:
+            axes[2].annotate(
+                f'{val:+.1f} µN',
+                xy=(bar.get_x() + bar.get_width() / 2, val),
+                xytext=(0, -8),
+                textcoords='offset points',
+                ha='center',
+                va='top',
+                fontsize=8.5,
+                fontweight='bold',
+            )
+        else:
+            axes[2].annotate(
+                f'{val:+.1f} µN',
+                xy=(bar.get_x() + bar.get_width() / 2, 0),
+                xytext=(0, 6),
+                textcoords='offset points',
+                ha='center',
+                va='bottom',
+                fontsize=8.5,
+                fontweight='bold',
+            )
 
-    axes[2].text(
-        0.5,
-        0.08,
-        'Equal & opposite attraction (Newton 3rd law).\nSEPARATE calculation; NOT force from Case 1.',
-        transform=axes[2].transAxes,
-        ha='center',
-        fontsize=8.0,
-        bbox=dict(boxstyle='round,pad=0.4', facecolor='white', edgecolor='#cccccc', alpha=0.9),
+    axes[2].set_xlabel(
+        'Components along x-axis (Newton 3rd law: net pair = 0)\nSEPARATE calculation; NOT force from Case 1',
+        fontsize=8.5,
+        labelpad=8,
     )
 
     fig.suptitle(
@@ -291,7 +318,7 @@ def render(
     fig.savefig(png_path, dpi=160)
     plt.close(fig)
 
-    manifest = generate_manifest(result, plate, study, coax_bench, str(png_path.name))
+    manifest = generate_manifest(result, plate, study, coax_bench, str(png_path.name), config_2d=cfg)
     json_path = Path(output_json)
     with open(json_path, 'w', encoding='utf-8') as f:
         json.dump(manifest, f, indent=2)

@@ -6,6 +6,9 @@ import numpy as np
 
 from electrostatics_baseline import (
     EPSILON_0_F_PER_M,
+    ElectrodeConfig,
+    FieldSolution,
+    GroundedBoxConfig,
     coaxial_cylinder_benchmark,
     electrode_pair_in_grounded_box,
     electrode_pair_mesh_study,
@@ -123,13 +126,131 @@ class LaplaceTests(unittest.TestCase):
         self.assertGreater(max_cond_raw, 70000.0)
         self.assertLess(max_cond_raw, 100000.0)
 
-    def test_conductor_surface_interface_evaluation(self):
-        """F1 regression: check one-sided interface handling and electrostatic traction units."""
+    def test_conductor_surface_interface_face_normals(self):
+        """R2-F1 regression: verify face-normal interface traction evaluation."""
         sol = electrode_pair_in_grounded_box(n=101)
-        interface_data = evaluate_conductor_surface_interface(sol)
-        self.assertGreater(interface_data['interface_vacuum_node_count'], 0)
-        self.assertGreater(interface_data['max_interface_field_v_per_m'], 100000.0)
-        self.assertGreater(interface_data['max_traction_pa'], 0.0)
+        res = evaluate_conductor_surface_interface(sol)
+        self.assertGreater(res.face_count, 0)
+        self.assertGreater(res.max_normal_field_v_per_m, 100000.0)
+        self.assertGreater(res.max_traction_pa, 0.0)
+        self.assertIn('Diagnostic one-sided surface-normal', res.diagnostic_note)
+
+    def test_conductor_surface_interface_harmonic_xy_counterexample(self):
+        """R2-F1 regression: counterexample V(x,y)=x*y next to grounded plane x=0.
+
+        Exact surface normal field: E_n(0, y) = -y.
+        Exact surface traction: T_n = 0.5 * epsilon_0 * y^2.
+        At sample (x=h, y=h), centered gradient |E|^2 = 2*h^2 (2x overestimation),
+        whereas our face-normal evaluation correctly evaluates E_n = -h and T_n = 0.5 * epsilon_0 * h^2.
+        """
+        n = 21
+        h = 0.001
+        coords = (np.arange(n) - 10) * h  # -10h to +10h, center index 10 corresponds to x=0
+        x, y = np.meshgrid(coords, coords, indexing='ij')
+        exact_pot = x * y
+
+        # Conductor occupies x <= 0 (indices 1 to 10 for interior y)
+        conductor = np.zeros((n, n), dtype=bool)
+        conductor[1:11, 1:-1] = True
+        exact_pot[conductor] = 0.0
+
+        # Boundary is outer box edges (on left edge where x <= 0, potential is 0)
+        boundary = np.zeros((n, n), dtype=bool)
+        boundary[0, :] = boundary[-1, :] = boundary[:, 0] = boundary[:, -1] = True
+        exact_pot[0, :] = 0.0
+
+        fixed = conductor | boundary
+        sol = solve_dirichlet(fixed, exact_pot, h, conductor_mask=conductor, boundary_mask=boundary)
+
+        res = evaluate_conductor_surface_interface(sol)
+        self.assertGreater(res.face_count, 0)
+
+        # Expected traction at y = h: 0.5 * epsilon_0 * h^2
+        expected_traction_at_h = 0.5 * EPSILON_0_F_PER_M * h**2
+
+        # East faces: conductor at (i=10, j) adjacent to vacuum at (i=11, j) with normal (+1, 0)
+        east_mask = (res.face_normals[:, 0] == 1.0)
+        self.assertTrue(np.any(east_mask))
+
+        # Find face where normal field magnitude is h (at y = h)
+        found_match = False
+        for e_n, t_n in zip(res.normal_fields_v_per_m[east_mask], res.tractions_pa[east_mask]):
+            if np.isclose(abs(e_n), h, atol=1e-10):
+                found_match = True
+                self.assertAlmostEqual(t_n / expected_traction_at_h, 1.0, places=6)
+                # Verify that it is NOT 2x expected (which centered |E|^2 gave)
+                self.assertNotAlmostEqual(t_n / expected_traction_at_h, 2.0, places=3)
+                break
+        self.assertTrue(found_match, "Did not find east interface face at y = h")
+
+    def test_conductor_surface_interface_uniform_field(self):
+        """R2-F1 regression: uniform 1D field between parallel plates matches analytic pressure."""
+        n = 21
+        h = 0.001
+        L = (n - 1) * h
+        v0 = 100.0
+        coords = np.arange(n) * h
+        x, y = np.meshgrid(coords, coords, indexing='ij')
+
+        pot = v0 * (1.0 - x / L)
+
+        # Interior plate at column i = 5, spanning rows j = 3 to 17
+        conductor = np.zeros((n, n), dtype=bool)
+        conductor[5, 3:18] = True
+        pot[conductor] = v0 * (1.0 - coords[5] / L)
+
+        boundary = np.zeros((n, n), dtype=bool)
+        boundary[0, :] = boundary[-1, :] = boundary[:, 0] = boundary[:, -1] = True
+
+        fixed = conductor | boundary
+        sol = solve_dirichlet(fixed, pot, h, conductor_mask=conductor, boundary_mask=boundary)
+
+        res = evaluate_conductor_surface_interface(sol)
+        expected_e_n = v0 / L
+        expected_traction = 0.5 * EPSILON_0_F_PER_M * expected_e_n**2
+
+        # Check east faces
+        east_mask = (res.face_normals[:, 0] == 1.0)
+        self.assertTrue(np.any(east_mask))
+        for t in res.tractions_pa[east_mask]:
+            self.assertAlmostEqual(t, expected_traction, places=10)
+
+    def test_mask_validation_rejects_inconsistent_or_overlapping_masks(self):
+        """R2-F4 regression: solve_dirichlet must validate disjointness, partition, and outer boundary."""
+        n = 9
+        mask = np.zeros((n, n), dtype=bool)
+        mask[0, :] = mask[-1, :] = mask[:, 0] = mask[:, -1] = True
+        pot = np.zeros((n, n))
+
+        # 1. Boundary mask wrong shape
+        bad_shape = np.zeros((5, 5), dtype=bool)
+        with self.assertRaises(ValueError):
+            solve_dirichlet(mask, pot, 0.01, boundary_mask=bad_shape)
+
+        # 2. Conductor mask wrong shape
+        with self.assertRaises(ValueError):
+            solve_dirichlet(mask, pot, 0.01, conductor_mask=bad_shape)
+
+        # 3. Overlapping conductor and boundary masks
+        overlap_conductor = np.zeros((n, n), dtype=bool)
+        overlap_conductor[0, 0] = True  # Overlaps with boundary at (0, 0)
+        overlap_boundary = mask.copy()
+        with self.assertRaises(ValueError):
+            solve_dirichlet(mask, pot, 0.01, conductor_mask=overlap_conductor, boundary_mask=overlap_boundary)
+
+        # 4. Incomplete partition: union does not equal fixed_mask
+        partial_boundary = mask.copy()
+        partial_conductor = np.zeros((n, n), dtype=bool)
+        fixed_with_interior = mask.copy()
+        fixed_with_interior[3, 3] = True  # Fixed node not in conductor or boundary
+        with self.assertRaises(ValueError):
+            solve_dirichlet(fixed_with_interior, pot, 0.01, conductor_mask=partial_conductor, boundary_mask=partial_boundary)
+
+        # 5. Boundary mask missing an outer edge
+        broken_boundary = mask.copy()
+        broken_boundary[0, :] = False
+        with self.assertRaises(ValueError):
+            solve_dirichlet(mask, pot, 0.01, boundary_mask=broken_boundary)
 
     def test_visualization_masks_electrode_and_grounded_boundary_fields(self):
         solution = electrode_pair_in_grounded_box(n=41)
@@ -209,6 +330,31 @@ class ManifestAndContractTests(unittest.TestCase):
         self.assertEqual(case2['results']['net_pair_force_n'], 0.0)
 
         # Clean up temporary test files
+        png_path.unlink(missing_ok=True)
+        json_path.unlink(missing_ok=True)
+
+    def test_manifest_geometry_derived_from_typed_config_including_nondefault(self):
+        """R2-F3 regression: manifest geometry must dynamically reflect typed config, including non-default runs."""
+        custom_cfg = GroundedBoxConfig(
+            n=41,
+            box_width_m=0.06,
+            left_electrode=ElectrodeConfig(center_x_m=-0.012, center_y_m=0.0, radius_m=0.004, voltage_v=750.0),
+            right_electrode=ElectrodeConfig(center_x_m=0.012, center_y_m=0.0, radius_m=0.004, voltage_v=-750.0),
+        )
+        png_path, json_path = render(
+            output_png='test_custom_baseline.png',
+            output_json='test_custom_manifest.json',
+            config_2d=custom_cfg,
+        )
+        with open(json_path, 'r', encoding='utf-8') as f:
+            manifest = json.load(f)
+
+        geom = manifest['cases']['case_1_grounded_box_2d']['geometry']
+        self.assertAlmostEqual(geom['enclosure_width_m'], 0.06)
+        self.assertAlmostEqual(geom['left_electrode']['voltage_v'], 750.0)
+        self.assertAlmostEqual(geom['left_electrode']['radius_m'], 0.004)
+        self.assertAlmostEqual(geom['right_electrode']['voltage_v'], -750.0)
+
         png_path.unlink(missing_ok=True)
         json_path.unlink(missing_ok=True)
 

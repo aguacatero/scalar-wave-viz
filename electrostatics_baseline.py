@@ -111,6 +111,26 @@ def verify_plate_force_virtual_work(
 
 
 @dataclass(frozen=True)
+class ElectrodeConfig:
+    center_x_m: float
+    center_y_m: float
+    radius_m: float
+    voltage_v: float
+
+
+@dataclass(frozen=True)
+class GroundedBoxConfig:
+    n: int = 101
+    box_width_m: float = 0.04
+    left_electrode: ElectrodeConfig = ElectrodeConfig(
+        center_x_m=-0.008, center_y_m=0.0, radius_m=0.003, voltage_v=500.0
+    )
+    right_electrode: ElectrodeConfig = ElectrodeConfig(
+        center_x_m=0.008, center_y_m=0.0, radius_m=0.003, voltage_v=-500.0
+    )
+
+
+@dataclass(frozen=True)
 class FieldSolution:
     potential_v: np.ndarray
     ex_v_per_m: np.ndarray             # Physical vacuum field; NaN outside vacuum interior
@@ -123,6 +143,7 @@ class FieldSolution:
     max_discrete_residual_v: float
     raw_gradient_x_v_per_m: np.ndarray # Discrete gradient of potential grid across all nodes
     raw_gradient_y_v_per_m: np.ndarray # Discrete gradient of potential grid across all nodes
+    config: GroundedBoxConfig | None = None
 
     @property
     def vacuum_e_magnitude_v_per_m(self) -> np.ndarray:
@@ -136,6 +157,7 @@ def solve_dirichlet(
     grid_spacing_m: float,
     conductor_mask: np.ndarray | None = None,
     boundary_mask: np.ndarray | None = None,
+    config: GroundedBoxConfig | None = None,
 ) -> FieldSolution:
     """Solve Laplace's equation with a five-point finite-difference stencil.
 
@@ -146,6 +168,9 @@ def solve_dirichlet(
       - vacuum_mask: interior vacuum cells where Laplace eq holds (nabla^2 V = 0)
       - conductor_mask: interior conducting electrodes
       - boundary_mask: external Dirichlet boundary (grounded outer enclosure)
+
+    Validates that conductor_mask and boundary_mask are disjoint and form a complete
+    partition of fixed_mask, and that boundary_mask covers all exterior boundaries.
 
     Physical vacuum electric fields (ex_v_per_m, ey_v_per_m) are NaN on non-vacuum cells
     to prevent fictitious interface-gradient samples from being mistaken for physical interior fields.
@@ -162,17 +187,33 @@ def solve_dirichlet(
             mask[:, 0].all() and mask[:, -1].all()):
         raise ValueError('All outer boundary points must have fixed potentials')
 
-    if boundary_mask is None:
+    if boundary_mask is not None:
+        b_mask = np.asarray(boundary_mask, dtype=bool)
+        if b_mask.shape != mask.shape:
+            raise ValueError(f'boundary_mask shape {b_mask.shape} does not match fixed_mask shape {mask.shape}')
+        if not (b_mask[0, :].all() and b_mask[-1, :].all() and
+                b_mask[:, 0].all() and b_mask[:, -1].all()):
+            raise ValueError('All outer boundary points must be included in boundary_mask')
+    else:
         b_mask = np.zeros(mask.shape, dtype=bool)
         b_mask[0, :] = b_mask[-1, :] = True
         b_mask[:, 0] = b_mask[:, -1] = True
-    else:
-        b_mask = np.asarray(boundary_mask, dtype=bool)
 
-    if conductor_mask is None:
-        c_mask = mask & ~b_mask
-    else:
+    if conductor_mask is not None:
         c_mask = np.asarray(conductor_mask, dtype=bool)
+        if c_mask.shape != mask.shape:
+            raise ValueError(f'conductor_mask shape {c_mask.shape} does not match fixed_mask shape {mask.shape}')
+    else:
+        c_mask = mask & ~b_mask
+
+    # Disjointness check
+    overlap = c_mask & b_mask
+    if np.any(overlap):
+        raise ValueError(f'conductor_mask and boundary_mask must be disjoint; found {np.sum(overlap)} overlapping cells')
+
+    # Partition check: union must exactly equal fixed_mask
+    if not np.array_equal(c_mask | b_mask, mask):
+        raise ValueError('conductor_mask and boundary_mask must form a complete partition of fixed_mask')
 
     v_mask = ~mask
 
@@ -221,47 +262,132 @@ def solve_dirichlet(
         max_discrete_residual_v=max_residual,
         raw_gradient_x_v_per_m=raw_ex,
         raw_gradient_y_v_per_m=raw_ey,
+        config=config,
     )
+
+
+@dataclass(frozen=True)
+class SurfaceInterfaceResult:
+    face_count: int
+    normal_fields_v_per_m: np.ndarray
+    tractions_pa: np.ndarray
+    face_normals: np.ndarray
+    max_normal_field_v_per_m: float
+    max_traction_pa: float
+    mean_traction_pa: float
+    integrated_force_per_depth_n_per_m: np.ndarray
+    diagnostic_note: str
 
 
 def evaluate_conductor_surface_interface(
     solution: FieldSolution,
-) -> dict[str, float | int]:
-    """Evaluate one-sided interface electric field and electrostatic traction from the vacuum side.
+) -> SurfaceInterfaceResult:
+    """Evaluate one-sided surface-normal electric field and electrostatic traction across conductor-vacuum faces.
 
     In continuum electrostatics of ideal conductors:
       - Physical interior field is E = 0.
-      - Normal field at surface: E_n = - dV/dn evaluated from the vacuum limit.
-      - Surface charge density: sigma = epsilon_0 * E_n.
-      - Electrostatic surface traction: T_n = 0.5 * epsilon_0 * E_n^2 (directed outward into vacuum).
+      - At the conductor surface, electric field is purely normal: E = E_n * n_hat.
+      - Normal field is evaluated from the vacuum side: E_n = - dV/dn.
+      - Local outward electrostatic traction: T_n = 0.5 * epsilon_0 * E_n^2.
+      - Vector traction on face with outward normal n_hat: T_vec = T_n * n_hat.
 
-    This function samples interface vacuum nodes adjacent to conductors,
-    explicitly avoiding fictitious central-difference gradient through conductor interiors.
+    This function identifies discrete interface faces between conductor nodes and
+    adjacent vacuum nodes, computing the one-sided normal derivative:
+        E_n = - (V_vacuum - V_conductor) / h
+    across each face oriented along the outward face normal n_hat.
+    This strictly avoids node-centered central differences that conflate tangential fields
+    with normal traction (e.g. eliminating the 2x traction error on harmonic V = x*y).
+
+    NOTE: This is a diagnostic interface calculation for research inspection.
+    It does NOT establish anomalous propulsion or a closed-system force violation.
     """
+    pot = solution.potential_v
+    h = solution.grid_spacing_m
     cond = solution.conductor_mask
     vac = solution.vacuum_mask
 
-    # Interface vacuum nodes that are 4-neighbors of conductor nodes
-    up_neighbor_cond = np.zeros_like(cond)
-    up_neighbor_cond[1:, :] = cond[:-1, :]
-    down_neighbor_cond = np.zeros_like(cond)
-    down_neighbor_cond[:-1, :] = cond[1:, :]
-    left_neighbor_cond = np.zeros_like(cond)
-    left_neighbor_cond[:, 1:] = cond[:, :-1]
-    right_neighbor_cond = np.zeros_like(cond)
-    right_neighbor_cond[:, :-1] = cond[:, 1:]
+    normal_fields: list[float] = []
+    tractions: list[float] = []
+    normals: list[tuple[float, float]] = []
 
-    interface_vac = vac & (up_neighbor_cond | down_neighbor_cond | left_neighbor_cond | right_neighbor_cond)
-    vac_mag = solution.vacuum_e_magnitude_v_per_m
-    interface_fields = vac_mag[interface_vac]
-    max_interface_e = float(np.max(interface_fields, initial=0.0))
-    max_traction_pa = 0.5 * EPSILON_0_F_PER_M * max_interface_e**2
+    # 1. East faces: conductor at (i, j) adjacent to vacuum at (i+1, j) -> normal = (+1, 0)
+    east_cond = cond[:-1, :] & vac[1:, :]
+    if np.any(east_cond):
+        i_idxs, j_idxs = np.where(east_cond)
+        for i, j in zip(i_idxs, j_idxs):
+            e_n = -(pot[i + 1, j] - pot[i, j]) / h
+            t_n = 0.5 * EPSILON_0_F_PER_M * e_n**2
+            normal_fields.append(e_n)
+            tractions.append(t_n)
+            normals.append((1.0, 0.0))
 
-    return {
-        'interface_vacuum_node_count': int(np.sum(interface_vac)),
-        'max_interface_field_v_per_m': max_interface_e,
-        'max_traction_pa': max_traction_pa,
-    }
+    # 2. West faces: conductor at (i, j) adjacent to vacuum at (i-1, j) -> normal = (-1, 0)
+    west_cond = cond[1:, :] & vac[:-1, :]
+    if np.any(west_cond):
+        i_idxs, j_idxs = np.where(west_cond)
+        # i_idxs here are in sliced coords [1:], so actual conductor index is i + 1
+        for i, j in zip(i_idxs + 1, j_idxs):
+            e_n = -(pot[i - 1, j] - pot[i, j]) / h
+            t_n = 0.5 * EPSILON_0_F_PER_M * e_n**2
+            normal_fields.append(e_n)
+            tractions.append(t_n)
+            normals.append((-1.0, 0.0))
+
+    # 3. North faces: conductor at (i, j) adjacent to vacuum at (i, j+1) -> normal = (0, +1)
+    north_cond = cond[:, :-1] & vac[:, 1:]
+    if np.any(north_cond):
+        i_idxs, j_idxs = np.where(north_cond)
+        for i, j in zip(i_idxs, j_idxs):
+            e_n = -(pot[i, j + 1] - pot[i, j]) / h
+            t_n = 0.5 * EPSILON_0_F_PER_M * e_n**2
+            normal_fields.append(e_n)
+            tractions.append(t_n)
+            normals.append((0.0, 1.0))
+
+    # 4. South faces: conductor at (i, j) adjacent to vacuum at (i, j-1) -> normal = (0, -1)
+    south_cond = cond[:, 1:] & vac[:, :-1]
+    if np.any(south_cond):
+        i_idxs, j_idxs = np.where(south_cond)
+        for i, j in zip(i_idxs, j_idxs + 1):
+            e_n = -(pot[i, j - 1] - pot[i, j]) / h
+            t_n = 0.5 * EPSILON_0_F_PER_M * e_n**2
+            normal_fields.append(e_n)
+            tractions.append(t_n)
+            normals.append((0.0, -1.0))
+
+    arr_fields = np.array(normal_fields, dtype=float)
+    arr_tractions = np.array(tractions, dtype=float)
+    arr_normals = np.array(normals, dtype=float)
+
+    face_count = len(normal_fields)
+    max_e = float(np.max(np.abs(arr_fields))) if face_count > 0 else 0.0
+    max_t = float(np.max(arr_tractions)) if face_count > 0 else 0.0
+    mean_t = float(np.mean(arr_tractions)) if face_count > 0 else 0.0
+
+    # Integrated force per unit depth: sum(T_n * n_hat * h)
+    if face_count > 0:
+        fx = float(np.sum(arr_tractions * arr_normals[:, 0] * h))
+        fy = float(np.sum(arr_tractions * arr_normals[:, 1] * h))
+        integrated_f = np.array([fx, fy], dtype=float)
+    else:
+        integrated_f = np.array([0.0, 0.0], dtype=float)
+
+    note = (
+        'Diagnostic one-sided surface-normal interface traction. Evaluated on discrete face edges. '
+        'Not a converged device force or anomalous propulsion claim.'
+    )
+
+    return SurfaceInterfaceResult(
+        face_count=face_count,
+        normal_fields_v_per_m=arr_fields,
+        tractions_pa=arr_tractions,
+        face_normals=arr_normals,
+        max_normal_field_v_per_m=max_e,
+        max_traction_pa=max_t,
+        mean_traction_pa=mean_t,
+        integrated_force_per_depth_n_per_m=integrated_f,
+        diagnostic_note=note,
+    )
 
 
 def electrode_pair_in_grounded_box(
@@ -269,12 +395,30 @@ def electrode_pair_in_grounded_box(
     left_center_x_m: float = -0.008, right_center_x_m: float = 0.008,
     left_radius_m: float = 0.003, right_radius_m: float = 0.003,
     left_voltage_v: float = 500.0, right_voltage_v: float = -500.0,
+    config: GroundedBoxConfig | None = None,
 ) -> FieldSolution:
     """Two cylindrical-electrode cross-sections in a grounded square box.
 
     Vacuum, homogeneous permittivity, ideal conductors.
     NOT an Exodus patent geometry. A grounded box is an external object.
     """
+    if config is not None:
+        n = config.n
+        box_width_m = config.box_width_m
+        left_center_x_m = config.left_electrode.center_x_m
+        right_center_x_m = config.right_electrode.center_x_m
+        left_radius_m = config.left_electrode.radius_m
+        right_radius_m = config.right_electrode.radius_m
+        left_voltage_v = config.left_electrode.voltage_v
+        right_voltage_v = config.right_electrode.voltage_v
+    else:
+        config = GroundedBoxConfig(
+            n=n,
+            box_width_m=box_width_m,
+            left_electrode=ElectrodeConfig(left_center_x_m, 0.0, left_radius_m, left_voltage_v),
+            right_electrode=ElectrodeConfig(right_center_x_m, 0.0, right_radius_m, right_voltage_v),
+        )
+
     if not isinstance(n, int) or n < 11 or n > 401:
         raise ValueError('n must be an integer between 11 and 401')
     scalars = (box_width_m, left_center_x_m, right_center_x_m,
@@ -310,6 +454,7 @@ def electrode_pair_in_grounded_box(
         fixed_mask, fixed_potential, h,
         conductor_mask=conductor_mask,
         boundary_mask=boundary_mask,
+        config=config,
     )
 
 

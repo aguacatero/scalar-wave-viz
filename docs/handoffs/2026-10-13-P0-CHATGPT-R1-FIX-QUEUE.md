@@ -137,3 +137,25 @@ All findings F1–F6 have been implemented with test-driven changes and dedicate
 7. Confirm F4: `docs/EXODUS_MODEL_CONTRACT.md` contains derivation audit of Eq.(4) and Eq.(11).
 8. Confirm F5: dependencies pinned and CI artifact bundle includes both PNG and JSON manifest.
 9. Write re-review comments on PR #5; keep PR in DRAFT until authorized by repository owner.
+
+---
+
+## Independent Scientific R2 Findings & Antigravity Resolution Report (2026-10-13)
+
+**R2 Review Disposition: CHANGES REQUESTED (Review #5509352082)**
+Reviewed commit: `496ae8ba85758f00fbd2183fb8d7e4db7ac741b5`.
+
+### R2 Findings and Resolutions
+
+| Item | Severity | Issue Identified in R2 | Antigravity R2 Resolution | Regression Test |
+|------|----------|------------------------|---------------------------|-----------------|
+| **R2-F1** | HIGH | Surface traction was computed from node-centered `hypot(Ex, Ey)` at vacuum nodes, conflating tangential field with normal traction (2x overestimation on harmonic $V=xy$). | Re-implemented `evaluate_conductor_surface_interface` to identify discrete interface faces between conductor and vacuum cells. Evaluates outward face normal $\hat{n} \in \{(\pm 1, 0), (0, \pm 1)\}$ and one-sided normal derivative $E_n = -(V_{\text{vac}} - V_{\text{cond}}) / h$. Evaluates outward normal traction $T_n = \frac{1}{2}\epsilon_0 E_n^2$ and vector traction $\vec{T} = T_n \hat{n}$. | `test_conductor_surface_interface_harmonic_xy_counterexample`<br>`test_conductor_surface_interface_uniform_field` |
+| **R2-F2** | MED | CI workflow used floating pip install and only uploaded PNG; manifest was missing from CI artifact ZIP. | Updated `.github/workflows/physics-tests.yml` to install `-r requirements.txt` and upload both `electrostatics_baseline.png` and `electrostatics_manifest.json` in artifact bundle `conventional-electrostatics-preview`. | CI workflow check |
+| **R2-F3** | MED | Manifest geometry was hardcoded rather than derived dynamically from run inputs. | Introduced typed `ElectrodeConfig` and `GroundedBoxConfig` dataclasses attached to `FieldSolution.config`. `generate_manifest` derives all geometry and voltages directly from active configuration. | `test_manifest_geometry_derived_from_typed_config_including_nondefault` |
+| **R2-F4** | MED | Optional `conductor_mask` and `boundary_mask` in `solve_dirichlet` had no shape or partition validation. | Added strict validation in `solve_dirichlet`: checks matching shapes, verifies boundary covers all 4 outer grid edges, checks disjointness (`conductor_mask & boundary_mask`), and checks complete partition (`conductor_mask | boundary_mask == fixed_mask`). | `test_mask_validation_rejects_inconsistent_or_overlapping_masks` |
+| **R2-F5** | LOW | Panel C explanatory text box overlapped negative-force bar in generated PNG. | Re-formatted Panel C: removed overlapping text box, placed explanation in clean x-axis label, expanded y-axis headroom (-650 to +650 µN), and placed bar annotations cleanly outside bars. | Inspected `electrostatics_baseline.png` |
+
+### Test Suite Status
+- Total unit tests: **20 passed** (up from 16).
+- Test execution command: `python3 -m unittest discover -s tests -v`.
+- Figure and manifest generation: `MPLBACKEND=Agg python3 examples/electrostatics_demo.py`.
