@@ -1,0 +1,47 @@
+name: Physics baseline tests
+on:
+  push:
+  pull_request:
+jobs:
+  baseline:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install --upgrade pip
+      - run: python -m pip install -r requirements.txt
+      - run: python -m unittest discover -s tests -v
+      - name: Run electrostatics demo & generate manifest
+        env:
+          PR_SOURCE_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
+        run: MPLBACKEND=Agg python examples/electrostatics_demo.py
+      - name: Verify manifest provenance gate
+        env:
+          PR_SOURCE_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          python -c "
+          import json, os
+          with open('electrostatics_manifest.json') as f:
+              m = json.load(f)
+          prov = m.get('provenance', {})
+          print('Manifest provenance:', json.dumps(prov, indent=2))
+          assert 'pr_source_head_sha' in prov and prov['pr_source_head_sha'] != 'unknown', 'Missing pr_source_head_sha'
+          assert 'tested_checkout_sha' in prov and prov['tested_checkout_sha'] != 'unknown', 'Missing tested_checkout_sha'
+          pr_sha = os.environ.get('PR_SOURCE_HEAD_SHA')
+          if pr_sha:
+              assert prov['pr_source_head_sha'] == pr_sha, f'pr_source_head_sha {prov[\"pr_source_head_sha\"]} != PR head {pr_sha}'
+              assert m['git_commit'] == pr_sha, f'manifest git_commit {m[\"git_commit\"]} != PR head {pr_sha}'
+          print('Manifest provenance gate passed.')
+          "
+      - uses: actions/upload-artifact@v4
+        with:
+          name: conventional-electrostatics-preview
+          path: |
+            electrostatics_baseline.png
+            electrostatics_manifest.json
+          retention-days: 30
+          if-no-files-found: error
