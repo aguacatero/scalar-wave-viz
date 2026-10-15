@@ -4,6 +4,14 @@ Interactive visualizations exploring how scalar waves interact with different ma
 
 [![Binder](https://mybinder.org/badge_logo.svg)](https://mybinder.org/v2/gh/aguacatero/scalar-wave-viz/HEAD?filepath=wave_3d.ipynb)
 
+## Research progress
+
+![Research progress: P0 under independent review; P1–P4 pending; 0 of 5 research gates accepted](assets/research-progress.svg)
+
+**Current: P0 — scientific baseline under independent review** ([draft PR #5](https://github.com/aguacatero/scalar-wave-viz/pull/5)). The exploratory notebooks are available, but their speculative material parameters are not independently validated. Next are [P1 — numerical and force validation](https://github.com/aguacatero/scalar-wave-viz/issues/6), [P2 — source-bounded Exodus patent reproduction](https://github.com/aguacatero/scalar-wave-viz/issues/7), followed by P3 — nuclear/scalar-field hypotheses and P4 — research dashboard (see the [draft P0–P4 roadmap](https://github.com/aguacatero/scalar-wave-viz/pull/5/files)).
+
+*The bar reports review-gate status, not a percentage of scientific validity. No gate is marked complete before independent acceptance and merge; the project does not demonstrate anomalous propulsion or special Moscovium field properties.*
+
 ---
 
 ## What this project is about
