@@ -1,15 +1,16 @@
 # Scalar Wave Viz P0 — independent scientific review handoff
 
-**Status: READY FOR CHATGPT INDEPENDENT REVIEW. NOT APPROVED FOR MERGE.**
+**Status: READY FOR CHATGPT INDEPENDENT R4 REVIEW. NOT APPROVED FOR MERGE.**
 
-Updated 2026-10-13 after resolving the independent R2 fix queue (R2-F1 through R2-F5). Persistent entry point for a new ChatGPT/Hermes/Antigravity session.
+Updated 2026-10-14 after resolving the independent R3 review findings (R3-F1 through R3-F3). Persistent entry point for ChatGPT/Hermes/Antigravity independent review.
 
 ## Locate the work
 
 - Repository: https://github.com/aguacatero/scalar-wave-viz
 - PR: https://github.com/aguacatero/scalar-wave-viz/pull/5 (**draft**, base `main`)
 - Branch: `scientific-baseline-exodus-2026-10-13`
-- R1/R2 Fix Queue Report: `docs/handoffs/2026-10-13-P0-CHATGPT-R1-FIX-QUEUE.md`
+- R3 Fix Queue Report: `docs/handoffs/2026-10-14-P0-CHATGPT-R3-FIX-QUEUE.md`
+- Historical R1/R2 Report: `docs/handoffs/2026-10-13-P0-CHATGPT-R1-FIX-QUEUE.md`
 - **Read PR head SHA at review time** for the current exact commit.
 - P1 issue: https://github.com/aguacatero/scalar-wave-viz/issues/6
 - P2 issue: https://github.com/aguacatero/scalar-wave-viz/issues/7
@@ -17,15 +18,21 @@ Updated 2026-10-13 after resolving the independent R2 fix queue (R2-F1 through R
 
 ## Intended changes
 
-1. `electrostatics_baseline.py`: analytic ideal parallel-plate electrostatic pressure/force **and separately** a 2D Dirichlet finite-difference solution for a grounded box containing two circular conductive cross-sections. Fully resolved domain masking (F1), mesh refinement study and coaxial benchmark (F2), non-tautological force sum and virtual work crosscheck (F3/F3b), strict mask partition validation (R2-F4), and true face-normal interface traction evaluation avoiding tangential gradient conflation (R2-F1).
-2. `tests/test_electrostatics_baseline.py`: 20 comprehensive unit tests covering all F1–F6 and R2-F1 through R2-F5 regression gates.
-3. `examples/electrostatics_demo.py`: three-panel scientifically labeled static preview (clean Panel C layout with ample headroom, R2-F5) and paired machine-readable `electrostatics_manifest.json` dynamically derived from typed `GroundedBoxConfig` run configuration (R2-F3).
-4. New scientific charter, Exodus source-bound force-model contract with US11511891B2 derivation ledger (F4), roadmap (F6), `AGENTS.md`, and pinned dependencies in `requirements.txt` and GitHub Actions workflow (R2-F2).
+1. `electrostatics_baseline.py`:
+   - (R3-F1) Implemented exact vertical electrode placement using `center_y_m` for left and right electrodes in mask generation: `(x - center_x_m)**2 + (y - center_y_m)**2 <= radius_m**2`. Added finite-coordinate validation in `ElectrodeConfig` and `GroundedBoxConfig`.
+   - (R3-F2) Enabled `electrode_pair_mesh_study` to accept typed `GroundedBoxConfig`, ensuring custom runs vary only grid resolution $n$ while strictly preserving configured geometries and voltages.
+2. `examples/electrostatics_demo.py`:
+   - (R3-F2) Pass active `config=cfg` directly to `electrode_pair_mesh_study`; serialize `mesh_study_geometry` in manifest to preserve custom study provenance.
+   - (R3-F3) Implemented `get_git_provenance()` distinguishing PR source branch HEAD SHA (`pr_source_head_sha`) from GitHub Actions CI synthetic merge commit (`tested_checkout_sha`). Bumped schema to `1.1.0`.
+3. `.github/workflows/physics-tests.yml`:
+   - (R3-F3) Passed `PR_SOURCE_HEAD_SHA`, `PR_BASE_SHA`, and `GITHUB_EVENT_NAME` to demo execution; added a manifest provenance verification gate step.
+4. `tests/test_electrostatics_baseline.py`:
+   - 23 unit tests (3 new targeted regression tests for R3-F1, R3-F2, and R3-F3).
 
 ## Evidence obtained
 
-- Local command `python3 -m unittest discover -s tests -v`: **20 tests passed** (including all F1–F6 and R2-F1 through R2-F5 regression tests).
-- Local command `MPLBACKEND=Agg python3 examples/electrostatics_demo.py`: writes `electrostatics_baseline.png` (2480 × 832) and paired `electrostatics_manifest.json`; visual appearance and metadata locally verified.
+- Local command `python3 -m unittest discover -s tests -v`: **23 tests passed** (including all F1–F6, R2-F1 through R2-F5, and R3-F1 through R3-F3 regression tests).
+- Local command `MPLBACKEND=Agg python3 examples/electrostatics_demo.py`: writes `electrostatics_baseline.png` (2480 × 832) and paired `electrostatics_manifest.json` (schema 1.1.0); visual appearance and provenance verified.
 - Workflow uploads downloadable artifact bundle named `conventional-electrostatics-preview` containing both PNG and JSON manifest (30-day retention). Link: https://github.com/aguacatero/scalar-wave-viz/actions/workflows/physics-tests.yml
 
 ## What the result does NOT establish

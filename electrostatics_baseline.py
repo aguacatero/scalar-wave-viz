@@ -113,9 +113,19 @@ def verify_plate_force_virtual_work(
 @dataclass(frozen=True)
 class ElectrodeConfig:
     center_x_m: float
-    center_y_m: float
-    radius_m: float
-    voltage_v: float
+    center_y_m: float = 0.0
+    radius_m: float = 0.003
+    voltage_v: float = 0.0
+
+    def __post_init__(self):
+        for name, val in (('center_x_m', self.center_x_m),
+                          ('center_y_m', self.center_y_m),
+                          ('radius_m', self.radius_m),
+                          ('voltage_v', self.voltage_v)):
+            if not np.isfinite(val):
+                raise ValueError(f'{name} must be finite')
+        if self.radius_m <= 0:
+            raise ValueError('radius_m must be positive')
 
 
 @dataclass(frozen=True)
@@ -128,6 +138,12 @@ class GroundedBoxConfig:
     right_electrode: ElectrodeConfig = ElectrodeConfig(
         center_x_m=0.008, center_y_m=0.0, radius_m=0.003, voltage_v=-500.0
     )
+
+    def __post_init__(self):
+        if not isinstance(self.n, int) or self.n < 11 or self.n > 401:
+            raise ValueError('n must be an integer between 11 and 401')
+        if not np.isfinite(self.box_width_m) or self.box_width_m <= 0:
+            raise ValueError('box_width_m must be positive and finite')
 
 
 @dataclass(frozen=True)
@@ -393,6 +409,7 @@ def evaluate_conductor_surface_interface(
 def electrode_pair_in_grounded_box(
     n: int = 81, box_width_m: float = 0.04,
     left_center_x_m: float = -0.008, right_center_x_m: float = 0.008,
+    left_center_y_m: float = 0.0, right_center_y_m: float = 0.0,
     left_radius_m: float = 0.003, right_radius_m: float = 0.003,
     left_voltage_v: float = 500.0, right_voltage_v: float = -500.0,
     config: GroundedBoxConfig | None = None,
@@ -406,7 +423,9 @@ def electrode_pair_in_grounded_box(
         n = config.n
         box_width_m = config.box_width_m
         left_center_x_m = config.left_electrode.center_x_m
+        left_center_y_m = config.left_electrode.center_y_m
         right_center_x_m = config.right_electrode.center_x_m
+        right_center_y_m = config.right_electrode.center_y_m
         left_radius_m = config.left_electrode.radius_m
         right_radius_m = config.right_electrode.radius_m
         left_voltage_v = config.left_electrode.voltage_v
@@ -415,13 +434,14 @@ def electrode_pair_in_grounded_box(
         config = GroundedBoxConfig(
             n=n,
             box_width_m=box_width_m,
-            left_electrode=ElectrodeConfig(left_center_x_m, 0.0, left_radius_m, left_voltage_v),
-            right_electrode=ElectrodeConfig(right_center_x_m, 0.0, right_radius_m, right_voltage_v),
+            left_electrode=ElectrodeConfig(left_center_x_m, left_center_y_m, left_radius_m, left_voltage_v),
+            right_electrode=ElectrodeConfig(right_center_x_m, right_center_y_m, right_radius_m, right_voltage_v),
         )
 
     if not isinstance(n, int) or n < 11 or n > 401:
         raise ValueError('n must be an integer between 11 and 401')
-    scalars = (box_width_m, left_center_x_m, right_center_x_m,
+    scalars = (box_width_m, left_center_x_m, left_center_y_m,
+               right_center_x_m, right_center_y_m,
                left_radius_m, right_radius_m, left_voltage_v, right_voltage_v)
     if not all(np.isfinite(v) for v in scalars):
         raise ValueError('Geometry and voltages must be finite')
@@ -430,8 +450,8 @@ def electrode_pair_in_grounded_box(
     h = box_width_m / (n-1)
     coords = np.linspace(-box_width_m/2, box_width_m/2, n)
     x, y = np.meshgrid(coords, coords, indexing='ij')
-    left = (x-left_center_x_m)**2 + y**2 <= left_radius_m**2
-    right = (x-right_center_x_m)**2 + y**2 <= right_radius_m**2
+    left = (x - left_center_x_m)**2 + (y - left_center_y_m)**2 <= left_radius_m**2
+    right = (x - right_center_x_m)**2 + (y - right_center_y_m)**2 <= right_radius_m**2
     if np.any(left & right) or not np.any(left) or not np.any(right):
         raise ValueError('Electrodes overlap or are too small for the grid')
     for disk in (left, right):
@@ -477,6 +497,7 @@ def electrode_pair_mesh_study(
     n_list: Sequence[int] = (41, 81, 101, 161),
     box_width_m: float = 0.04,
     probe_xy_m: tuple[float, float] = (0.0, 0.0),
+    config: GroundedBoxConfig | None = None,
 ) -> list[MeshRefinementResult]:
     """Perform mesh-refinement study for cylindrical electrode pair in grounded enclosure.
 
@@ -486,9 +507,16 @@ def electrode_pair_mesh_study(
     3. Fictitious gradient inside conductors on raw grid is nonzero while physical vacuum E is masked.
     """
     results: list[MeshRefinementResult] = []
+    base_config = config or GroundedBoxConfig(box_width_m=box_width_m)
     for n in n_list:
-        sol = electrode_pair_in_grounded_box(n=n, box_width_m=box_width_m)
-        coords = np.linspace(-box_width_m / 2, box_width_m / 2, n)
+        run_config = GroundedBoxConfig(
+            n=n,
+            box_width_m=base_config.box_width_m,
+            left_electrode=base_config.left_electrode,
+            right_electrode=base_config.right_electrode,
+        )
+        sol = electrode_pair_in_grounded_box(config=run_config)
+        coords = np.linspace(-run_config.box_width_m / 2, run_config.box_width_m / 2, n)
 
         ix = int(np.argmin(np.abs(coords - probe_xy_m[0])))
         iy = int(np.argmin(np.abs(coords - probe_xy_m[1])))

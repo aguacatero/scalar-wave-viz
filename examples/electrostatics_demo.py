@@ -5,6 +5,7 @@ From repository root: python examples/electrostatics_demo.py
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 import platform
 import subprocess
@@ -31,18 +32,62 @@ from electrostatics_baseline import (
 )
 
 
-def get_git_commit() -> str:
-    """Retrieve git HEAD commit SHA if available."""
+def get_git_provenance() -> dict[str, str | bool]:
+    """Retrieve git provenance differentiating PR source HEAD SHA from tested checkout SHA.
+
+    In GitHub Actions on pull_request events, actions/checkout checks out refs/pull/<N>/merge
+    (a synthetic merge commit). To ensure complete reproducibility and auditability:
+    - 'pr_source_head_sha': The exact commit SHA of the source branch being tested (from
+      github.event.pull_request.head.sha or local git HEAD).
+    - 'tested_checkout_sha': The actual git commit checked out in the working directory (synthetic
+      merge commit in PR CI, or local HEAD).
+    - 'pr_base_sha': The target base branch commit SHA (e.g. main).
+    - 'is_synthetic_pr_merge': True if running on a GitHub Actions pull_request synthetic merge commit.
+    """
+    repo_dir = Path(__file__).resolve().parents[1]
+    checkout_sha = 'unknown'
     try:
-        sha = subprocess.check_output(
+        checkout_sha = subprocess.check_output(
             ['git', 'rev-parse', 'HEAD'],
-            cwd=str(Path(__file__).resolve().parents[1]),
+            cwd=str(repo_dir),
             text=True,
             stderr=subprocess.DEVNULL,
         ).strip()
-        return sha
     except Exception:
-        return 'unknown'
+        pass
+
+    event_name = os.environ.get('GITHUB_EVENT_NAME') or ('ci' if os.environ.get('CI') else 'local')
+    env_source_sha = os.environ.get('PR_SOURCE_HEAD_SHA')
+    env_base_sha = os.environ.get('PR_BASE_SHA')
+
+    source_sha = env_source_sha.strip() if env_source_sha else checkout_sha
+
+    base_sha = env_base_sha.strip() if env_base_sha else None
+    if not base_sha:
+        try:
+            base_sha = subprocess.check_output(
+                ['git', 'rev-parse', 'origin/main'],
+                cwd=str(repo_dir),
+                text=True,
+                stderr=subprocess.DEVNULL,
+            ).strip()
+        except Exception:
+            base_sha = 'unknown'
+
+    is_synthetic = bool(env_source_sha and env_source_sha != checkout_sha)
+
+    return {
+        'pr_source_head_sha': source_sha,
+        'tested_checkout_sha': checkout_sha,
+        'pr_base_sha': base_sha or 'unknown',
+        'ci_event_name': event_name,
+        'is_synthetic_pr_merge': is_synthetic,
+    }
+
+
+def get_git_commit() -> str:
+    """Retrieve git PR source HEAD commit SHA (or local checkout SHA)."""
+    return str(get_git_provenance()['pr_source_head_sha'])
 
 
 def display_field_data(result: FieldSolution):
@@ -80,15 +125,17 @@ def generate_manifest(
     coax_benchmarks: list,
     output_png: str,
     config_2d: GroundedBoxConfig | None = None,
+    study_config: GroundedBoxConfig | None = None,
 ) -> dict:
     """Build machine-readable run manifest with provenance, parameters, and validation status."""
-    git_sha = get_git_commit()
+    prov = get_git_provenance()
     vw_check = verify_plate_force_virtual_work(
         plate_result.voltage_v, plate_result.gap_m, plate_result.area_m2
     )
 
-    # Resolve configuration dynamically from result or passed config (R2-F3)
+    # Resolve configuration dynamically from result or passed config (R2-F3, R3-F1, R3-F2)
     active_config = config_2d or result_2d.config or GroundedBoxConfig()
+    active_study_config = study_config or active_config
 
     study_table = [
         {
@@ -120,9 +167,23 @@ def generate_manifest(
     ]
 
     manifest = {
-        'schema_version': '1.0.0',
+        'schema_version': '1.1.0',
         'artifact_file': output_png,
-        'git_commit': git_sha,
+        'git_commit': prov['pr_source_head_sha'],
+        'tested_checkout_sha': prov['tested_checkout_sha'],
+        'provenance': {
+            'pr_source_head_sha': prov['pr_source_head_sha'],
+            'tested_checkout_sha': prov['tested_checkout_sha'],
+            'pr_base_sha': prov['pr_base_sha'],
+            'ci_event_name': prov['ci_event_name'],
+            'is_synthetic_pr_merge': prov['is_synthetic_pr_merge'],
+            'provenance_note': (
+                'pr_source_head_sha records the PR branch head commit. '
+                'tested_checkout_sha records the git commit checked out during CI execution '
+                '(which on GitHub pull_request events is a synthetic merge commit refs/pull/PR/merge). '
+                'Both are recorded explicitly to eliminate provenance conflation.'
+            ),
+        },
         'environment': {
             'python_version': platform.python_version(),
             'platform': platform.platform(),
@@ -162,6 +223,21 @@ def generate_manifest(
                     'grid_spacing_m': float(result_2d.grid_spacing_m),
                     'stencil': '5-point Laplace finite-difference',
                     'max_discrete_residual_v': float(result_2d.max_discrete_residual_v),
+                },
+                'mesh_study_geometry': {
+                    'enclosure_width_m': float(active_study_config.box_width_m),
+                    'left_electrode': {
+                        'center_x_m': float(active_study_config.left_electrode.center_x_m),
+                        'center_y_m': float(active_study_config.left_electrode.center_y_m),
+                        'radius_m': float(active_study_config.left_electrode.radius_m),
+                        'voltage_v': float(active_study_config.left_electrode.voltage_v),
+                    },
+                    'right_electrode': {
+                        'center_x_m': float(active_study_config.right_electrode.center_x_m),
+                        'center_y_m': float(active_study_config.right_electrode.center_y_m),
+                        'radius_m': float(active_study_config.right_electrode.radius_m),
+                        'voltage_v': float(active_study_config.right_electrode.voltage_v),
+                    },
                 },
                 'mesh_study_probe_midpoint': study_table,
                 'coaxial_analytic_benchmark': coax_table,
@@ -205,7 +281,7 @@ def render(
     cfg = config_2d or GroundedBoxConfig(n=101)
     result = electrode_pair_in_grounded_box(config=cfg)
     plate = parallel_plate_benchmark(1000.0, 0.001, 1e-4)
-    study = electrode_pair_mesh_study(n_list=(41, 81, 101, 161), box_width_m=cfg.box_width_m)
+    study = electrode_pair_mesh_study(n_list=(41, 81, 101, 161), config=cfg)
     coax_bench = coaxial_cylinder_benchmark(n_list=(41, 81, 161), box_width_m=cfg.box_width_m)
 
     n = result.potential_v.shape[0]
@@ -318,7 +394,9 @@ def render(
     fig.savefig(png_path, dpi=160)
     plt.close(fig)
 
-    manifest = generate_manifest(result, plate, study, coax_bench, str(png_path.name), config_2d=cfg)
+    manifest = generate_manifest(
+        result, plate, study, coax_bench, str(png_path.name), config_2d=cfg, study_config=cfg
+    )
     json_path = Path(output_json)
     with open(json_path, 'w', encoding='utf-8') as f:
         json.dump(manifest, f, indent=2)

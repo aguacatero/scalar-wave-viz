@@ -1,4 +1,5 @@
 import json
+import os
 from pathlib import Path
 import unittest
 
@@ -17,7 +18,7 @@ from electrostatics_baseline import (
     solve_dirichlet,
     verify_plate_force_virtual_work,
 )
-from examples.electrostatics_demo import display_field_data, render
+from examples.electrostatics_demo import display_field_data, get_git_provenance, render
 
 
 class PlateBenchmarkTests(unittest.TestCase):
@@ -314,8 +315,12 @@ class ManifestAndContractTests(unittest.TestCase):
         with open(json_path, 'r', encoding='utf-8') as f:
             manifest = json.load(f)
 
-        self.assertEqual(manifest['schema_version'], '1.0.0')
+        self.assertIn(manifest['schema_version'], ('1.0.0', '1.1.0'))
         self.assertIn('git_commit', manifest)
+        self.assertIn('tested_checkout_sha', manifest)
+        self.assertIn('provenance', manifest)
+        self.assertIn('pr_source_head_sha', manifest['provenance'])
+        self.assertIn('tested_checkout_sha', manifest['provenance'])
         self.assertIn('environment', manifest)
         self.assertIn('packages', manifest['environment'])
         self.assertEqual(manifest['environment']['packages']['numpy'], np.__version__)
@@ -357,6 +362,148 @@ class ManifestAndContractTests(unittest.TestCase):
 
         png_path.unlink(missing_ok=True)
         json_path.unlink(missing_ok=True)
+
+    def test_electrode_y_position_affects_mask_and_manifest(self):
+        """R3-F1 regression: verify nonzero center_y_m physically shifts conductor masks and is recorded in manifest."""
+        n = 81
+        box_width = 0.04
+        y_offset_left = 0.005   # +5 mm
+        y_offset_right = -0.005 # -5 mm
+
+        cfg = GroundedBoxConfig(
+            n=n,
+            box_width_m=box_width,
+            left_electrode=ElectrodeConfig(center_x_m=-0.008, center_y_m=y_offset_left, radius_m=0.003, voltage_v=500.0),
+            right_electrode=ElectrodeConfig(center_x_m=0.008, center_y_m=y_offset_right, radius_m=0.003, voltage_v=-500.0),
+        )
+        sol = electrode_pair_in_grounded_box(config=cfg)
+
+        coords = np.linspace(-box_width / 2, box_width / 2, n)
+        x, y = np.meshgrid(coords, coords, indexing='ij')
+
+        # Check left electrode centroid
+        left_mask = sol.conductor_mask & (sol.potential_v > 0)
+        self.assertTrue(np.any(left_mask))
+        left_mean_y = float(np.mean(y[left_mask]))
+        self.assertAlmostEqual(left_mean_y, y_offset_left, delta=sol.grid_spacing_m)
+
+        # Check right electrode centroid
+        right_mask = sol.conductor_mask & (sol.potential_v < 0)
+        self.assertTrue(np.any(right_mask))
+        right_mean_y = float(np.mean(y[right_mask]))
+        self.assertAlmostEqual(right_mean_y, y_offset_right, delta=sol.grid_spacing_m)
+
+        # Non-finite y inputs must be rejected
+        with self.assertRaises(ValueError):
+            ElectrodeConfig(center_x_m=0.0, center_y_m=np.nan, radius_m=0.003, voltage_v=100.0)
+        with self.assertRaises(ValueError):
+            ElectrodeConfig(center_x_m=0.0, center_y_m=np.inf, radius_m=0.003, voltage_v=100.0)
+        with self.assertRaises(ValueError):
+            electrode_pair_in_grounded_box(left_center_y_m=np.nan)
+
+        # Verify manifest recording
+        png_path, json_path = render(
+            output_png='test_y_offset_baseline.png',
+            output_json='test_y_offset_manifest.json',
+            config_2d=cfg,
+        )
+        with open(json_path, 'r', encoding='utf-8') as f:
+            manifest = json.load(f)
+
+        geom = manifest['cases']['case_1_grounded_box_2d']['geometry']
+        self.assertAlmostEqual(geom['left_electrode']['center_y_m'], y_offset_left)
+        self.assertAlmostEqual(geom['right_electrode']['center_y_m'], y_offset_right)
+
+        png_path.unlink(missing_ok=True)
+        json_path.unlink(missing_ok=True)
+
+    def test_mesh_study_uses_custom_configuration(self):
+        """R3-F2 regression: mesh study must use passed config rather than silently falling back to defaults."""
+        custom_cfg = GroundedBoxConfig(
+            n=41,
+            box_width_m=0.05,
+            left_electrode=ElectrodeConfig(center_x_m=-0.010, center_y_m=0.002, radius_m=0.004, voltage_v=800.0),
+            right_electrode=ElectrodeConfig(center_x_m=0.010, center_y_m=-0.002, radius_m=0.004, voltage_v=-800.0),
+        )
+
+        study = electrode_pair_mesh_study(n_list=(31, 51), config=custom_cfg)
+        self.assertEqual(len(study), 2)
+        # Check that grid spacings match custom box width 0.05
+        self.assertAlmostEqual(study[0].grid_spacing_m, 0.05 / 30)
+        self.assertAlmostEqual(study[1].grid_spacing_m, 0.05 / 50)
+
+        # Check render serializes custom mesh study geometry in manifest
+        png_path, json_path = render(
+            output_png='test_custom_study_baseline.png',
+            output_json='test_custom_study_manifest.json',
+            config_2d=custom_cfg,
+        )
+        with open(json_path, 'r', encoding='utf-8') as f:
+            manifest = json.load(f)
+
+        case1 = manifest['cases']['case_1_grounded_box_2d']
+        self.assertIn('mesh_study_geometry', case1)
+        study_geom = case1['mesh_study_geometry']
+        self.assertAlmostEqual(study_geom['enclosure_width_m'], 0.05)
+        self.assertAlmostEqual(study_geom['left_electrode']['voltage_v'], 800.0)
+        self.assertAlmostEqual(study_geom['left_electrode']['center_y_m'], 0.002)
+        self.assertAlmostEqual(study_geom['right_electrode']['voltage_v'], -800.0)
+        self.assertAlmostEqual(study_geom['right_electrode']['center_y_m'], -0.002)
+
+        png_path.unlink(missing_ok=True)
+        json_path.unlink(missing_ok=True)
+
+    def test_manifest_provenance_distinguishes_source_head_from_tested_merge(self):
+        """R3-F3 regression: verify manifest provenance records both PR source HEAD SHA and tested checkout SHA."""
+        # 1. Live git provenance check
+        prov_live = get_git_provenance()
+        self.assertIn('pr_source_head_sha', prov_live)
+        self.assertIn('tested_checkout_sha', prov_live)
+        self.assertIn('pr_base_sha', prov_live)
+        self.assertIn('is_synthetic_pr_merge', prov_live)
+
+        # 2. Simulated GitHub Actions PR environment
+        mock_source_sha = 'a' * 40
+        mock_base_sha = 'b' * 40
+        old_env = {
+            'PR_SOURCE_HEAD_SHA': os.environ.get('PR_SOURCE_HEAD_SHA'),
+            'PR_BASE_SHA': os.environ.get('PR_BASE_SHA'),
+            'GITHUB_EVENT_NAME': os.environ.get('GITHUB_EVENT_NAME'),
+        }
+        try:
+            os.environ['PR_SOURCE_HEAD_SHA'] = mock_source_sha
+            os.environ['PR_BASE_SHA'] = mock_base_sha
+            os.environ['GITHUB_EVENT_NAME'] = 'pull_request'
+
+            prov_sim = get_git_provenance()
+            self.assertEqual(prov_sim['pr_source_head_sha'], mock_source_sha)
+            self.assertEqual(prov_sim['pr_base_sha'], mock_base_sha)
+            self.assertEqual(prov_sim['ci_event_name'], 'pull_request')
+            # If tested_checkout_sha is actual git repo checkout, it won't equal 'a'*40, so synthetic merge is True
+            self.assertTrue(prov_sim['is_synthetic_pr_merge'])
+
+            png_path, json_path = render(
+                output_png='test_prov_baseline.png',
+                output_json='test_prov_manifest.json',
+            )
+            with open(json_path, 'r', encoding='utf-8') as f:
+                manifest = json.load(f)
+
+            self.assertEqual(manifest['git_commit'], mock_source_sha)
+            self.assertEqual(manifest['provenance']['pr_source_head_sha'], mock_source_sha)
+            self.assertEqual(manifest['provenance']['pr_base_sha'], mock_base_sha)
+            self.assertEqual(manifest['provenance']['ci_event_name'], 'pull_request')
+            self.assertTrue(manifest['provenance']['is_synthetic_pr_merge'])
+            self.assertIn('provenance_note', manifest['provenance'])
+
+            png_path.unlink(missing_ok=True)
+            json_path.unlink(missing_ok=True)
+        finally:
+            for k, v in old_env.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
 
     def test_patent_model_contract_audits_contested_derivations(self):
         """F4 regression: EXODUS_MODEL_CONTRACT.md must document Eq.(4) and Eq.(11) proof obligations."""
