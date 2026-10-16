@@ -4,6 +4,12 @@ Interactive visualizations exploring how scalar waves interact with different ma
 
 [![Binder](https://mybinder.org/badge_logo.svg)](https://mybinder.org/v2/gh/aguacatero/scalar-wave-viz/HEAD?filepath=wave_3d.ipynb)
 
+## Optional local Antigravity automation
+
+[Fresh-session recovery and shared 5-hour token budgeting](docs/AGY_AUTOPILOT.md) is available for local setup. Each controlled project is capped at 35% of a user-configured token budget; the scheduler is **not enabled on your Mac by merging this repository change** and does not claim to read Google's account quota.
+
+---
+
 ## Research progress
 
 ![Research progress: P0 under independent review; P1–P4 pending; 0 of 5 research gates accepted](assets/research-progress.svg)
