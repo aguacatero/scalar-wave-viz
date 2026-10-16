@@ -1,0 +1,28 @@
+name: Antigravity autopilot unit tests
+on:
+  push:
+    paths:
+      - "scripts/agy_autopilot.py"
+      - "scripts/install_agy_launchd.py"
+      - "tests/test_agy_autopilot.py"
+      - ".github/workflows/agy-autopilot-tests.yml"
+  pull_request:
+    paths:
+      - "scripts/agy_autopilot.py"
+      - "scripts/install_agy_launchd.py"
+      - "tests/test_agy_autopilot.py"
+      - ".github/workflows/agy-autopilot-tests.yml"
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Syntax check
+        run: python -m py_compile scripts/agy_autopilot.py scripts/install_agy_launchd.py
+      - name: Run isolated scheduler tests
+        run: python -m unittest discover -s tests -p 'test_agy_autopilot.py' -v
