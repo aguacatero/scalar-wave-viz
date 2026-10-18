@@ -10,11 +10,17 @@ from electrostatics_baseline import (
     ElectrodeConfig,
     FieldSolution,
     GroundedBoxConfig,
+    MeshRefinementResult,
+    ProbeConvergenceAssessment,
+    assess_probe_convergence,
     check_configuration_symmetries,
+    check_discrete_symmetries,
     coaxial_cylinder_benchmark,
     electrode_pair_in_grounded_box,
     electrode_pair_mesh_study,
     evaluate_conductor_surface_interface,
+    format_panel_a_title,
+    format_voltage_title,
     parallel_plate_benchmark,
     solve_dirichlet,
     verify_plate_force_virtual_work,
@@ -669,13 +675,19 @@ class ManifestAndContractTests(unittest.TestCase):
         self.assertIn('Model H1: precisely cited patent proposition', text)
 
     def test_render_unequal_voltages_title_and_manifest(self):
-        """R4-F3 regression: verify asymmetric voltage configurations render with explicit titles and valid JSON."""
+        """R4-F3 / R5-F4 regression: verify asymmetric voltage configurations render with explicit titles and valid JSON."""
         cfg_asym = GroundedBoxConfig(
             n=41,
             box_width_m=0.04,
             left_electrode=ElectrodeConfig(center_x_m=-0.008, center_y_m=0.0, radius_m=0.003, voltage_v=800.0),
             right_electrode=ElectrodeConfig(center_x_m=0.008, center_y_m=0.0, radius_m=0.003, voltage_v=-350.0),
         )
+
+        # R5-F4: Explicitly inspect Panel A title formatting
+        expected_title = format_panel_a_title(cfg_asym)
+        self.assertIn('V_left=+800 V, V_right=-350 V', expected_title)
+        self.assertEqual(expected_title, 'A · Case 1: Grounded Box (V_left=+800 V, V_right=-350 V)\nDirichlet Potential (V)')
+
         png_path, json_path = render(
             output_png='test_asym_v_baseline.png',
             output_json='test_asym_v_manifest.json',
@@ -698,8 +710,255 @@ class ManifestAndContractTests(unittest.TestCase):
             self.assertIsNone(row['potential_central_inversion_error_v'])
             self.assertIn('N/A', row['symmetry_status'])
 
+        # R5-F2: verify probe convergence details recorded in manifest
+        case1 = manifest['cases']['case_1_grounded_box_2d']
+        self.assertIn('probe_convergence_details', case1)
+        conv_details = case1['probe_convergence_details']
+        self.assertIn('vacuum_status', conv_details)
+        self.assertIn('convergence_status', conv_details)
+
         png_path.unlink(missing_ok=True)
         json_path.unlink(missing_ok=True)
+
+    def test_r5_f1_exact_antisymmetry_and_near_threshold_geometry(self):
+        """R5-F1 regression: np.isclose false assertions rejected; discrete parity verified exactly."""
+        # 1. Voltage asymmetry: +500 V vs -499.997 V (0.003 V discrepancy)
+        # np.isclose(-499.997, -500.0, rtol=1e-5, atol=1e-8) is True, but exact symmetry must be False!
+        self.assertTrue(np.isclose(-499.997, -500.0, rtol=1e-5, atol=1e-8))
+
+        cfg_approx = GroundedBoxConfig(
+            n=41,
+            box_width_m=0.04,
+            left_electrode=ElectrodeConfig(center_x_m=-0.008, center_y_m=0.0, radius_m=0.003, voltage_v=500.0),
+            right_electrode=ElectrodeConfig(center_x_m=0.008, center_y_m=0.0, radius_m=0.003, voltage_v=-499.997),
+        )
+        sym_approx = check_configuration_symmetries(cfg_approx)
+        self.assertFalse(sym_approx['has_x_reflection_antisymmetry'])
+        self.assertFalse(sym_approx['has_central_inversion_antisymmetry'])
+
+        study_approx = electrode_pair_mesh_study(n_list=(31,), config=cfg_approx)
+        self.assertEqual(len(study_approx), 1)
+        r = study_approx[0]
+        self.assertIsNone(r.potential_antisymmetry_error_v)
+        self.assertIsNone(r.potential_central_inversion_error_v)
+        self.assertEqual(r.symmetry_status, 'N/A (asymmetric geometry or potentials)')
+
+        # 2. Near-threshold geometry: x_right = 0.0080001 m vs x_left = -0.008 m
+        cfg_near_geom = GroundedBoxConfig(
+            n=41,
+            box_width_m=0.04,
+            left_electrode=ElectrodeConfig(center_x_m=-0.008, center_y_m=0.0, radius_m=0.003, voltage_v=500.0),
+            right_electrode=ElectrodeConfig(center_x_m=0.0080001, center_y_m=0.0, radius_m=0.003, voltage_v=-500.0),
+        )
+        sym_near = check_configuration_symmetries(cfg_near_geom)
+        self.assertFalse(sym_near['has_x_reflection_antisymmetry'])
+        self.assertFalse(sym_near['has_central_inversion_antisymmetry'])
+
+        study_near = electrode_pair_mesh_study(n_list=(31,), config=cfg_near_geom)
+        self.assertIsNone(study_near[0].potential_antisymmetry_error_v)
+        self.assertIsNone(study_near[0].potential_central_inversion_error_v)
+        self.assertEqual(study_near[0].symmetry_status, 'N/A (asymmetric geometry or potentials)')
+
+        # 3. Discrete transformed fixed masks and potentials check
+        cfg_exact = GroundedBoxConfig(
+            n=41,
+            box_width_m=0.04,
+            left_electrode=ElectrodeConfig(center_x_m=-0.008, center_y_m=0.0, radius_m=0.003, voltage_v=500.0),
+            right_electrode=ElectrodeConfig(center_x_m=0.008, center_y_m=0.0, radius_m=0.003, voltage_v=-500.0),
+        )
+        sol_exact = electrode_pair_in_grounded_box(config=cfg_exact)
+        disc_sym = check_discrete_symmetries(sol_exact, cfg_exact)
+        self.assertTrue(disc_sym['has_x_reflection_antisymmetry'])
+        self.assertTrue(disc_sym['has_central_inversion_antisymmetry'])
+
+    def test_r5_f2_probe_convergence_assessment_split_and_regressions(self):
+        """R5-F2 regression: split vacuum validity from quantitative convergence with all requested regressions."""
+        # 1. Insufficient resolutions: 1-row study
+        res_1row = electrode_pair_mesh_study(n_list=(41,))
+        eval_1row = assess_probe_convergence(res_1row, requested_probe_xy_m=(0.0, 0.0))
+        self.assertEqual(eval_1row.vacuum_status, 'ALL_IN_VACUUM')
+        self.assertEqual(eval_1row.convergence_status, 'NOT_ASSESSED')
+        self.assertFalse(eval_1row.is_converged)
+        self.assertIn('Insufficient mesh resolutions (1 row(s) provided)', eval_1row.assessment_summary)
+
+        # 2. Wildly drifting but all-vacuum rows: must fail closed to INCONCLUSIVE
+        drifting_rows = [
+            MeshRefinementResult(
+                n=41,
+                grid_spacing_m=0.001,
+                probe_x_m=0.0,
+                probe_y_m=0.0,
+                probe_potential_v=0.0,
+                probe_ex_v_per_m=100.0,
+                probe_ey_v_per_m=0.0,
+                max_vacuum_e_v_per_m=200.0,
+                max_conductor_raw_gradient_v_per_m=50.0,
+                max_discrete_residual_v=1e-12,
+                potential_antisymmetry_error_v=1e-12,
+                probe_in_vacuum=True,
+                probe_status='VALID_VACUUM',
+                requested_probe_x_m=0.0,
+                requested_probe_y_m=0.0,
+            ),
+            MeshRefinementResult(
+                n=81,
+                grid_spacing_m=0.0005,
+                probe_x_m=0.0,
+                probe_y_m=0.0,
+                probe_potential_v=0.0,
+                probe_ex_v_per_m=5000.0,
+                probe_ey_v_per_m=0.0,
+                max_vacuum_e_v_per_m=6000.0,
+                max_conductor_raw_gradient_v_per_m=50.0,
+                max_discrete_residual_v=1e-12,
+                potential_antisymmetry_error_v=1e-12,
+                probe_in_vacuum=True,
+                probe_status='VALID_VACUUM',
+                requested_probe_x_m=0.0,
+                requested_probe_y_m=0.0,
+            ),
+            MeshRefinementResult(
+                n=161,
+                grid_spacing_m=0.00025,
+                probe_x_m=0.0,
+                probe_y_m=0.0,
+                probe_potential_v=0.0,
+                probe_ex_v_per_m=25000.0,
+                probe_ey_v_per_m=0.0,
+                max_vacuum_e_v_per_m=30000.0,
+                max_conductor_raw_gradient_v_per_m=50.0,
+                max_discrete_residual_v=1e-12,
+                potential_antisymmetry_error_v=1e-12,
+                probe_in_vacuum=True,
+                probe_status='VALID_VACUUM',
+                requested_probe_x_m=0.0,
+                requested_probe_y_m=0.0,
+            ),
+        ]
+        eval_drift = assess_probe_convergence(drifting_rows, requested_probe_xy_m=(0.0, 0.0))
+        self.assertEqual(eval_drift.vacuum_status, 'ALL_IN_VACUUM')
+        self.assertEqual(eval_drift.convergence_status, 'INCONCLUSIVE')
+        self.assertFalse(eval_drift.is_converged)
+        self.assertIn('exhibits significant numerical drift', eval_drift.assessment_summary)
+
+        # 3. Off-grid target: sampled coordinates drift across mesh resolutions
+        offgrid_study = electrode_pair_mesh_study(
+            n_list=(41, 81, 101),
+            probe_xy_m=(0.0013, 0.0027),
+        )
+        eval_offgrid = assess_probe_convergence(offgrid_study, requested_probe_xy_m=(0.0013, 0.0027))
+        self.assertEqual(eval_offgrid.vacuum_status, 'ALL_IN_VACUUM')
+        self.assertEqual(eval_offgrid.convergence_status, 'INCONCLUSIVE')
+        self.assertFalse(eval_offgrid.coords_stable)
+        self.assertFalse(eval_offgrid.is_converged)
+        self.assertIn('drift or deviate from requested point', eval_offgrid.assessment_summary)
+
+        # 4. Standard on-grid baseline at midpoint (0.0, 0.0)
+        baseline_study = electrode_pair_mesh_study(n_list=(41, 81, 101, 161), probe_xy_m=(0.0, 0.0))
+        eval_base = assess_probe_convergence(baseline_study, requested_probe_xy_m=(0.0, 0.0))
+        self.assertEqual(eval_base.vacuum_status, 'ALL_IN_VACUUM')
+        self.assertEqual(eval_base.convergence_status, 'CONVERGED')
+        self.assertTrue(eval_base.coords_stable)
+        self.assertTrue(eval_base.is_converged)
+        self.assertIsNotNone(eval_base.relative_field_drift)
+        self.assertLess(eval_base.relative_field_drift, 0.03)
+        self.assertIn('converges smoothly', eval_base.assessment_summary)
+
+    def test_r5_f3_continuous_conductor_disjointness_and_enclosure_containment(self):
+        """R5-F3 regression: continuous geometry validation rejects overlap/wall penetration before rasterization."""
+        # 1. Overlapping continuous disks with disjoint lattice masks on coarse grid:
+        # n=11, width=0.04 m, centers -0.004 m and 0.0 m, radii 0.0021 m each.
+        # Center distance = 0.004 m < sum of radii 0.0042 m (overlap by 0.2 mm).
+        with self.assertRaises(ValueError) as ctx:
+            GroundedBoxConfig(
+                n=11,
+                box_width_m=0.04,
+                left_electrode=ElectrodeConfig(center_x_m=-0.004, center_y_m=0.0, radius_m=0.0021, voltage_v=500.0),
+                right_electrode=ElectrodeConfig(center_x_m=0.0, center_y_m=0.0, radius_m=0.0021, voltage_v=-500.0),
+            )
+        self.assertIn('intersect or touch in continuous space', str(ctx.exception))
+
+        with self.assertRaises(ValueError) as ctx:
+            electrode_pair_in_grounded_box(
+                n=11,
+                box_width_m=0.04,
+                left_center_x_m=-0.004,
+                left_center_y_m=0.0,
+                right_center_x_m=0.0,
+                right_center_y_m=0.0,
+                left_radius_m=0.0021,
+                right_radius_m=0.0021,
+            )
+        self.assertIn('intersect or touch in continuous space', str(ctx.exception))
+
+        # 2. Continuous wall penetration with untriggered discrete boundary nodes:
+        # Disk centered at (0.0177, 0.001) with radius 0.0025 in width 0.04 m enclosure (wall at 0.02 m).
+        # Extent = 0.0177 + 0.0025 = 0.0202 m >= 0.0200 m (penetration by 0.2 mm).
+        with self.assertRaises(ValueError) as ctx:
+            GroundedBoxConfig(
+                n=41,
+                box_width_m=0.04,
+                left_electrode=ElectrodeConfig(center_x_m=-0.008, center_y_m=0.0, radius_m=0.003, voltage_v=500.0),
+                right_electrode=ElectrodeConfig(center_x_m=0.0177, center_y_m=0.001, radius_m=0.0025, voltage_v=-500.0),
+            )
+        self.assertIn('penetrates or touches grounded enclosure boundary', str(ctx.exception))
+
+        with self.assertRaises(ValueError) as ctx:
+            electrode_pair_in_grounded_box(
+                n=41,
+                box_width_m=0.04,
+                left_center_x_m=-0.008,
+                left_center_y_m=0.0,
+                right_center_x_m=0.0177,
+                right_center_y_m=0.001,
+                left_radius_m=0.003,
+                right_radius_m=0.0025,
+            )
+        self.assertIn('penetrates or touches grounded enclosure boundary', str(ctx.exception))
+
+    def test_r5_f4_panel_a_title_formatter_and_figure_inspection(self):
+        """R5-F4 regression: test extracted voltage title formatter and complete Panel A title on symmetric/asymmetric/near-symmetric inputs."""
+        # 1. Exactly symmetric inputs
+        self.assertEqual(format_voltage_title(500.0, -500.0), '±500 V')
+        self.assertEqual(format_voltage_title(1000.0, -1000.0), '±1000 V')
+        self.assertEqual(format_voltage_title(250.5, -250.5), '±250.5 V')
+
+        cfg_sym = GroundedBoxConfig(
+            n=41,
+            left_electrode=ElectrodeConfig(center_x_m=-0.008, center_y_m=0.0, radius_m=0.003, voltage_v=500.0),
+            right_electrode=ElectrodeConfig(center_x_m=0.008, center_y_m=0.0, radius_m=0.003, voltage_v=-500.0),
+        )
+        self.assertEqual(
+            format_panel_a_title(cfg_sym),
+            'A · Case 1: Grounded Box (±500 V)\nDirichlet Potential (V)'
+        )
+
+        # 2. Asymmetric inputs
+        self.assertEqual(format_voltage_title(800.0, -350.0), 'V_left=+800 V, V_right=-350 V')
+        cfg_asym = GroundedBoxConfig(
+            n=41,
+            left_electrode=ElectrodeConfig(center_x_m=-0.008, center_y_m=0.0, radius_m=0.003, voltage_v=800.0),
+            right_electrode=ElectrodeConfig(center_x_m=0.008, center_y_m=0.0, radius_m=0.003, voltage_v=-350.0),
+        )
+        self.assertEqual(
+            format_panel_a_title(cfg_asym),
+            'A · Case 1: Grounded Box (V_left=+800 V, V_right=-350 V)\nDirichlet Potential (V)'
+        )
+
+        # 3. Near-symmetric input (+500 V vs -499.997 V) must NEVER format as ±500 V
+        self.assertEqual(format_voltage_title(500.0, -499.997), 'V_left=+500 V, V_right=-499.997 V')
+        self.assertNotEqual(format_voltage_title(500.0, -499.997), '±500 V')
+
+        cfg_near = GroundedBoxConfig(
+            n=41,
+            left_electrode=ElectrodeConfig(center_x_m=-0.008, center_y_m=0.0, radius_m=0.003, voltage_v=500.0),
+            right_electrode=ElectrodeConfig(center_x_m=0.008, center_y_m=0.0, radius_m=0.003, voltage_v=-499.997),
+        )
+        self.assertIn('V_left=+500 V, V_right=-499.997 V', format_panel_a_title(cfg_near))
+        self.assertNotIn('±500 V', format_panel_a_title(cfg_near))
+
+        # 4. Zero voltages
+        self.assertEqual(format_voltage_title(0.0, 0.0), 'V_left=+0 V, V_right=+0 V')
 
 
 if __name__ == '__main__':

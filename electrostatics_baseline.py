@@ -145,6 +145,30 @@ class GroundedBoxConfig:
         if not np.isfinite(self.box_width_m) or self.box_width_m <= 0:
             raise ValueError('box_width_m must be positive and finite')
 
+        half_w = self.box_width_m / 2.0
+        for name, elec in (
+            ('left_electrode', self.left_electrode),
+            ('right_electrode', self.right_electrode),
+        ):
+            if abs(elec.center_x_m) + elec.radius_m >= half_w or abs(elec.center_y_m) + elec.radius_m >= half_w:
+                raise ValueError(
+                    f'{name} penetrates or touches grounded enclosure boundary: '
+                    f'x_extent=[{elec.center_x_m - elec.radius_m:.4e}, {elec.center_x_m + elec.radius_m:.4e}], '
+                    f'y_extent=[{elec.center_y_m - elec.radius_m:.4e}, {elec.center_y_m + elec.radius_m:.4e}], '
+                    f'half_width={half_w:.4e}'
+                )
+
+        center_dist = float(np.hypot(
+            self.right_electrode.center_x_m - self.left_electrode.center_x_m,
+            self.right_electrode.center_y_m - self.left_electrode.center_y_m,
+        ))
+        if center_dist <= (self.left_electrode.radius_m + self.right_electrode.radius_m):
+            raise ValueError(
+                f'Electrodes intersect or touch in continuous space: '
+                f'center distance {center_dist:.4e} m <= sum of radii '
+                f'{self.left_electrode.radius_m + self.right_electrode.radius_m:.4e} m'
+            )
+
 
 @dataclass(frozen=True)
 class FieldSolution:
@@ -447,6 +471,19 @@ def electrode_pair_in_grounded_box(
         raise ValueError('Geometry and voltages must be finite')
     if box_width_m <= 0 or left_radius_m <= 0 or right_radius_m <= 0:
         raise ValueError('Width and radii must be positive')
+
+    # Continuous geometry validation before rasterization (R5-F3)
+    half_w = box_width_m / 2.0
+    for name, cx, cy, rad in (
+        ('left electrode', left_center_x_m, left_center_y_m, left_radius_m),
+        ('right electrode', right_center_x_m, right_center_y_m, right_radius_m),
+    ):
+        if abs(cx) + rad >= half_w or abs(cy) + rad >= half_w:
+            raise ValueError(f'{name.capitalize()} penetrates or touches grounded enclosure boundary')
+
+    center_dist = float(np.hypot(right_center_x_m - left_center_x_m, right_center_y_m - left_center_y_m))
+    if center_dist <= (left_radius_m + right_radius_m):
+        raise ValueError('Electrodes intersect or touch in continuous space')
     h = box_width_m / (n-1)
     coords = np.linspace(-box_width_m/2, box_width_m/2, n)
     x, y = np.meshgrid(coords, coords, indexing='ij')
@@ -478,40 +515,81 @@ def electrode_pair_in_grounded_box(
     )
 
 
-def check_configuration_symmetries(config: GroundedBoxConfig) -> dict[str, bool]:
+def check_configuration_symmetries(
+    config: GroundedBoxConfig,
+    solution: FieldSolution | None = None,
+) -> dict[str, bool]:
     """Check whether electrode configuration satisfies exact discrete Laplace symmetry preconditions.
 
+    Exact criteria (no loose floating-point tolerances that mask boundary defects):
     1. x-reflection antisymmetry: V(-x, y) = -V(x, y)
        Preconditions:
-         - r_left == r_right
-         - x_right == -x_left (with x_left != 0)
+         - r_left == r_right > 0
+         - x_right == -x_left != 0
          - y_right == y_left
-         - V_right == -V_left (with V_left != 0)
+         - V_right == -V_left != 0
 
     2. Central-inversion antisymmetry: V(-x, -y) = -V(x, y)
        Preconditions:
-         - r_left == r_right
-         - x_right == -x_left (with x_left != 0)
+         - r_left == r_right > 0
+         - x_right == -x_left != 0
          - y_right == -y_left
-         - V_right == -V_left (with V_left != 0)
+         - V_right == -V_left != 0
+
+    If solution is provided, also checks discrete transformed fixed masks and potentials exactly:
+       - x-reflection: fixed_mask == fixed_mask[::-1, :] and
+                       conductor_mask == conductor_mask[::-1, :] and
+                       potential_v[fixed_mask] + potential_v[::-1, :][fixed_mask] == 0.0
+       - central inversion: fixed_mask == fixed_mask[::-1, ::-1] and
+                            conductor_mask == conductor_mask[::-1, ::-1] and
+                            potential_v[fixed_mask] + potential_v[::-1, ::-1][fixed_mask] == 0.0
     """
     le = config.left_electrode
     re = config.right_electrode
 
-    r_equal = bool(np.isclose(le.radius_m, re.radius_m, rtol=1e-5, atol=1e-8))
-    x_antisym = bool(np.isclose(re.center_x_m, -le.center_x_m, rtol=1e-5, atol=1e-8) and not np.isclose(le.center_x_m, 0.0))
-    v_antisym = bool(np.isclose(re.voltage_v, -le.voltage_v, rtol=1e-5, atol=1e-8) and not np.isclose(le.voltage_v, 0.0))
+    r_equal = (le.radius_m == re.radius_m) and (le.radius_m > 0.0)
+    x_antisym = (re.center_x_m == -le.center_x_m) and (le.center_x_m != 0.0)
+    v_antisym = (re.voltage_v == -le.voltage_v) and (le.voltage_v != 0.0)
 
-    y_equal = bool(np.isclose(le.center_y_m, re.center_y_m, rtol=1e-5, atol=1e-8))
-    y_antisym = bool(np.isclose(re.center_y_m, -le.center_y_m, rtol=1e-5, atol=1e-8))
+    y_equal = (le.center_y_m == re.center_y_m)
+    y_antisym = (re.center_y_m == -le.center_y_m)
 
     x_reflection = bool(r_equal and x_antisym and v_antisym and y_equal)
     central_inversion = bool(r_equal and x_antisym and v_antisym and y_antisym)
+
+    if solution is not None:
+        if x_reflection:
+            mask_ok = (
+                np.array_equal(solution.fixed_mask, solution.fixed_mask[::-1, :])
+                and np.array_equal(solution.conductor_mask, solution.conductor_mask[::-1, :])
+            )
+            pot_ok = bool(mask_ok and np.all(
+                solution.potential_v[solution.fixed_mask] + solution.potential_v[::-1, :][solution.fixed_mask] == 0.0
+            ))
+            x_reflection = bool(x_reflection and pot_ok)
+        if central_inversion:
+            mask_ok = (
+                np.array_equal(solution.fixed_mask, solution.fixed_mask[::-1, ::-1])
+                and np.array_equal(solution.conductor_mask, solution.conductor_mask[::-1, ::-1])
+            )
+            pot_ok = bool(mask_ok and np.all(
+                solution.potential_v[solution.fixed_mask] + solution.potential_v[::-1, ::-1][solution.fixed_mask] == 0.0
+            ))
+            central_inversion = bool(central_inversion and pot_ok)
 
     return {
         'has_x_reflection_antisymmetry': x_reflection,
         'has_central_inversion_antisymmetry': central_inversion,
     }
+
+
+def check_discrete_symmetries(
+    solution: FieldSolution,
+    config: GroundedBoxConfig | None = None,
+) -> dict[str, bool]:
+    """Check whether discrete solution and grid masks satisfy exact discrete Laplace symmetry."""
+    cfg = config or solution.config or GroundedBoxConfig()
+    return check_configuration_symmetries(cfg, solution=solution)
 
 
 @dataclass(frozen=True)
@@ -531,6 +609,8 @@ class MeshRefinementResult:
     probe_in_vacuum: bool = True
     probe_status: str = 'VALID_VACUUM'
     symmetry_status: str = 'N/A'
+    requested_probe_x_m: float = 0.0
+    requested_probe_y_m: float = 0.0
 
 
 def electrode_pair_mesh_study(
@@ -543,11 +623,11 @@ def electrode_pair_mesh_study(
     """Perform mesh-refinement study for cylindrical electrode pair in grounded enclosure.
 
     Demonstrates that:
-    1. Probe field at fixed physical point in vacuum converges smoothly.
+    1. Probe field at fixed physical point in vacuum converges smoothly when evaluated on-grid.
     2. Peak vacuum field on the staircase boundary varies significantly with n (grid sensitivity).
     3. Fictitious gradient inside conductors on raw grid is nonzero while physical vacuum E is masked.
-    4. Evaluates potential antisymmetry (x-reflection or central inversion) only when mathematical
-       symmetry preconditions are met; otherwise records N/A to prevent nonphysical error reporting.
+    4. Evaluates potential antisymmetry (x-reflection or central inversion) only when exact mathematical
+       and discrete symmetry preconditions are met; otherwise records N/A to prevent nonphysical error reporting.
     """
     results: list[MeshRefinementResult] = []
     base_config = config or GroundedBoxConfig(box_width_m=box_width_m)
@@ -590,7 +670,7 @@ def electrode_pair_mesh_study(
         raw_mag = np.hypot(sol.raw_gradient_x_v_per_m, sol.raw_gradient_y_v_per_m)
         max_cond_raw = float(np.max(raw_mag[sol.conductor_mask])) if np.any(sol.conductor_mask) else 0.0
 
-        sym_info = check_configuration_symmetries(run_config)
+        sym_info = check_configuration_symmetries(run_config, solution=sol)
         if sym_info['has_x_reflection_antisymmetry']:
             antisym_err: float | None = float(np.max(np.abs(sol.potential_v + sol.potential_v[::-1, :])))
         else:
@@ -626,8 +706,190 @@ def electrode_pair_mesh_study(
             probe_in_vacuum=probe_in_vac,
             probe_status=probe_status,
             symmetry_status=sym_status,
+            requested_probe_x_m=float(probe_xy_m[0]),
+            requested_probe_y_m=float(probe_xy_m[1]),
         ))
     return results
+
+
+@dataclass(frozen=True)
+class ProbeConvergenceAssessment:
+    vacuum_status: str              # 'ALL_IN_VACUUM', 'NON_VACUUM', or 'UNKNOWN'
+    convergence_status: str         # 'CONVERGED', 'INCONCLUSIVE', or 'NOT_ASSESSED'
+    assessment_summary: str
+    requested_probe_xy_m: tuple[float, float]
+    sampled_probe_coords: list[tuple[float, float]]
+    coords_stable: bool
+    relative_field_drift: float | None = None
+    is_converged: bool = False
+
+
+def assess_probe_convergence(
+    study_results: Sequence[MeshRefinementResult],
+    requested_probe_xy_m: tuple[float, float] = (0.0, 0.0),
+    max_relative_drift_tol: float = 0.05,
+) -> ProbeConvergenceAssessment:
+    """R5-F2: Rigorously assess probe convergence distinguishing vacuum validity from quantitative convergence.
+
+    Conditions for positive 'CONVERGED' assessment:
+    1. Vacuum validity: all probe samples must be in vacuum (no conductor/boundary samples).
+    2. Sufficient mesh resolutions: at least 3 distinct resolutions (1-row or 2-row studies cannot verify convergence).
+    3. Coordinate stability: sampled probe coordinates across all resolutions must be fixed and match requested target.
+    4. Quantitative convergence: relative variation (max - min) / min of field magnitude across resolutions must be within tolerance.
+
+    If any condition is not met, fails closed to 'NOT_ASSESSED' or 'INCONCLUSIVE'.
+    """
+    if not study_results:
+        return ProbeConvergenceAssessment(
+            vacuum_status='UNKNOWN',
+            convergence_status='NOT_ASSESSED',
+            assessment_summary='NOT_ASSESSED: No mesh refinement results provided.',
+            requested_probe_xy_m=requested_probe_xy_m,
+            sampled_probe_coords=[],
+            coords_stable=False,
+            relative_field_drift=None,
+            is_converged=False,
+        )
+
+    sampled_coords = [(r.probe_x_m, r.probe_y_m) for r in study_results]
+    all_vac = all(r.probe_in_vacuum for r in study_results)
+
+    if not all_vac:
+        return ProbeConvergenceAssessment(
+            vacuum_status='NON_VACUUM',
+            convergence_status='NOT_ASSESSED',
+            assessment_summary=(
+                'NON_VACUUM: Probe point is located inside conductor or boundary on one or more mesh resolutions. '
+                'Physical vacuum electric field is masked (E=0 in ideal conductor; vacuum E undefined). '
+                'Quantitative convergence NOT_ASSESSED.'
+            ),
+            requested_probe_xy_m=requested_probe_xy_m,
+            sampled_probe_coords=sampled_coords,
+            coords_stable=False,
+            relative_field_drift=None,
+            is_converged=False,
+        )
+
+    # All in vacuum: check number of resolutions
+    if len(study_results) < 3:
+        return ProbeConvergenceAssessment(
+            vacuum_status='ALL_IN_VACUUM',
+            convergence_status='NOT_ASSESSED',
+            assessment_summary=(
+                f'NOT_ASSESSED: Insufficient mesh resolutions ({len(study_results)} row(s) provided). '
+                'At least 3 distinct mesh resolutions are required to evaluate quantitative convergence.'
+            ),
+            requested_probe_xy_m=requested_probe_xy_m,
+            sampled_probe_coords=sampled_coords,
+            coords_stable=False,
+            relative_field_drift=None,
+            is_converged=False,
+        )
+
+    # Check coordinate stability / alignment with requested target
+    req_x, req_y = requested_probe_xy_m
+    coord_drift = [
+        float(np.hypot(x - req_x, y - req_y))
+        for x, y in sampled_coords
+    ]
+    coords_stable = (
+        all(d < 1e-12 for d in coord_drift)
+        and all(c == sampled_coords[0] for c in sampled_coords)
+    )
+
+    if not coords_stable:
+        return ProbeConvergenceAssessment(
+            vacuum_status='ALL_IN_VACUUM',
+            convergence_status='INCONCLUSIVE',
+            assessment_summary=(
+                f'INCONCLUSIVE: Sampled probe coordinates drift or deviate from requested point '
+                f'({req_x:.4e}, {req_y:.4e}) due to nearest-grid sampling across mesh resolutions. '
+                f'Sampled coordinates: {sampled_coords}. Fixed-point convergence cannot be verified.'
+            ),
+            requested_probe_xy_m=requested_probe_xy_m,
+            sampled_probe_coords=sampled_coords,
+            coords_stable=False,
+            relative_field_drift=None,
+            is_converged=False,
+        )
+
+    # Evaluate quantitative field values
+    e_mags = []
+    for r in study_results:
+        if r.probe_ex_v_per_m is None or r.probe_ey_v_per_m is None:
+            return ProbeConvergenceAssessment(
+                vacuum_status='ALL_IN_VACUUM',
+                convergence_status='NOT_ASSESSED',
+                assessment_summary='NOT_ASSESSED: Missing electric field values in study results.',
+                requested_probe_xy_m=requested_probe_xy_m,
+                sampled_probe_coords=sampled_coords,
+                coords_stable=True,
+                relative_field_drift=None,
+                is_converged=False,
+            )
+        e_mags.append(float(np.hypot(r.probe_ex_v_per_m, r.probe_ey_v_per_m)))
+
+    min_e = min(e_mags)
+    max_e = max(e_mags)
+    denom = min_e if min_e > 1e-12 else (max_e if max_e > 1e-12 else 1.0)
+    relative_drift = float((max_e - min_e) / denom)
+
+    # Check for wild drift
+    if relative_drift > max_relative_drift_tol:
+        return ProbeConvergenceAssessment(
+            vacuum_status='ALL_IN_VACUUM',
+            convergence_status='INCONCLUSIVE',
+            assessment_summary=(
+                f'INCONCLUSIVE: Probe field at fixed point ({req_x:.4e}, {req_y:.4e}) exhibits significant '
+                f'numerical drift across mesh resolutions (relative drift = {relative_drift:.2%}); '
+                f'smooth convergence not verified.'
+            ),
+            requested_probe_xy_m=requested_probe_xy_m,
+            sampled_probe_coords=sampled_coords,
+            coords_stable=True,
+            relative_field_drift=relative_drift,
+            is_converged=False,
+        )
+
+    return ProbeConvergenceAssessment(
+        vacuum_status='ALL_IN_VACUUM',
+        convergence_status='CONVERGED',
+        assessment_summary=(
+            f'CONVERGED: Probe field at fixed point ({req_x:.4e}, {req_y:.4e}) is in vacuum across all '
+            f'{len(study_results)} mesh resolutions and converges smoothly (relative drift = {relative_drift:.2%}).'
+        ),
+        requested_probe_xy_m=requested_probe_xy_m,
+        sampled_probe_coords=sampled_coords,
+        coords_stable=True,
+        relative_field_drift=relative_drift,
+        is_converged=True,
+    )
+
+
+def format_voltage_title(v_left_v: float, v_right_v: float) -> str:
+    """Format voltage label for Panel A title using exact symmetry criteria.
+
+    - Exactly symmetric: v_left == -v_right and v_left != 0.0 -> '±{V} V'
+    - Asymmetric or near-symmetric: 'V_left={V_left} V, V_right={V_right} V'
+    """
+    if v_left_v == -v_right_v and v_left_v != 0.0:
+        if float(v_left_v).is_integer():
+            return f'±{abs(v_left_v):.0f} V'
+        return f'±{abs(v_left_v):g} V'
+
+    def _fmt(val: float) -> str:
+        if float(val).is_integer():
+            return f'{val:+.0f} V'
+        return f'{val:+} V' if not f'{val:+}'.endswith('.0') else f'{val:+.0f} V'
+
+    return f'V_left={_fmt(v_left_v)}, V_right={_fmt(v_right_v)}'
+
+
+def format_panel_a_title(cfg: GroundedBoxConfig) -> str:
+    """Return the complete Panel A figure title string."""
+    v_label = format_voltage_title(cfg.left_electrode.voltage_v, cfg.right_electrode.voltage_v)
+    return f'A · Case 1: Grounded Box ({v_label})\nDirichlet Potential (V)'
+
 
 
 @dataclass(frozen=True)

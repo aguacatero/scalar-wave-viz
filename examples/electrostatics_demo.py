@@ -23,10 +23,13 @@ from electrostatics_baseline import (
     FieldSolution,
     GroundedBoxConfig,
     PlateBenchmark,
+    assess_probe_convergence,
     coaxial_cylinder_benchmark,
     electrode_pair_in_grounded_box,
     electrode_pair_mesh_study,
     evaluate_conductor_surface_interface,
+    format_panel_a_title,
+    format_voltage_title,
     parallel_plate_benchmark,
     verify_plate_force_virtual_work,
 )
@@ -141,6 +144,8 @@ def generate_manifest(
         {
             'n': r.n,
             'grid_spacing_m': r.grid_spacing_m,
+            'requested_probe_xy_m': [r.requested_probe_x_m, r.requested_probe_y_m],
+            'sampled_probe_coords': [r.probe_x_m, r.probe_y_m],
             'probe_xy_m': [r.probe_x_m, r.probe_y_m],
             'probe_in_vacuum': r.probe_in_vacuum,
             'probe_status': r.probe_status,
@@ -172,16 +177,8 @@ def generate_manifest(
         for c in coax_benchmarks
     ]
 
-    probe_all_vac = all(r.probe_in_vacuum for r in study_results) if study_results else True
-    if probe_all_vac:
-        probe_eval = (
-            'Probe field at fixed physical point is in vacuum across all tested mesh resolutions and converges smoothly.'
-        )
-    else:
-        probe_eval = (
-            'Probe point is located inside conductor or boundary on one or more mesh resolutions. '
-            'Physical vacuum electric field is masked (E=0 in ideal conductor; vacuum E undefined).'
-        )
+    assessment = assess_probe_convergence(study_results or [], requested_probe_xy_m=(0.0, 0.0))
+    probe_eval = assessment.assessment_summary
 
     manifest = {
         'schema_version': '1.2.0',
@@ -216,8 +213,9 @@ def generate_manifest(
                 'validation_status': 'ILLUSTRATIVE / NON-CONVERGED',
                 'epistemic_warning': (
                     'Peak vacuum |E| on staircase conductor boundaries varies with grid resolution '
-                    'and is NOT converged. Probe field away from boundaries converges smoothly. '
-                    'Conductor interior field is masked (E=0). Not an isolated thruster. Not patent geometry.'
+                    'and is NOT converged. Probe field convergence away from boundaries must be '
+                    'quantitatively verified. Conductor interior field is masked (E=0). '
+                    'Not an isolated thruster. Not patent geometry.'
                 ),
                 'geometry': {
                     'enclosure_width_m': float(active_config.box_width_m),
@@ -258,6 +256,15 @@ def generate_manifest(
                 },
                 'mesh_study_probe_midpoint': study_table,
                 'probe_convergence_assessment': probe_eval,
+                'probe_convergence_details': {
+                    'vacuum_status': assessment.vacuum_status,
+                    'convergence_status': assessment.convergence_status,
+                    'is_converged': assessment.is_converged,
+                    'requested_probe_xy_m': list(assessment.requested_probe_xy_m),
+                    'sampled_probe_coords': [list(c) for c in assessment.sampled_probe_coords],
+                    'coords_stable': assessment.coords_stable,
+                    'relative_field_drift': assessment.relative_field_drift,
+                },
                 'coaxial_analytic_benchmark': coax_table,
             },
             'case_2_parallel_plate_1d': {
@@ -314,15 +321,8 @@ def render(
     fig.colorbar(image0, ax=axes[0], label='Potential (V)')
     axes[0].contour(x, y, result.fixed_mask.astype(float), levels=[0.5], colors=['black'], linewidths=0.9)
 
-    v_l = cfg.left_electrode.voltage_v
-    v_r = cfg.right_electrode.voltage_v
-    if np.isclose(v_l, -v_r) and not np.isclose(v_l, 0.0):
-        voltage_title = f'±{abs(v_l):.0f} V'
-    else:
-        voltage_title = f'V_left={v_l:+.0f} V, V_right={v_r:+.0f} V'
-
     axes[0].set(
-        title=f'A · Case 1: Grounded Box ({voltage_title})\nDirichlet Potential (V)',
+        title=format_panel_a_title(cfg),
         xlabel='x (mm)',
         ylabel='y (mm)',
         aspect='equal',
