@@ -1,15 +1,16 @@
 # Scalar Wave Viz P0 — independent scientific review handoff
 
-**Status: READY FOR CHATGPT INDEPENDENT R6 REVIEW. NOT APPROVED FOR MERGE.**
+**Status: READY FOR CHATGPT INDEPENDENT R7 REVIEW. NOT APPROVED FOR MERGE.**
 
-Updated 2026-10-18 after resolving the independent R5 review findings (R5-F1 through R5-F4). Persistent entry point for ChatGPT/Hermes/Antigravity independent review.
+Updated 2026-10-18 after resolving the independent R6 review findings (R6-F1 through R6-F3). Persistent entry point for ChatGPT/Hermes/Antigravity independent review.
 
 ## Locate the work
 
 - Repository: https://github.com/aguacatero/scalar-wave-viz
 - PR: https://github.com/aguacatero/scalar-wave-viz/pull/5 (**draft**, base `main`)
 - Branch: `scientific-baseline-exodus-2026-10-13`
-- R5 Fix Queue Report: `docs/handoffs/2026-10-18-P0-CHATGPT-R5-FIX-QUEUE.md`
+- R6 Fix Queue Report: `docs/handoffs/2026-10-18-P0-CHATGPT-R6-FIX-QUEUE.md`
+- Historical R5 Report: `docs/handoffs/2026-10-18-P0-CHATGPT-R5-FIX-QUEUE.md`
 - Historical R4 Report: `docs/handoffs/2026-10-18-P0-CHATGPT-R4-FIX-QUEUE.md`
 - Historical R3 Report: `docs/handoffs/2026-10-14-P0-CHATGPT-R3-FIX-QUEUE.md`
 - Historical R1/R2 Report: `docs/handoffs/2026-10-13-P0-CHATGPT-R1-FIX-QUEUE.md`
@@ -21,19 +22,16 @@ Updated 2026-10-18 after resolving the independent R5 review findings (R5-F1 thr
 ## Intended changes
 
 1. `electrostatics_baseline.py`:
-   - (R5-F1) Replaced `np.isclose` with exact criteria (`==`) in `check_configuration_symmetries`; added exact transformed fixed mask, conductor mask, and fixed potential parity verification on discrete solutions.
-   - (R5-F2) Added `requested_probe_x_m` and `requested_probe_y_m` to `MeshRefinementResult`; added `assess_probe_convergence` rigorously splitting vacuum validity from quantitative convergence, checking row count and sampled coordinate stability.
-   - (R5-F3) Added continuous geometry validation before rasterization in both `GroundedBoxConfig.__post_init__` and `electrode_pair_in_grounded_box` (checking continuous disk disjointness and enclosure boundary containment).
-   - (R5-F4) Extracted `format_voltage_title` and `format_panel_a_title` using exact symmetry criteria.
+   - (R6-F1) Decoupled central inversion from $x$-reflection antisymmetry in `check_configuration_symmetries`, allowing vertical dipole with $x_L = x_R = 0$ while requiring $y_R = -y_L \ne 0$.
+   - (R6-F2) In `assess_probe_convergence`, required $\ge 3$ unique, distinct mesh resolutions and grid spacings; validated finite data; evaluated relative vector difference and component stability; used scientifically honest status `STABLE_WITHIN_TESTED_GRID_TOLERANCE`.
 2. `examples/electrostatics_demo.py`:
-   - (R5-F2) Integrated `assess_probe_convergence`, serializing `requested_probe_xy_m`, `sampled_probe_coords`, and structured `probe_convergence_details` to JSON manifest; removed unconditional positive convergence statement from `epistemic_warning`.
-   - (R5-F4) Use `format_panel_a_title(cfg)` to render Panel A title.
+   - (R6-F3) Dynamically derived and validated common requested probe target from study rows in `generate_manifest`; recorded `mesh_study_probe` and `is_midpoint`; allowed custom probe targets in `render()`.
 3. `tests/test_electrostatics_baseline.py`:
-   - 30 unit tests (4 new targeted regressions for R5-F1, R5-F2, R5-F3, and R5-F4).
+   - 33 unit tests (3 new targeted regressions for R6-F1, R6-F2, and R6-F3).
 
 ## Evidence obtained
 
-- Local command `python3 -m unittest discover -s tests -v`: **30 tests passed** (including all F1–F6, R2-F1–R2-F5, R3-F1–R3-F3, R4-F1–R4-F3, and R5-F1–R5-F4 regression tests).
+- Local command `python3 -m unittest discover -s tests -v`: **33 tests passed** (including all F1–F6, R2-F1–R2-F5, R3-F1–R3-F3, R4-F1–R4-F3, R5-F1–R5-F4, and R6-F1–R6-F3 regression tests).
 - Local command `MPLBACKEND=Agg python3 examples/electrostatics_demo.py`: writes `electrostatics_baseline.png` (2480 × 832) and paired `electrostatics_manifest.json` (schema 1.2.0); strict RFC 8259 JSON and provenance verified.
 - Workflow uploads downloadable artifact bundle named `conventional-electrostatics-preview` containing both PNG and JSON manifest (30-day retention). Link: https://github.com/aguacatero/scalar-wave-viz/actions/workflows/physics-tests.yml
 

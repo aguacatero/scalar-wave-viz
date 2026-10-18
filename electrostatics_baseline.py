@@ -532,8 +532,9 @@ def check_configuration_symmetries(
     2. Central-inversion antisymmetry: V(-x, -y) = -V(x, y)
        Preconditions:
          - r_left == r_right > 0
-         - x_right == -x_left != 0
+         - x_right == -x_left
          - y_right == -y_left
+         - (x_left != 0 or y_left != 0)  # Non-coincident electrodes
          - V_right == -V_left != 0
 
     If solution is provided, also checks discrete transformed fixed masks and potentials exactly:
@@ -548,14 +549,24 @@ def check_configuration_symmetries(
     re = config.right_electrode
 
     r_equal = (le.radius_m == re.radius_m) and (le.radius_m > 0.0)
-    x_antisym = (re.center_x_m == -le.center_x_m) and (le.center_x_m != 0.0)
     v_antisym = (re.voltage_v == -le.voltage_v) and (le.voltage_v != 0.0)
 
-    y_equal = (le.center_y_m == re.center_y_m)
-    y_antisym = (re.center_y_m == -le.center_y_m)
+    # x-reflection antisymmetry: x flips sign, y invariant; requires x_left != 0 so electrodes do not sit on mirror line
+    x_reflection = bool(
+        r_equal
+        and v_antisym
+        and (re.center_x_m == -le.center_x_m)
+        and (le.center_x_m != 0.0)
+        and (le.center_y_m == re.center_y_m)
+    )
 
-    x_reflection = bool(r_equal and x_antisym and v_antisym and y_equal)
-    central_inversion = bool(r_equal and x_antisym and v_antisym and y_antisym)
+    # Central-inversion antisymmetry: both x and y invert; allows x_left == 0 provided electrodes are separated along y
+    c_inv_geom = (
+        (re.center_x_m == -le.center_x_m)
+        and (re.center_y_m == -le.center_y_m)
+        and (le.center_x_m != 0.0 or le.center_y_m != 0.0)
+    )
+    central_inversion = bool(r_equal and v_antisym and c_inv_geom)
 
     if solution is not None:
         if x_reflection:
@@ -715,13 +726,14 @@ def electrode_pair_mesh_study(
 @dataclass(frozen=True)
 class ProbeConvergenceAssessment:
     vacuum_status: str              # 'ALL_IN_VACUUM', 'NON_VACUUM', or 'UNKNOWN'
-    convergence_status: str         # 'CONVERGED', 'INCONCLUSIVE', or 'NOT_ASSESSED'
+    convergence_status: str         # 'STABLE_WITHIN_TESTED_GRID_TOLERANCE', 'INCONCLUSIVE', or 'NOT_ASSESSED'
     assessment_summary: str
     requested_probe_xy_m: tuple[float, float]
     sampled_probe_coords: list[tuple[float, float]]
     coords_stable: bool
     relative_field_drift: float | None = None
     is_converged: bool = False
+    is_stable: bool = False
 
 
 def assess_probe_convergence(
@@ -729,16 +741,26 @@ def assess_probe_convergence(
     requested_probe_xy_m: tuple[float, float] = (0.0, 0.0),
     max_relative_drift_tol: float = 0.05,
 ) -> ProbeConvergenceAssessment:
-    """R5-F2: Rigorously assess probe convergence distinguishing vacuum validity from quantitative convergence.
+    """Assess probe field stability across mesh resolutions without overclaiming asymptotic convergence.
 
-    Conditions for positive 'CONVERGED' assessment:
-    1. Vacuum validity: all probe samples must be in vacuum (no conductor/boundary samples).
-    2. Sufficient mesh resolutions: at least 3 distinct resolutions (1-row or 2-row studies cannot verify convergence).
-    3. Coordinate stability: sampled probe coordinates across all resolutions must be fixed and match requested target.
-    4. Quantitative convergence: relative variation (max - min) / min of field magnitude across resolutions must be within tolerance.
+    Conditions for positive 'STABLE_WITHIN_TESTED_GRID_TOLERANCE' assessment:
+    1. Valid tolerance: max_relative_drift_tol must be finite and > 0.
+    2. Input presence: study_results must be non-empty.
+    3. Vacuum validity: all probe samples must be in vacuum (no conductor/boundary samples).
+    4. Unique mesh resolutions: at least 3 distinct mesh resolutions (n) and grid spacings (h).
+       Replicated resolutions or 1-2 row studies cannot evaluate convergence/stability.
+    5. Coordinate stability: sampled probe coordinates across all resolutions must be fixed and match requested target.
+    6. Finite data: all probe field components (Ex, Ey) must be finite (not NaN or Inf).
+    7. Vector and component stability: pairwise relative vector variation ||E_i - E_j|| / E_scale,
+       relative component spans (Delta Ex / E_scale, Delta Ey / E_scale), and relative magnitude variation
+       must all remain within max_relative_drift_tol. Reversing vector directions (e.g. (+100, 0) vs (-100, 0))
+       exhibit 200% vector drift and fail closed to 'INCONCLUSIVE'.
 
-    If any condition is not met, fails closed to 'NOT_ASSESSED' or 'INCONCLUSIVE'.
+    If any precondition is not met, fails closed to 'NOT_ASSESSED' or 'INCONCLUSIVE'.
     """
+    if not (np.isfinite(max_relative_drift_tol) and max_relative_drift_tol > 0):
+        raise ValueError('max_relative_drift_tol must be positive and finite')
+
     if not study_results:
         return ProbeConvergenceAssessment(
             vacuum_status='UNKNOWN',
@@ -749,6 +771,7 @@ def assess_probe_convergence(
             coords_stable=False,
             relative_field_drift=None,
             is_converged=False,
+            is_stable=False,
         )
 
     sampled_coords = [(r.probe_x_m, r.probe_y_m) for r in study_results]
@@ -768,22 +791,27 @@ def assess_probe_convergence(
             coords_stable=False,
             relative_field_drift=None,
             is_converged=False,
+            is_stable=False,
         )
 
-    # All in vacuum: check number of resolutions
-    if len(study_results) < 3:
+    # Check distinct mesh resolutions and grid spacings
+    distinct_n = {r.n for r in study_results}
+    distinct_h = {r.grid_spacing_m for r in study_results}
+    if len(distinct_n) < 3 or len(distinct_h) < 3:
         return ProbeConvergenceAssessment(
             vacuum_status='ALL_IN_VACUUM',
             convergence_status='NOT_ASSESSED',
             assessment_summary=(
-                f'NOT_ASSESSED: Insufficient mesh resolutions ({len(study_results)} row(s) provided). '
-                'At least 3 distinct mesh resolutions are required to evaluate quantitative convergence.'
+                f'NOT_ASSESSED: Insufficient distinct mesh resolutions ({len(distinct_n)} unique n, '
+                f'{len(distinct_h)} unique grid spacings provided). At least 3 distinct mesh resolutions '
+                'and grid spacings are required to evaluate quantitative convergence.'
             ),
             requested_probe_xy_m=requested_probe_xy_m,
             sampled_probe_coords=sampled_coords,
             coords_stable=False,
             relative_field_drift=None,
             is_converged=False,
+            is_stable=False,
         )
 
     # Check coordinate stability / alignment with requested target
@@ -811,10 +839,10 @@ def assess_probe_convergence(
             coords_stable=False,
             relative_field_drift=None,
             is_converged=False,
+            is_stable=False,
         )
 
-    # Evaluate quantitative field values
-    e_mags = []
+    # Validate finite field components
     for r in study_results:
         if r.probe_ex_v_per_m is None or r.probe_ey_v_per_m is None:
             return ProbeConvergenceAssessment(
@@ -823,25 +851,68 @@ def assess_probe_convergence(
                 assessment_summary='NOT_ASSESSED: Missing electric field values in study results.',
                 requested_probe_xy_m=requested_probe_xy_m,
                 sampled_probe_coords=sampled_coords,
-                coords_stable=True,
+                coords_stable=coords_stable,
                 relative_field_drift=None,
                 is_converged=False,
+                is_stable=False,
             )
-        e_mags.append(float(np.hypot(r.probe_ex_v_per_m, r.probe_ey_v_per_m)))
+        if not (np.isfinite(r.probe_ex_v_per_m) and np.isfinite(r.probe_ey_v_per_m)):
+            return ProbeConvergenceAssessment(
+                vacuum_status='ALL_IN_VACUUM',
+                convergence_status='NOT_ASSESSED',
+                assessment_summary='NOT_ASSESSED: Non-finite electric field components encountered.',
+                requested_probe_xy_m=requested_probe_xy_m,
+                sampled_probe_coords=sampled_coords,
+                coords_stable=coords_stable,
+                relative_field_drift=None,
+                is_converged=False,
+                is_stable=False,
+            )
 
-    min_e = min(e_mags)
-    max_e = max(e_mags)
-    denom = min_e if min_e > 1e-12 else (max_e if max_e > 1e-12 else 1.0)
-    relative_drift = float((max_e - min_e) / denom)
+    ex_vals = [float(r.probe_ex_v_per_m) for r in study_results]  # type: ignore[arg-type]
+    ey_vals = [float(r.probe_ey_v_per_m) for r in study_results]  # type: ignore[arg-type]
+    e_mags = [float(np.hypot(ex, ey)) for ex, ey in zip(ex_vals, ey_vals)]
 
-    # Check for wild drift
+    max_mag = max(e_mags)
+    min_mag = min(e_mags)
+    scale = max_mag if max_mag > 1e-12 else 1.0
+
+    # Pairwise vector difference relative to scale
+    max_vec_diff = 0.0
+    for i in range(len(ex_vals)):
+        for j in range(i + 1, len(ex_vals)):
+            diff = float(np.hypot(ex_vals[i] - ex_vals[j], ey_vals[i] - ey_vals[j]))
+            if diff > max_vec_diff:
+                max_vec_diff = diff
+
+    relative_vec_drift = max_vec_diff / scale
+    mag_drift = (max_mag - min_mag) / (min_mag if min_mag > 1e-12 else scale)
+    ex_span_rel = (max(ex_vals) - min(ex_vals)) / scale
+    ey_span_rel = (max(ey_vals) - min(ey_vals)) / scale
+
+    relative_drift = float(max(relative_vec_drift, mag_drift, ex_span_rel, ey_span_rel))
+
+    if not np.isfinite(relative_drift):
+        return ProbeConvergenceAssessment(
+            vacuum_status='ALL_IN_VACUUM',
+            convergence_status='NOT_ASSESSED',
+            assessment_summary='NOT_ASSESSED: Computed relative field drift is non-finite.',
+            requested_probe_xy_m=requested_probe_xy_m,
+            sampled_probe_coords=sampled_coords,
+            coords_stable=True,
+            relative_field_drift=None,
+            is_converged=False,
+            is_stable=False,
+        )
+
+    # Check for excessive drift or vector direction instability
     if relative_drift > max_relative_drift_tol:
         return ProbeConvergenceAssessment(
             vacuum_status='ALL_IN_VACUUM',
             convergence_status='INCONCLUSIVE',
             assessment_summary=(
                 f'INCONCLUSIVE: Probe field at fixed point ({req_x:.4e}, {req_y:.4e}) exhibits significant '
-                f'numerical drift across mesh resolutions (relative drift = {relative_drift:.2%}); '
+                f'numerical drift or vector component instability across mesh resolutions (relative drift = {relative_drift:.2%}); '
                 f'smooth convergence not verified.'
             ),
             requested_probe_xy_m=requested_probe_xy_m,
@@ -849,20 +920,22 @@ def assess_probe_convergence(
             coords_stable=True,
             relative_field_drift=relative_drift,
             is_converged=False,
+            is_stable=False,
         )
 
     return ProbeConvergenceAssessment(
         vacuum_status='ALL_IN_VACUUM',
-        convergence_status='CONVERGED',
+        convergence_status='STABLE_WITHIN_TESTED_GRID_TOLERANCE',
         assessment_summary=(
-            f'CONVERGED: Probe field at fixed point ({req_x:.4e}, {req_y:.4e}) is in vacuum across all '
-            f'{len(study_results)} mesh resolutions and converges smoothly (relative drift = {relative_drift:.2%}).'
+            f'STABLE_WITHIN_TESTED_GRID_TOLERANCE: Probe field at fixed point ({req_x:.4e}, {req_y:.4e}) is in vacuum across all '
+            f'{len(distinct_n)} distinct mesh resolutions and stable within tested grid tolerance (relative drift = {relative_drift:.2%}).'
         ),
         requested_probe_xy_m=requested_probe_xy_m,
         sampled_probe_coords=sampled_coords,
         coords_stable=True,
         relative_field_drift=relative_drift,
         is_converged=True,
+        is_stable=True,
     )
 
 

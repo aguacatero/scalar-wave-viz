@@ -177,7 +177,21 @@ def generate_manifest(
         for c in coax_benchmarks
     ]
 
-    assessment = assess_probe_convergence(study_results or [], requested_probe_xy_m=(0.0, 0.0))
+    # Derive and validate common requested probe target from study results (R6-F3)
+    if study_results:
+        distinct_targets = {
+            (float(r.requested_probe_x_m), float(r.requested_probe_y_m))
+            for r in study_results
+        }
+        if len(distinct_targets) == 1:
+            target_probe_xy = next(iter(distinct_targets))
+        else:
+            # Conflicting requested targets across rows
+            target_probe_xy = (float(study_results[0].requested_probe_x_m), float(study_results[0].requested_probe_y_m))
+    else:
+        target_probe_xy = (0.0, 0.0)
+
+    assessment = assess_probe_convergence(study_results or [], requested_probe_xy_m=target_probe_xy)
     probe_eval = assessment.assessment_summary
 
     manifest = {
@@ -254,13 +268,16 @@ def generate_manifest(
                         'voltage_v': float(active_study_config.right_electrode.voltage_v),
                     },
                 },
+                'mesh_study_probe': study_table,
                 'mesh_study_probe_midpoint': study_table,
                 'probe_convergence_assessment': probe_eval,
                 'probe_convergence_details': {
                     'vacuum_status': assessment.vacuum_status,
                     'convergence_status': assessment.convergence_status,
                     'is_converged': assessment.is_converged,
+                    'is_stable': assessment.is_stable,
                     'requested_probe_xy_m': list(assessment.requested_probe_xy_m),
+                    'is_midpoint': bool(target_probe_xy == (0.0, 0.0)),
                     'sampled_probe_coords': [list(c) for c in assessment.sampled_probe_coords],
                     'coords_stable': assessment.coords_stable,
                     'relative_field_drift': assessment.relative_field_drift,
@@ -302,11 +319,13 @@ def render(
     output_png: str = 'electrostatics_baseline.png',
     output_json: str = 'electrostatics_manifest.json',
     config_2d: GroundedBoxConfig | None = None,
+    study_probe_xy_m: tuple[float, float] = (0.0, 0.0),
+    study_n_list: tuple[int, ...] = (41, 81, 101, 161),
 ) -> tuple[Path, Path]:
     cfg = config_2d or GroundedBoxConfig(n=101)
     result = electrode_pair_in_grounded_box(config=cfg)
     plate = parallel_plate_benchmark(1000.0, 0.001, 1e-4)
-    study = electrode_pair_mesh_study(n_list=(41, 81, 101, 161), config=cfg)
+    study = electrode_pair_mesh_study(n_list=study_n_list, config=cfg, probe_xy_m=study_probe_xy_m)
     coax_bench = coaxial_cylinder_benchmark(n_list=(41, 81, 161), box_width_m=cfg.box_width_m)
 
     n = result.potential_v.shape[0]

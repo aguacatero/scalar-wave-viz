@@ -779,7 +779,7 @@ class ManifestAndContractTests(unittest.TestCase):
         self.assertEqual(eval_1row.vacuum_status, 'ALL_IN_VACUUM')
         self.assertEqual(eval_1row.convergence_status, 'NOT_ASSESSED')
         self.assertFalse(eval_1row.is_converged)
-        self.assertIn('Insufficient mesh resolutions (1 row(s) provided)', eval_1row.assessment_summary)
+        self.assertIn('Insufficient distinct mesh resolutions', eval_1row.assessment_summary)
 
         # 2. Wildly drifting but all-vacuum rows: must fail closed to INCONCLUSIVE
         drifting_rows = [
@@ -857,12 +857,13 @@ class ManifestAndContractTests(unittest.TestCase):
         baseline_study = electrode_pair_mesh_study(n_list=(41, 81, 101, 161), probe_xy_m=(0.0, 0.0))
         eval_base = assess_probe_convergence(baseline_study, requested_probe_xy_m=(0.0, 0.0))
         self.assertEqual(eval_base.vacuum_status, 'ALL_IN_VACUUM')
-        self.assertEqual(eval_base.convergence_status, 'CONVERGED')
+        self.assertEqual(eval_base.convergence_status, 'STABLE_WITHIN_TESTED_GRID_TOLERANCE')
         self.assertTrue(eval_base.coords_stable)
         self.assertTrue(eval_base.is_converged)
+        self.assertTrue(eval_base.is_stable)
         self.assertIsNotNone(eval_base.relative_field_drift)
         self.assertLess(eval_base.relative_field_drift, 0.03)
-        self.assertIn('converges smoothly', eval_base.assessment_summary)
+        self.assertIn('stable within tested grid tolerance', eval_base.assessment_summary)
 
     def test_r5_f3_continuous_conductor_disjointness_and_enclosure_containment(self):
         """R5-F3 regression: continuous geometry validation rejects overlap/wall penetration before rasterization."""
@@ -959,6 +960,178 @@ class ManifestAndContractTests(unittest.TestCase):
 
         # 4. Zero voltages
         self.assertEqual(format_voltage_title(0.0, 0.0), 'V_left=+0 V, V_right=+0 V')
+
+    def test_r6_f1_vertical_dipole_central_inversion_symmetry(self):
+        """R6-F1 regression: vertical dipole with x_left=x_right=0 has exact central inversion antisymmetry."""
+        # Vertical dipole configuration from R6 review:
+        # centers (0, -0.008) and (0, +0.008) m, radii 0.003 m, voltages ±500 V, box width 0.04 m
+        cfg_vert = GroundedBoxConfig(
+            n=81,
+            box_width_m=0.04,
+            left_electrode=ElectrodeConfig(center_x_m=0.0, center_y_m=-0.008, radius_m=0.003, voltage_v=500.0),
+            right_electrode=ElectrodeConfig(center_x_m=0.0, center_y_m=0.008, radius_m=0.003, voltage_v=-500.0),
+        )
+        sol = electrode_pair_in_grounded_box(config=cfg_vert)
+        sym = check_configuration_symmetries(cfg_vert, solution=sol)
+
+        # Central inversion holds; x-reflection does not hold
+        self.assertTrue(sym['has_central_inversion_antisymmetry'])
+        self.assertFalse(sym['has_x_reflection_antisymmetry'])
+
+        # Mesh study evaluates central inversion error and reports CENTRAL_INVERSION_ANTISYMMETRIC
+        study = electrode_pair_mesh_study(n_list=(41, 81), config=cfg_vert)
+        self.assertEqual(len(study), 2)
+        for r in study:
+            self.assertEqual(r.symmetry_status, 'CENTRAL_INVERSION_ANTISYMMETRIC')
+            self.assertIsNone(r.potential_antisymmetry_error_v)
+            self.assertIsNotNone(r.potential_central_inversion_error_v)
+            self.assertLess(r.potential_central_inversion_error_v, 1e-10)
+
+        # Counterexample: coincident electrodes at origin are rejected by continuous validation
+        with self.assertRaises(ValueError):
+            GroundedBoxConfig(
+                n=41,
+                left_electrode=ElectrodeConfig(center_x_m=0.0, center_y_m=0.0, radius_m=0.003, voltage_v=500.0),
+                right_electrode=ElectrodeConfig(center_x_m=0.0, center_y_m=0.0, radius_m=0.003, voltage_v=-500.0),
+            )
+
+    def test_r6_f2_probe_convergence_guardrails_and_counterexamples(self):
+        """R6-F2 regression: assess_probe_convergence rejects repeated mesh sizes, vector reversals, and non-finite data."""
+        # Counterexample 1: Repeated mesh sizes / spacings (len == 3 but 1 unique resolution)
+        dup_rows = [
+            MeshRefinementResult(
+                n=41, grid_spacing_m=0.001, probe_x_m=0.0, probe_y_m=0.0,
+                probe_potential_v=0.0, probe_ex_v_per_m=25000.0, probe_ey_v_per_m=0.0,
+                max_vacuum_e_v_per_m=30000.0, max_conductor_raw_gradient_v_per_m=50.0,
+                max_discrete_residual_v=1e-12, potential_antisymmetry_error_v=1e-12,
+                probe_in_vacuum=True, probe_status='VALID_VACUUM',
+                requested_probe_x_m=0.0, requested_probe_y_m=0.0,
+            )
+            for _ in range(3)
+        ]
+        eval_dup = assess_probe_convergence(dup_rows, requested_probe_xy_m=(0.0, 0.0))
+        self.assertEqual(eval_dup.convergence_status, 'NOT_ASSESSED')
+        self.assertFalse(eval_dup.is_converged)
+        self.assertFalse(eval_dup.is_stable)
+        self.assertIn('Insufficient distinct mesh resolutions', eval_dup.assessment_summary)
+
+        # Counterexample 2: Direction-reversing vectors with identical scalar magnitudes across 3 distinct grids
+        # (Ex, Ey) = (100, 0), (-100, 0), (100, 0)
+        reversing_rows = [
+            MeshRefinementResult(
+                n=41, grid_spacing_m=0.001, probe_x_m=0.0, probe_y_m=0.0,
+                probe_potential_v=0.0, probe_ex_v_per_m=100.0, probe_ey_v_per_m=0.0,
+                max_vacuum_e_v_per_m=300.0, max_conductor_raw_gradient_v_per_m=50.0,
+                max_discrete_residual_v=1e-12, potential_antisymmetry_error_v=1e-12,
+                probe_in_vacuum=True, probe_status='VALID_VACUUM',
+                requested_probe_x_m=0.0, requested_probe_y_m=0.0,
+            ),
+            MeshRefinementResult(
+                n=81, grid_spacing_m=0.0005, probe_x_m=0.0, probe_y_m=0.0,
+                probe_potential_v=0.0, probe_ex_v_per_m=-100.0, probe_ey_v_per_m=0.0,
+                max_vacuum_e_v_per_m=300.0, max_conductor_raw_gradient_v_per_m=50.0,
+                max_discrete_residual_v=1e-12, potential_antisymmetry_error_v=1e-12,
+                probe_in_vacuum=True, probe_status='VALID_VACUUM',
+                requested_probe_x_m=0.0, requested_probe_y_m=0.0,
+            ),
+            MeshRefinementResult(
+                n=161, grid_spacing_m=0.00025, probe_x_m=0.0, probe_y_m=0.0,
+                probe_potential_v=0.0, probe_ex_v_per_m=100.0, probe_ey_v_per_m=0.0,
+                max_vacuum_e_v_per_m=300.0, max_conductor_raw_gradient_v_per_m=50.0,
+                max_discrete_residual_v=1e-12, potential_antisymmetry_error_v=1e-12,
+                probe_in_vacuum=True, probe_status='VALID_VACUUM',
+                requested_probe_x_m=0.0, requested_probe_y_m=0.0,
+            ),
+        ]
+        eval_rev = assess_probe_convergence(reversing_rows, requested_probe_xy_m=(0.0, 0.0))
+        self.assertEqual(eval_rev.convergence_status, 'INCONCLUSIVE')
+        self.assertFalse(eval_rev.is_converged)
+        self.assertFalse(eval_rev.is_stable)
+        self.assertIsNotNone(eval_rev.relative_field_drift)
+        self.assertGreaterEqual(eval_rev.relative_field_drift, 2.0)
+        self.assertIn('INCONCLUSIVE', eval_rev.assessment_summary)
+
+        # Counterexample 3: Non-finite (NaN / Inf) field values
+        nan_rows = [
+            MeshRefinementResult(
+                n=41, grid_spacing_m=0.001, probe_x_m=0.0, probe_y_m=0.0,
+                probe_potential_v=0.0, probe_ex_v_per_m=np.nan, probe_ey_v_per_m=0.0,
+                max_vacuum_e_v_per_m=300.0, max_conductor_raw_gradient_v_per_m=50.0,
+                max_discrete_residual_v=1e-12, potential_antisymmetry_error_v=1e-12,
+                probe_in_vacuum=True, probe_status='VALID_VACUUM',
+                requested_probe_x_m=0.0, requested_probe_y_m=0.0,
+            ),
+            MeshRefinementResult(
+                n=81, grid_spacing_m=0.0005, probe_x_m=0.0, probe_y_m=0.0,
+                probe_potential_v=0.0, probe_ex_v_per_m=100.0, probe_ey_v_per_m=0.0,
+                max_vacuum_e_v_per_m=300.0, max_conductor_raw_gradient_v_per_m=50.0,
+                max_discrete_residual_v=1e-12, potential_antisymmetry_error_v=1e-12,
+                probe_in_vacuum=True, probe_status='VALID_VACUUM',
+                requested_probe_x_m=0.0, requested_probe_y_m=0.0,
+            ),
+            MeshRefinementResult(
+                n=161, grid_spacing_m=0.00025, probe_x_m=0.0, probe_y_m=0.0,
+                probe_potential_v=0.0, probe_ex_v_per_m=100.0, probe_ey_v_per_m=0.0,
+                max_vacuum_e_v_per_m=300.0, max_conductor_raw_gradient_v_per_m=50.0,
+                max_discrete_residual_v=1e-12, potential_antisymmetry_error_v=1e-12,
+                probe_in_vacuum=True, probe_status='VALID_VACUUM',
+                requested_probe_x_m=0.0, requested_probe_y_m=0.0,
+            ),
+        ]
+        eval_nan = assess_probe_convergence(nan_rows, requested_probe_xy_m=(0.0, 0.0))
+        self.assertEqual(eval_nan.convergence_status, 'NOT_ASSESSED')
+        self.assertFalse(eval_nan.is_converged)
+        self.assertFalse(eval_nan.is_stable)
+        self.assertIn('Non-finite electric field components', eval_nan.assessment_summary)
+
+        # Counterexample 4: Invalid tolerance rejected
+        with self.assertRaises(ValueError):
+            assess_probe_convergence(reversing_rows, max_relative_drift_tol=-0.01)
+        with self.assertRaises(ValueError):
+            assess_probe_convergence(reversing_rows, max_relative_drift_tol=np.nan)
+
+    def test_r6_f3_manifest_derives_common_requested_probe_for_non_midpoint_studies(self):
+        """R6-F3 regression: manifest derives requested target from study rows and evaluates nonzero probe accurately."""
+        # On-grid non-midpoint probe at (0.001 m, 0.0 m) with n=(41, 81, 161) in width 0.04 m box
+        # h = 0.04 / (n-1) => h_41 = 0.001 m, h_81 = 0.0005 m, h_161 = 0.00025 m; all include x = 0.001 m exactly
+        cfg = GroundedBoxConfig(box_width_m=0.04)
+        non_mid_study = electrode_pair_mesh_study(
+            n_list=(41, 81, 161),
+            box_width_m=0.04,
+            probe_xy_m=(0.001, 0.0),
+            config=cfg,
+        )
+
+        png_path, json_path = render(
+            output_png='test_r6_f3_baseline.png',
+            output_json='test_r6_f3_manifest.json',
+            config_2d=cfg,
+            study_probe_xy_m=(0.001, 0.0),
+            study_n_list=(41, 81, 161),
+        )
+
+        try:
+            with open(json_path, 'r', encoding='utf-8') as f:
+                manifest = json.load(f)
+
+            case1 = manifest['cases']['case_1_grounded_box_2d']
+            self.assertIn('mesh_study_probe', case1)
+            self.assertIn('mesh_study_probe_midpoint', case1)
+
+            conv_details = case1['probe_convergence_details']
+            self.assertEqual(conv_details['requested_probe_xy_m'], [0.001, 0.0])
+            self.assertFalse(conv_details['is_midpoint'])
+            self.assertTrue(conv_details['coords_stable'])
+            self.assertEqual(conv_details['vacuum_status'], 'ALL_IN_VACUUM')
+            self.assertEqual(conv_details['convergence_status'], 'STABLE_WITHIN_TESTED_GRID_TOLERANCE')
+            self.assertTrue(conv_details['is_converged'])
+            self.assertTrue(conv_details['is_stable'])
+            self.assertIsNotNone(conv_details['relative_field_drift'])
+            self.assertLess(conv_details['relative_field_drift'], 0.05)
+            self.assertIn('STABLE_WITHIN_TESTED_GRID_TOLERANCE', case1['probe_convergence_assessment'])
+        finally:
+            png_path.unlink(missing_ok=True)
+            json_path.unlink(missing_ok=True)
 
 
 if __name__ == '__main__':
