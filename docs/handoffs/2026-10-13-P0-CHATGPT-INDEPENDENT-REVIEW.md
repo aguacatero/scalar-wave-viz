@@ -1,15 +1,16 @@
 # Scalar Wave Viz P0 — independent scientific review handoff
 
-**Status: READY FOR CHATGPT INDEPENDENT R4 REVIEW. NOT APPROVED FOR MERGE.**
+**Status: READY FOR CHATGPT INDEPENDENT R5 REVIEW. NOT APPROVED FOR MERGE.**
 
-Updated 2026-10-14 after resolving the independent R3 review findings (R3-F1 through R3-F3). Persistent entry point for ChatGPT/Hermes/Antigravity independent review.
+Updated 2026-10-18 after resolving the independent R4 review findings (R4-F1 through R4-F3). Persistent entry point for ChatGPT/Hermes/Antigravity independent review.
 
 ## Locate the work
 
 - Repository: https://github.com/aguacatero/scalar-wave-viz
 - PR: https://github.com/aguacatero/scalar-wave-viz/pull/5 (**draft**, base `main`)
 - Branch: `scientific-baseline-exodus-2026-10-13`
-- R3 Fix Queue Report: `docs/handoffs/2026-10-14-P0-CHATGPT-R3-FIX-QUEUE.md`
+- R4 Fix Queue Report: `docs/handoffs/2026-10-18-P0-CHATGPT-R4-FIX-QUEUE.md`
+- Historical R3 Report: `docs/handoffs/2026-10-14-P0-CHATGPT-R3-FIX-QUEUE.md`
 - Historical R1/R2 Report: `docs/handoffs/2026-10-13-P0-CHATGPT-R1-FIX-QUEUE.md`
 - **Read PR head SHA at review time** for the current exact commit.
 - P1 issue: https://github.com/aguacatero/scalar-wave-viz/issues/6
@@ -19,20 +20,18 @@ Updated 2026-10-14 after resolving the independent R3 review findings (R3-F1 thr
 ## Intended changes
 
 1. `electrostatics_baseline.py`:
-   - (R3-F1) Implemented exact vertical electrode placement using `center_y_m` for left and right electrodes in mask generation: `(x - center_x_m)**2 + (y - center_y_m)**2 <= radius_m**2`. Added finite-coordinate validation in `ElectrodeConfig` and `GroundedBoxConfig`.
-   - (R3-F2) Enabled `electrode_pair_mesh_study` to accept typed `GroundedBoxConfig`, ensuring custom runs vary only grid resolution $n$ while strictly preserving configured geometries and voltages.
+   - (R4-F1) Added `check_configuration_symmetries` checking preconditions for x-reflection and central-inversion antisymmetries; only evaluate antisymmetry errors when mathematically valid, otherwise record `None` and report explicit `symmetry_status`.
+   - (R4-F2) Added conductor check for mesh-study probe point; record `None` / `null` and explanatory `probe_status` when probe is inside conductor; added `require_vacuum_probe` parameter.
 2. `examples/electrostatics_demo.py`:
-   - (R3-F2) Pass active `config=cfg` directly to `electrode_pair_mesh_study`; serialize `mesh_study_geometry` in manifest to preserve custom study provenance.
-   - (R3-F3) Implemented `get_git_provenance()` distinguishing PR source branch HEAD SHA (`pr_source_head_sha`) from GitHub Actions CI synthetic merge commit (`tested_checkout_sha`). Bumped schema to `1.1.0`.
-3. `.github/workflows/physics-tests.yml`:
-   - (R3-F3) Passed `PR_SOURCE_HEAD_SHA`, `PR_BASE_SHA`, and `GITHUB_EVENT_NAME` to demo execution; added a manifest provenance verification gate step.
-4. `tests/test_electrostatics_baseline.py`:
-   - 23 unit tests (3 new targeted regression tests for R3-F1, R3-F2, and R3-F3).
+   - (R4-F2) Added `probe_convergence_assessment` and individual probe vacuum status fields to manifest; bumped schema to `1.2.0`; enforced strict RFC 8259 JSON serialization (`allow_nan=False`).
+   - (R4-F3) Dynamically format Panel A figure title to show `±|V|` only if symmetric, else explicit individual voltages (`V_left=..., V_right=...`).
+3. `tests/test_electrostatics_baseline.py`:
+   - 26 unit tests (3 new targeted regressions for R4-F1, R4-F2, and R4-F3).
 
 ## Evidence obtained
 
-- Local command `python3 -m unittest discover -s tests -v`: **23 tests passed** (including all F1–F6, R2-F1 through R2-F5, and R3-F1 through R3-F3 regression tests).
-- Local command `MPLBACKEND=Agg python3 examples/electrostatics_demo.py`: writes `electrostatics_baseline.png` (2480 × 832) and paired `electrostatics_manifest.json` (schema 1.1.0); visual appearance and provenance verified.
+- Local command `python3 -m unittest discover -s tests -v`: **26 tests passed** (including all F1–F6, R2-F1–R2-F5, R3-F1–R3-F3, and R4-F1–R4-F3 regression tests).
+- Local command `MPLBACKEND=Agg python3 examples/electrostatics_demo.py`: writes `electrostatics_baseline.png` (2480 × 832) and paired `electrostatics_manifest.json` (schema 1.2.0); strict RFC 8259 JSON and provenance verified.
 - Workflow uploads downloadable artifact bundle named `conventional-electrostatics-preview` containing both PNG and JSON manifest (30-day retention). Link: https://github.com/aguacatero/scalar-wave-viz/actions/workflows/physics-tests.yml
 
 ## What the result does NOT establish

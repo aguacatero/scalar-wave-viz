@@ -478,6 +478,42 @@ def electrode_pair_in_grounded_box(
     )
 
 
+def check_configuration_symmetries(config: GroundedBoxConfig) -> dict[str, bool]:
+    """Check whether electrode configuration satisfies exact discrete Laplace symmetry preconditions.
+
+    1. x-reflection antisymmetry: V(-x, y) = -V(x, y)
+       Preconditions:
+         - r_left == r_right
+         - x_right == -x_left (with x_left != 0)
+         - y_right == y_left
+         - V_right == -V_left (with V_left != 0)
+
+    2. Central-inversion antisymmetry: V(-x, -y) = -V(x, y)
+       Preconditions:
+         - r_left == r_right
+         - x_right == -x_left (with x_left != 0)
+         - y_right == -y_left
+         - V_right == -V_left (with V_left != 0)
+    """
+    le = config.left_electrode
+    re = config.right_electrode
+
+    r_equal = bool(np.isclose(le.radius_m, re.radius_m, rtol=1e-5, atol=1e-8))
+    x_antisym = bool(np.isclose(re.center_x_m, -le.center_x_m, rtol=1e-5, atol=1e-8) and not np.isclose(le.center_x_m, 0.0))
+    v_antisym = bool(np.isclose(re.voltage_v, -le.voltage_v, rtol=1e-5, atol=1e-8) and not np.isclose(le.voltage_v, 0.0))
+
+    y_equal = bool(np.isclose(le.center_y_m, re.center_y_m, rtol=1e-5, atol=1e-8))
+    y_antisym = bool(np.isclose(re.center_y_m, -le.center_y_m, rtol=1e-5, atol=1e-8))
+
+    x_reflection = bool(r_equal and x_antisym and v_antisym and y_equal)
+    central_inversion = bool(r_equal and x_antisym and v_antisym and y_antisym)
+
+    return {
+        'has_x_reflection_antisymmetry': x_reflection,
+        'has_central_inversion_antisymmetry': central_inversion,
+    }
+
+
 @dataclass(frozen=True)
 class MeshRefinementResult:
     n: int
@@ -485,12 +521,16 @@ class MeshRefinementResult:
     probe_x_m: float
     probe_y_m: float
     probe_potential_v: float
-    probe_ex_v_per_m: float
-    probe_ey_v_per_m: float
+    probe_ex_v_per_m: float | None
+    probe_ey_v_per_m: float | None
     max_vacuum_e_v_per_m: float
     max_conductor_raw_gradient_v_per_m: float
     max_discrete_residual_v: float
-    potential_antisymmetry_error_v: float
+    potential_antisymmetry_error_v: float | None
+    potential_central_inversion_error_v: float | None = None
+    probe_in_vacuum: bool = True
+    probe_status: str = 'VALID_VACUUM'
+    symmetry_status: str = 'N/A'
 
 
 def electrode_pair_mesh_study(
@@ -498,13 +538,16 @@ def electrode_pair_mesh_study(
     box_width_m: float = 0.04,
     probe_xy_m: tuple[float, float] = (0.0, 0.0),
     config: GroundedBoxConfig | None = None,
+    require_vacuum_probe: bool = False,
 ) -> list[MeshRefinementResult]:
     """Perform mesh-refinement study for cylindrical electrode pair in grounded enclosure.
 
     Demonstrates that:
-    1. Probe field at fixed physical point (0, 0) separated from staircase boundaries converges smoothly.
+    1. Probe field at fixed physical point in vacuum converges smoothly.
     2. Peak vacuum field on the staircase boundary varies significantly with n (grid sensitivity).
     3. Fictitious gradient inside conductors on raw grid is nonzero while physical vacuum E is masked.
+    4. Evaluates potential antisymmetry (x-reflection or central inversion) only when mathematical
+       symmetry preconditions are met; otherwise records N/A to prevent nonphysical error reporting.
     """
     results: list[MeshRefinementResult] = []
     base_config = config or GroundedBoxConfig(box_width_m=box_width_m)
@@ -521,17 +564,51 @@ def electrode_pair_mesh_study(
         ix = int(np.argmin(np.abs(coords - probe_xy_m[0])))
         iy = int(np.argmin(np.abs(coords - probe_xy_m[1])))
 
+        probe_in_vac = bool(sol.vacuum_mask[ix, iy])
+        if require_vacuum_probe and not probe_in_vac:
+            raise ValueError(
+                f"Probe at ({probe_xy_m[0]:.4f}, {probe_xy_m[1]:.4f}) is not in vacuum at n={n} "
+                f"(located in conductor={sol.conductor_mask[ix, iy]} or boundary={sol.boundary_mask[ix, iy]})"
+            )
+
         probe_v = float(sol.potential_v[ix, iy])
-        probe_ex = float(sol.ex_v_per_m[ix, iy])
-        probe_ey = float(sol.ey_v_per_m[ix, iy])
+        if probe_in_vac:
+            probe_ex: float | None = float(sol.ex_v_per_m[ix, iy])
+            probe_ey: float | None = float(sol.ey_v_per_m[ix, iy])
+            probe_status = 'VALID_VACUUM'
+        else:
+            probe_ex = None
+            probe_ey = None
+            probe_status = (
+                f'NON_VACUUM (probe at [{coords[ix]:.4e}, {coords[iy]:.4e}] inside conductor or boundary; '
+                'vacuum field undefined / masked to E=0)'
+            )
 
         vac_e = sol.vacuum_e_magnitude_v_per_m
-        max_vac_e = float(np.nanmax(vac_e))
+        max_vac_e = float(np.nanmax(vac_e)) if np.any(sol.vacuum_mask) else 0.0
 
         raw_mag = np.hypot(sol.raw_gradient_x_v_per_m, sol.raw_gradient_y_v_per_m)
         max_cond_raw = float(np.max(raw_mag[sol.conductor_mask])) if np.any(sol.conductor_mask) else 0.0
 
-        antisym_err = float(np.max(np.abs(sol.potential_v + sol.potential_v[::-1, :])))
+        sym_info = check_configuration_symmetries(run_config)
+        if sym_info['has_x_reflection_antisymmetry']:
+            antisym_err: float | None = float(np.max(np.abs(sol.potential_v + sol.potential_v[::-1, :])))
+        else:
+            antisym_err = None
+
+        if sym_info['has_central_inversion_antisymmetry']:
+            central_inv_err: float | None = float(np.max(np.abs(sol.potential_v + sol.potential_v[::-1, ::-1])))
+        else:
+            central_inv_err = None
+
+        if sym_info['has_x_reflection_antisymmetry'] and sym_info['has_central_inversion_antisymmetry']:
+            sym_status = 'X_REFLECTION_AND_CENTRAL_INVERSION_ANTISYMMETRIC'
+        elif sym_info['has_x_reflection_antisymmetry']:
+            sym_status = 'X_REFLECTION_ANTISYMMETRIC'
+        elif sym_info['has_central_inversion_antisymmetry']:
+            sym_status = 'CENTRAL_INVERSION_ANTISYMMETRIC'
+        else:
+            sym_status = 'N/A (asymmetric geometry or potentials)'
 
         results.append(MeshRefinementResult(
             n=n,
@@ -545,6 +622,10 @@ def electrode_pair_mesh_study(
             max_conductor_raw_gradient_v_per_m=max_cond_raw,
             max_discrete_residual_v=sol.max_discrete_residual_v,
             potential_antisymmetry_error_v=antisym_err,
+            potential_central_inversion_error_v=central_inv_err,
+            probe_in_vacuum=probe_in_vac,
+            probe_status=probe_status,
+            symmetry_status=sym_status,
         ))
     return results
 

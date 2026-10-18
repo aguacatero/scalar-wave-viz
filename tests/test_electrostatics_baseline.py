@@ -10,6 +10,7 @@ from electrostatics_baseline import (
     ElectrodeConfig,
     FieldSolution,
     GroundedBoxConfig,
+    check_configuration_symmetries,
     coaxial_cylinder_benchmark,
     electrode_pair_in_grounded_box,
     electrode_pair_mesh_study,
@@ -301,6 +302,137 @@ class ConvergenceAndBenchmarkTests(unittest.TestCase):
         for r in study:
             self.assertLess(r.potential_antisymmetry_error_v, 1e-10)
 
+    def test_symmetry_preconditions_and_central_inversion(self):
+        """R4-F1 regression: verify symmetry preconditions and separate central-inversion diagnostic."""
+        # 1. Symmetric baseline: both x-reflection and central-inversion hold
+        cfg_sym = GroundedBoxConfig(
+            n=41,
+            box_width_m=0.04,
+            left_electrode=ElectrodeConfig(center_x_m=-0.008, center_y_m=0.0, radius_m=0.003, voltage_v=500.0),
+            right_electrode=ElectrodeConfig(center_x_m=0.008, center_y_m=0.0, radius_m=0.003, voltage_v=-500.0),
+        )
+        sym_info_sym = check_configuration_symmetries(cfg_sym)
+        self.assertTrue(sym_info_sym['has_x_reflection_antisymmetry'])
+        self.assertTrue(sym_info_sym['has_central_inversion_antisymmetry'])
+        res_sym = electrode_pair_mesh_study(n_list=(31,), config=cfg_sym)[0]
+        self.assertIsNotNone(res_sym.potential_antisymmetry_error_v)
+        self.assertLess(res_sym.potential_antisymmetry_error_v, 1e-10)
+        self.assertIsNotNone(res_sym.potential_central_inversion_error_v)
+        self.assertLess(res_sym.potential_central_inversion_error_v, 1e-10)
+        self.assertEqual(res_sym.symmetry_status, 'X_REFLECTION_AND_CENTRAL_INVERSION_ANTISYMMETRIC')
+
+        # 2. Vertically offset opposite-parity pair: x-reflection fails, central-inversion holds
+        cfg_offset = GroundedBoxConfig(
+            n=41,
+            box_width_m=0.04,
+            left_electrode=ElectrodeConfig(center_x_m=-0.008, center_y_m=0.003, radius_m=0.003, voltage_v=500.0),
+            right_electrode=ElectrodeConfig(center_x_m=0.008, center_y_m=-0.003, radius_m=0.003, voltage_v=-500.0),
+        )
+        sym_info_offset = check_configuration_symmetries(cfg_offset)
+        self.assertFalse(sym_info_offset['has_x_reflection_antisymmetry'])
+        self.assertTrue(sym_info_offset['has_central_inversion_antisymmetry'])
+        res_offset = electrode_pair_mesh_study(n_list=(31,), config=cfg_offset)[0]
+        self.assertIsNone(res_offset.potential_antisymmetry_error_v)
+        self.assertIsNotNone(res_offset.potential_central_inversion_error_v)
+        self.assertLess(res_offset.potential_central_inversion_error_v, 1e-10)
+        self.assertEqual(res_offset.symmetry_status, 'CENTRAL_INVERSION_ANTISYMMETRIC')
+
+        # 3. Vertically shifted same-direction: both fail central inversion, but x-reflection holds
+        cfg_shift_same = GroundedBoxConfig(
+            n=41,
+            box_width_m=0.04,
+            left_electrode=ElectrodeConfig(center_x_m=-0.008, center_y_m=0.003, radius_m=0.003, voltage_v=500.0),
+            right_electrode=ElectrodeConfig(center_x_m=0.008, center_y_m=0.003, radius_m=0.003, voltage_v=-500.0),
+        )
+        sym_info_shift = check_configuration_symmetries(cfg_shift_same)
+        self.assertTrue(sym_info_shift['has_x_reflection_antisymmetry'])
+        self.assertFalse(sym_info_shift['has_central_inversion_antisymmetry'])
+        res_shift = electrode_pair_mesh_study(n_list=(31,), config=cfg_shift_same)[0]
+        self.assertIsNotNone(res_shift.potential_antisymmetry_error_v)
+        self.assertLess(res_shift.potential_antisymmetry_error_v, 1e-10)
+        self.assertIsNone(res_shift.potential_central_inversion_error_v)
+        self.assertEqual(res_shift.symmetry_status, 'X_REFLECTION_ANTISYMMETRIC')
+
+        # 4. Asymmetric voltages: neither holds
+        cfg_asym = GroundedBoxConfig(
+            n=41,
+            box_width_m=0.04,
+            left_electrode=ElectrodeConfig(center_x_m=-0.008, center_y_m=0.0, radius_m=0.003, voltage_v=800.0),
+            right_electrode=ElectrodeConfig(center_x_m=0.008, center_y_m=0.0, radius_m=0.003, voltage_v=-350.0),
+        )
+        sym_info_asym = check_configuration_symmetries(cfg_asym)
+        self.assertFalse(sym_info_asym['has_x_reflection_antisymmetry'])
+        self.assertFalse(sym_info_asym['has_central_inversion_antisymmetry'])
+        res_asym = electrode_pair_mesh_study(n_list=(31,), config=cfg_asym)[0]
+        self.assertIsNone(res_asym.potential_antisymmetry_error_v)
+        self.assertIsNone(res_asym.potential_central_inversion_error_v)
+        self.assertEqual(res_asym.symmetry_status, 'N/A (asymmetric geometry or potentials)')
+
+    def test_mesh_study_probe_inside_conductor_and_strict_json(self):
+        """R4-F2 regression: probe inside conductor records None/null and produces valid RFC 8259 JSON."""
+        # Electrode centered at (0, 0) covering the probe point (0, 0)
+        cfg_probe_in_cond = GroundedBoxConfig(
+            n=41,
+            box_width_m=0.04,
+            left_electrode=ElectrodeConfig(center_x_m=0.0, center_y_m=0.0, radius_m=0.005, voltage_v=500.0),
+            right_electrode=ElectrodeConfig(center_x_m=0.015, center_y_m=0.0, radius_m=0.002, voltage_v=-500.0),
+        )
+
+        # 1. require_vacuum_probe=True must raise ValueError
+        with self.assertRaises(ValueError):
+            electrode_pair_mesh_study(
+                n_list=(31,),
+                probe_xy_m=(0.0, 0.0),
+                config=cfg_probe_in_cond,
+                require_vacuum_probe=True,
+            )
+
+        # 2. Default require_vacuum_probe=False records probe_in_vacuum=False and probe fields as None
+        study = electrode_pair_mesh_study(
+            n_list=(31,),
+            probe_xy_m=(0.0, 0.0),
+            config=cfg_probe_in_cond,
+            require_vacuum_probe=False,
+        )
+        self.assertEqual(len(study), 1)
+        r = study[0]
+        self.assertFalse(r.probe_in_vacuum)
+        self.assertIsNone(r.probe_ex_v_per_m)
+        self.assertIsNone(r.probe_ey_v_per_m)
+        self.assertIn('NON_VACUUM', r.probe_status)
+
+        # 3. Render and manifest generation: must not emit NaN tokens, and must parse under strict RFC 8259 parser
+        png_path, json_path = render(
+            output_png='test_probe_cond_baseline.png',
+            output_json='test_probe_cond_manifest.json',
+            config_2d=cfg_probe_in_cond,
+        )
+        self.assertTrue(json_path.exists())
+
+        raw_json = json_path.read_text(encoding='utf-8')
+        # Standard RFC 8259 disallows bare NaN or Infinity
+        self.assertNotIn(': NaN', raw_json)
+        self.assertNotIn(': Infinity', raw_json)
+        self.assertNotIn(': -Infinity', raw_json)
+
+        # Strict JSON parse verifying no NaN constants were accepted
+        def no_constants(val):
+            raise ValueError(f"Non-compliant JSON token encountered: {val}")
+
+        manifest = json.loads(raw_json, parse_constant=no_constants)
+        case1 = manifest['cases']['case_1_grounded_box_2d']
+        self.assertIn('probe_convergence_assessment', case1)
+        self.assertIn('inside conductor', case1['probe_convergence_assessment'])
+
+        probe_entry = case1['mesh_study_probe_midpoint'][0]
+        self.assertFalse(probe_entry['probe_in_vacuum'])
+        self.assertIsNone(probe_entry['probe_ex_v_per_m'])
+        self.assertIsNone(probe_entry['probe_ey_v_per_m'])
+        self.assertIn('NON_VACUUM', probe_entry['probe_status'])
+
+        png_path.unlink(missing_ok=True)
+        json_path.unlink(missing_ok=True)
+
 
 class ManifestAndContractTests(unittest.TestCase):
     def test_manifest_generation_and_schema_conformance(self):
@@ -315,7 +447,7 @@ class ManifestAndContractTests(unittest.TestCase):
         with open(json_path, 'r', encoding='utf-8') as f:
             manifest = json.load(f)
 
-        self.assertIn(manifest['schema_version'], ('1.0.0', '1.1.0'))
+        self.assertIn(manifest['schema_version'], ('1.0.0', '1.1.0', '1.2.0'))
         self.assertIn('git_commit', manifest)
         self.assertIn('tested_checkout_sha', manifest)
         self.assertIn('provenance', manifest)
@@ -329,6 +461,13 @@ class ManifestAndContractTests(unittest.TestCase):
         self.assertEqual(case1['validation_status'], 'ILLUSTRATIVE / NON-CONVERGED')
         self.assertIn('mesh_study_probe_midpoint', case1)
         self.assertIn('coaxial_analytic_benchmark', case1)
+        self.assertIn('probe_convergence_assessment', case1)
+
+        row0 = case1['mesh_study_probe_midpoint'][0]
+        self.assertTrue(row0['probe_in_vacuum'])
+        self.assertEqual(row0['probe_status'], 'VALID_VACUUM')
+        self.assertIn('potential_central_inversion_error_v', row0)
+        self.assertIn('symmetry_status', row0)
 
         case2 = manifest['cases']['case_2_parallel_plate_1d']
         self.assertEqual(case2['validation_status'], 'ANALYTIC BENCHMARK')
@@ -432,6 +571,13 @@ class ManifestAndContractTests(unittest.TestCase):
         self.assertAlmostEqual(study[0].grid_spacing_m, 0.05 / 30)
         self.assertAlmostEqual(study[1].grid_spacing_m, 0.05 / 50)
 
+        # R4-F1: custom_cfg has y_left = +0.002, y_right = -0.002.
+        # This breaks x-reflection antisymmetry but preserves central inversion.
+        self.assertIsNone(study[0].potential_antisymmetry_error_v)
+        self.assertIsNotNone(study[0].potential_central_inversion_error_v)
+        self.assertLess(study[0].potential_central_inversion_error_v, 1e-10)
+        self.assertEqual(study[0].symmetry_status, 'CENTRAL_INVERSION_ANTISYMMETRIC')
+
         # Check render serializes custom mesh study geometry in manifest
         png_path, json_path = render(
             output_png='test_custom_study_baseline.png',
@@ -449,6 +595,11 @@ class ManifestAndContractTests(unittest.TestCase):
         self.assertAlmostEqual(study_geom['left_electrode']['center_y_m'], 0.002)
         self.assertAlmostEqual(study_geom['right_electrode']['voltage_v'], -800.0)
         self.assertAlmostEqual(study_geom['right_electrode']['center_y_m'], -0.002)
+
+        row0 = case1['mesh_study_probe_midpoint'][0]
+        self.assertIsNone(row0['potential_antisymmetry_error_v'])
+        self.assertIsNotNone(row0['potential_central_inversion_error_v'])
+        self.assertEqual(row0['symmetry_status'], 'CENTRAL_INVERSION_ANTISYMMETRIC')
 
         png_path.unlink(missing_ok=True)
         json_path.unlink(missing_ok=True)
@@ -516,6 +667,39 @@ class ManifestAndContractTests(unittest.TestCase):
         self.assertIn('Eq. (11) net force expression', text)
         self.assertIn('Model H0: conventional electrodynamics', text)
         self.assertIn('Model H1: precisely cited patent proposition', text)
+
+    def test_render_unequal_voltages_title_and_manifest(self):
+        """R4-F3 regression: verify asymmetric voltage configurations render with explicit titles and valid JSON."""
+        cfg_asym = GroundedBoxConfig(
+            n=41,
+            box_width_m=0.04,
+            left_electrode=ElectrodeConfig(center_x_m=-0.008, center_y_m=0.0, radius_m=0.003, voltage_v=800.0),
+            right_electrode=ElectrodeConfig(center_x_m=0.008, center_y_m=0.0, radius_m=0.003, voltage_v=-350.0),
+        )
+        png_path, json_path = render(
+            output_png='test_asym_v_baseline.png',
+            output_json='test_asym_v_manifest.json',
+            config_2d=cfg_asym,
+        )
+        self.assertTrue(png_path.exists())
+        self.assertTrue(json_path.exists())
+
+        with open(json_path, 'r', encoding='utf-8') as f:
+            manifest = json.load(f)
+
+        geom = manifest['cases']['case_1_grounded_box_2d']['geometry']
+        self.assertAlmostEqual(geom['left_electrode']['voltage_v'], 800.0)
+        self.assertAlmostEqual(geom['right_electrode']['voltage_v'], -350.0)
+
+        # Symmetry status in mesh study rows should be N/A
+        mesh_study = manifest['cases']['case_1_grounded_box_2d']['mesh_study_probe_midpoint']
+        for row in mesh_study:
+            self.assertIsNone(row['potential_antisymmetry_error_v'])
+            self.assertIsNone(row['potential_central_inversion_error_v'])
+            self.assertIn('N/A', row['symmetry_status'])
+
+        png_path.unlink(missing_ok=True)
+        json_path.unlink(missing_ok=True)
 
 
 if __name__ == '__main__':
