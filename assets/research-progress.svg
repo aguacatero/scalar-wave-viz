@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="740" height="122" viewBox="0 0 740 122" role="img" aria-labelledby="title description">
+  <title id="title">Scientific roadmap: P0 accepted, P1 through P4 pending</title>
+  <desc id="description">Five acceptance-gated stages. P0 scientific baseline independently accepted; stages P1 through P4 are pending. Review gates do not measure physical validity.</desc>
+  <rect x="1" y="1" width="738" height="120" rx="12" fill="#ffffff" stroke="#cbd5e1" stroke-width="2"/>
+  <text x="20" y="27" font-family="Arial, Helvetica, sans-serif" font-size="16" font-weight="700" fill="#0f172a">Scientific roadmap</text>
+  <text x="720" y="27" text-anchor="end" font-family="Arial, Helvetica, sans-serif" font-size="14" fill="#475569">1 / 5 gates accepted</text>
+  <rect x="20"  y="42" width="128" height="34" rx="6" fill="#bbf7d0"/>
+  <rect x="160" y="42" width="128" height="34" rx="6" fill="#e2e8f0"/>
+  <rect x="300" y="42" width="128" height="34" rx="6" fill="#e2e8f0"/>
+  <rect x="440" y="42" width="128" height="34" rx="6" fill="#e2e8f0"/>
+  <rect x="580" y="42" width="128" height="34" rx="6" fill="#e2e8f0"/>
+  <text x="84"  y="64" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="13" font-weight="700" fill="#14532d">P0 · ACCEPTED</text>
+  <text x="224" y="64" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="13" fill="#334155">P1 · PENDING</text>
+  <text x="364" y="64" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="13" fill="#334155">P2 · PENDING</text>
+  <text x="504" y="64" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="13" fill="#334155">P3 · PENDING</text>
+  <text x="644" y="64" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="13" fill="#334155">P4 · PENDING</text>
+  <text x="20" y="103" font-family="Arial, Helvetica, sans-serif" font-size="13" fill="#475569">Green = P0 baseline accepted</text>
+  <text x="720" y="103" text-anchor="end" font-family="Arial, Helvetica, sans-serif" font-size="13" fill="#475569">Gray = not yet accepted</text>
+</svg>

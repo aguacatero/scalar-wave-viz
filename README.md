@@ -4,6 +4,12 @@
 
 The goal is to help people understand what **specified physical theories predict**, what is assumed, what is measured, and which experimental observations could discriminate between explanations.
 
+## Research progress
+
+![Scientific roadmap: P0 accepted, P1 through P4 pending; 1 of 5 review gates accepted](assets/research-progress.svg)
+
+**P0 — ACCEPTED (independent R8 review, [PR #5](https://github.com/aguacatero/scalar-wave-viz/pull/5)).** The conventional electrostatics scientific baseline passed its scoped acceptance gate. **Next:** [P1 numerical validation and whole-apparatus force accounting](https://github.com/aguacatero/scalar-wave-viz/issues/6), followed by [P2 source-bound patent-geometry reproduction](https://github.com/aguacatero/scalar-wave-viz/issues/7). This bar tracks review milestones, **not** physical validity, anomalous propulsion, or experimental confirmation.
+
 ## First reproducible conventional-electrostatics baseline
 
 This new code deliberately separates an **analytic ideal parallel-plate benchmark** from a **2D field calculation for cylindrical electrodes inside a grounded outer enclosure**. The examples do **not** reproduce a particular Exodus patent embodiment, do not calculate device thrust and do not show any anomalous propulsion.
