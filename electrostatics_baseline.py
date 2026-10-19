@@ -622,6 +622,8 @@ class MeshRefinementResult:
     symmetry_status: str = 'N/A'
     requested_probe_x_m: float = 0.0
     requested_probe_y_m: float = 0.0
+    requested_probe_in_vacuum: bool = True
+    sampled_node_in_vacuum: bool = True
 
 
 def electrode_pair_mesh_study(
@@ -639,6 +641,7 @@ def electrode_pair_mesh_study(
     3. Fictitious gradient inside conductors on raw grid is nonzero while physical vacuum E is masked.
     4. Evaluates potential antisymmetry (x-reflection or central inversion) only when exact mathematical
        and discrete symmetry preconditions are met; otherwise records N/A to prevent nonphysical error reporting.
+    5. Evaluates vacuum membership both continuously at requested coordinates and discretely on sampled lattice nodes (R7-F1).
     """
     results: list[MeshRefinementResult] = []
     base_config = config or GroundedBoxConfig(box_width_m=box_width_m)
@@ -655,23 +658,58 @@ def electrode_pair_mesh_study(
         ix = int(np.argmin(np.abs(coords - probe_xy_m[0])))
         iy = int(np.argmin(np.abs(coords - probe_xy_m[1])))
 
-        probe_in_vac = bool(sol.vacuum_mask[ix, iy])
+        half_w = run_config.box_width_m / 2.0
+        le = run_config.left_electrode
+        re = run_config.right_electrode
+
+        # Continuous geometry membership check for requested probe coordinates (R7-F1)
+        d_left_sq = (probe_xy_m[0] - le.center_x_m)**2 + (probe_xy_m[1] - le.center_y_m)**2
+        d_right_sq = (probe_xy_m[0] - re.center_x_m)**2 + (probe_xy_m[1] - re.center_y_m)**2
+        in_left_conductor = bool(d_left_sq <= le.radius_m**2)
+        in_right_conductor = bool(d_right_sq <= re.radius_m**2)
+        in_boundary = bool(abs(probe_xy_m[0]) >= half_w or abs(probe_xy_m[1]) >= half_w)
+        requested_in_vac = bool(not (in_left_conductor or in_right_conductor or in_boundary))
+
+        # Discrete membership check for nearest sampled lattice node
+        sampled_node_in_vac = bool(sol.vacuum_mask[ix, iy])
+
+        # Overall probe validity requires both continuous physical location and sampled node to be in vacuum
+        probe_in_vac = bool(requested_in_vac and sampled_node_in_vac)
+
         if require_vacuum_probe and not probe_in_vac:
-            raise ValueError(
-                f"Probe at ({probe_xy_m[0]:.4f}, {probe_xy_m[1]:.4f}) is not in vacuum at n={n} "
-                f"(located in conductor={sol.conductor_mask[ix, iy]} or boundary={sol.boundary_mask[ix, iy]})"
-            )
+            if not requested_in_vac:
+                where = 'left conductor' if in_left_conductor else ('right conductor' if in_right_conductor else 'grounded boundary')
+                dist = np.sqrt(d_left_sq if in_left_conductor else (d_right_sq if in_right_conductor else 0.0))
+                rad = le.radius_m if in_left_conductor else (re.radius_m if in_right_conductor else half_w)
+                raise ValueError(
+                    f"Requested probe at ({probe_xy_m[0]:.4e}, {probe_xy_m[1]:.4e}) is physically inside {where} "
+                    f"and not in vacuum (continuous distance to center: {dist:.4e} m <= radius {rad:.4e} m)"
+                )
+            else:
+                raise ValueError(
+                    f"Probe at ({probe_xy_m[0]:.4e}, {probe_xy_m[1]:.4e}) snapped to non-vacuum lattice node "
+                    f"[{coords[ix]:.4e}, {coords[iy]:.4e}] at n={n} "
+                    f"(conductor={sol.conductor_mask[ix, iy]}, boundary={sol.boundary_mask[ix, iy]})"
+                )
 
         probe_v = float(sol.potential_v[ix, iy])
         if probe_in_vac:
             probe_ex: float | None = float(sol.ex_v_per_m[ix, iy])
             probe_ey: float | None = float(sol.ey_v_per_m[ix, iy])
             probe_status = 'VALID_VACUUM'
+        elif not requested_in_vac:
+            probe_ex = None
+            probe_ey = None
+            where = 'left conductor' if in_left_conductor else ('right conductor' if in_right_conductor else 'grounded boundary')
+            probe_status = (
+                f'NON_VACUUM (requested probe at [{probe_xy_m[0]:.4e}, {probe_xy_m[1]:.4e}] physically inside {where}; '
+                'vacuum field undefined / masked to E=0)'
+            )
         else:
             probe_ex = None
             probe_ey = None
             probe_status = (
-                f'NON_VACUUM (probe at [{coords[ix]:.4e}, {coords[iy]:.4e}] inside conductor or boundary; '
+                f'NON_VACUUM (sampled node at [{coords[ix]:.4e}, {coords[iy]:.4e}] inside conductor or boundary; '
                 'vacuum field undefined / masked to E=0)'
             )
 
@@ -719,6 +757,8 @@ def electrode_pair_mesh_study(
             symmetry_status=sym_status,
             requested_probe_x_m=float(probe_xy_m[0]),
             requested_probe_y_m=float(probe_xy_m[1]),
+            requested_probe_in_vacuum=requested_in_vac,
+            sampled_node_in_vacuum=sampled_node_in_vac,
         ))
     return results
 
@@ -732,8 +772,8 @@ class ProbeConvergenceAssessment:
     sampled_probe_coords: list[tuple[float, float]]
     coords_stable: bool
     relative_field_drift: float | None = None
-    is_converged: bool = False
-    is_stable: bool = False
+    is_converged: bool = False      # Reserved for formal asymptotic convergence proofs; False for finite-grid stability (R7-F2)
+    is_stable: bool = False         # True when relative field drift across tested grid resolutions is <= tolerance
 
 
 def assess_probe_convergence(
@@ -934,7 +974,7 @@ def assess_probe_convergence(
         sampled_probe_coords=sampled_coords,
         coords_stable=True,
         relative_field_drift=relative_drift,
-        is_converged=True,
+        is_converged=False,
         is_stable=True,
     )
 

@@ -147,6 +147,8 @@ def generate_manifest(
             'requested_probe_xy_m': [r.requested_probe_x_m, r.requested_probe_y_m],
             'sampled_probe_coords': [r.probe_x_m, r.probe_y_m],
             'probe_xy_m': [r.probe_x_m, r.probe_y_m],
+            'requested_probe_in_vacuum': getattr(r, 'requested_probe_in_vacuum', r.probe_in_vacuum),
+            'sampled_node_in_vacuum': getattr(r, 'sampled_node_in_vacuum', r.probe_in_vacuum),
             'probe_in_vacuum': r.probe_in_vacuum,
             'probe_status': r.probe_status,
             'probe_potential_v': r.probe_potential_v,
@@ -276,6 +278,10 @@ def generate_manifest(
                     'convergence_status': assessment.convergence_status,
                     'is_converged': assessment.is_converged,
                     'is_stable': assessment.is_stable,
+                    'convergence_flag_note': (
+                        'is_converged is reserved for formal asymptotic convergence proofs (e.g. Richardson extrapolation); '
+                        'finite-grid stability across tested resolutions is indicated by is_stable.'
+                    ),
                     'requested_probe_xy_m': list(assessment.requested_probe_xy_m),
                     'is_midpoint': bool(target_probe_xy == (0.0, 0.0)),
                     'sampled_probe_coords': [list(c) for c in assessment.sampled_probe_coords],

@@ -1,15 +1,16 @@
 # Scalar Wave Viz P0 — independent scientific review handoff
 
-**Status: READY FOR CHATGPT INDEPENDENT R7 REVIEW. NOT APPROVED FOR MERGE.**
+**Status: READY FOR CHATGPT INDEPENDENT R8 REVIEW. NOT APPROVED FOR MERGE.**
 
-Updated 2026-10-18 after resolving the independent R6 review findings (R6-F1 through R6-F3). Persistent entry point for ChatGPT/Hermes/Antigravity independent review.
+Updated 2026-10-18 after resolving the independent R7 review findings (R7-F1 through R7-F2). Persistent entry point for ChatGPT/Hermes/Antigravity independent review.
 
 ## Locate the work
 
 - Repository: https://github.com/aguacatero/scalar-wave-viz
 - PR: https://github.com/aguacatero/scalar-wave-viz/pull/5 (**draft**, base `main`)
 - Branch: `scientific-baseline-exodus-2026-10-13`
-- R6 Fix Queue Report: `docs/handoffs/2026-10-18-P0-CHATGPT-R6-FIX-QUEUE.md`
+- R7 Fix Queue Report: `docs/handoffs/2026-10-18-P0-CHATGPT-R7-FIX-QUEUE.md`
+- Historical R6 Report: `docs/handoffs/2026-10-18-P0-CHATGPT-R6-FIX-QUEUE.md`
 - Historical R5 Report: `docs/handoffs/2026-10-18-P0-CHATGPT-R5-FIX-QUEUE.md`
 - Historical R4 Report: `docs/handoffs/2026-10-18-P0-CHATGPT-R4-FIX-QUEUE.md`
 - Historical R3 Report: `docs/handoffs/2026-10-14-P0-CHATGPT-R3-FIX-QUEUE.md`
@@ -22,16 +23,17 @@ Updated 2026-10-18 after resolving the independent R6 review findings (R6-F1 thr
 ## Intended changes
 
 1. `electrostatics_baseline.py`:
-   - (R6-F1) Decoupled central inversion from $x$-reflection antisymmetry in `check_configuration_symmetries`, allowing vertical dipole with $x_L = x_R = 0$ while requiring $y_R = -y_L \ne 0$.
-   - (R6-F2) In `assess_probe_convergence`, required $\ge 3$ unique, distinct mesh resolutions and grid spacings; validated finite data; evaluated relative vector difference and component stability; used scientifically honest status `STABLE_WITHIN_TESTED_GRID_TOLERANCE`.
+   - (R7-F1) Added continuous geometry membership check at requested probe coordinates alongside discrete snapped-node check in `electrode_pair_mesh_study`; sets fields to None/null and records `NON_VACUUM` when physically inside conductors/boundaries; rejects in strict mode. Added `requested_probe_in_vacuum` and `sampled_node_in_vacuum` to `MeshRefinementResult`.
+   - (R7-F2) Set `is_converged = False` for `STABLE_WITHIN_TESTED_GRID_TOLERANCE` in `assess_probe_convergence`, reserving `is_converged` strictly for formal asymptotic/extrapolated convergence proofs, while finite-grid stability is reported by `is_stable = True`.
 2. `examples/electrostatics_demo.py`:
-   - (R6-F3) Dynamically derived and validated common requested probe target from study rows in `generate_manifest`; recorded `mesh_study_probe` and `is_midpoint`; allowed custom probe targets in `render()`.
+   - (R7-F1) Serialized `requested_probe_in_vacuum` and `sampled_node_in_vacuum` in `mesh_study_probe` table.
+   - (R7-F2) Added `convergence_flag_note` in `probe_convergence_details` explaining that `is_converged` is reserved for formal asymptotic convergence proofs.
 3. `tests/test_electrostatics_baseline.py`:
-   - 33 unit tests (3 new targeted regressions for R6-F1, R6-F2, and R6-F3).
+   - 35 unit tests (2 new targeted regressions for R7-F1 and R7-F2).
 
 ## Evidence obtained
 
-- Local command `python3 -m unittest discover -s tests -v`: **33 tests passed** (including all F1–F6, R2-F1–R2-F5, R3-F1–R3-F3, R4-F1–R4-F3, R5-F1–R5-F4, and R6-F1–R6-F3 regression tests).
+- Local command `python3 -m unittest discover -s tests -v`: **35 tests passed** (including all F1–F6, R2-F1–R2-F5, R3-F1–R3-F3, R4-F1–R4-F3, R5-F1–R5-F4, R6-F1–R6-F3, and R7-F1–R7-F2 regression tests).
 - Local command `MPLBACKEND=Agg python3 examples/electrostatics_demo.py`: writes `electrostatics_baseline.png` (2480 × 832) and paired `electrostatics_manifest.json` (schema 1.2.0); strict RFC 8259 JSON and provenance verified.
 - Workflow uploads downloadable artifact bundle named `conventional-electrostatics-preview` containing both PNG and JSON manifest (30-day retention). Link: https://github.com/aguacatero/scalar-wave-viz/actions/workflows/physics-tests.yml
 

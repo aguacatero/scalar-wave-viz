@@ -859,7 +859,7 @@ class ManifestAndContractTests(unittest.TestCase):
         self.assertEqual(eval_base.vacuum_status, 'ALL_IN_VACUUM')
         self.assertEqual(eval_base.convergence_status, 'STABLE_WITHIN_TESTED_GRID_TOLERANCE')
         self.assertTrue(eval_base.coords_stable)
-        self.assertTrue(eval_base.is_converged)
+        self.assertFalse(eval_base.is_converged)
         self.assertTrue(eval_base.is_stable)
         self.assertIsNotNone(eval_base.relative_field_drift)
         self.assertLess(eval_base.relative_field_drift, 0.03)
@@ -1124,11 +1124,122 @@ class ManifestAndContractTests(unittest.TestCase):
             self.assertTrue(conv_details['coords_stable'])
             self.assertEqual(conv_details['vacuum_status'], 'ALL_IN_VACUUM')
             self.assertEqual(conv_details['convergence_status'], 'STABLE_WITHIN_TESTED_GRID_TOLERANCE')
-            self.assertTrue(conv_details['is_converged'])
+            self.assertFalse(conv_details['is_converged'])
             self.assertTrue(conv_details['is_stable'])
             self.assertIsNotNone(conv_details['relative_field_drift'])
             self.assertLess(conv_details['relative_field_drift'], 0.05)
             self.assertIn('STABLE_WITHIN_TESTED_GRID_TOLERANCE', case1['probe_convergence_assessment'])
+        finally:
+            png_path.unlink(missing_ok=True)
+            json_path.unlink(missing_ok=True)
+
+    def test_r7_f1_requested_probe_continuous_conductor_membership(self):
+        """R7-F1 regression: requested probe inside conductor is rejected even if snapped lattice node lies in vacuum."""
+        # Exact reproduction configuration from R7 review:
+        # n=41, box width 0.04 m, default left disk center (-0.008, 0.0), radius 0.003 m.
+        # Requested probe (-0.00549, 0.0006) has distance sqrt((-0.00549 - (-0.008))^2 + 0.0006^2) ~= 0.0025807 m < 0.003 m
+        # Snapped lattice node at n=41 is (-0.005, 0.001) with distance ~= 0.0031623 m > 0.003 m (vacuum).
+        cfg = GroundedBoxConfig(box_width_m=0.04)
+        probe_coord = (-0.00549, 0.0006)
+
+        # 1. Strict mode (require_vacuum_probe=True) MUST reject physically non-vacuum requested probe
+        with self.assertRaises(ValueError) as ctx:
+            electrode_pair_mesh_study(
+                n_list=(41,),
+                box_width_m=0.04,
+                probe_xy_m=probe_coord,
+                config=cfg,
+                require_vacuum_probe=True,
+            )
+        self.assertIn('physically inside left conductor', str(ctx.exception))
+        self.assertIn('not in vacuum', str(ctx.exception))
+
+        # 2. Non-strict mode: records separate vacuum flags, sets field to None/null, probe_in_vacuum=False
+        study = electrode_pair_mesh_study(
+            n_list=(41,),
+            box_width_m=0.04,
+            probe_xy_m=probe_coord,
+            config=cfg,
+            require_vacuum_probe=False,
+        )
+        self.assertEqual(len(study), 1)
+        r = study[0]
+        self.assertFalse(r.requested_probe_in_vacuum)
+        self.assertTrue(r.sampled_node_in_vacuum)
+        self.assertFalse(r.probe_in_vacuum)
+        self.assertIsNone(r.probe_ex_v_per_m)
+        self.assertIsNone(r.probe_ey_v_per_m)
+        self.assertIn('physically inside left conductor', r.probe_status)
+
+        # 3. Assess probe convergence fails closed to NON_VACUUM / NOT_ASSESSED
+        conv = assess_probe_convergence(study, requested_probe_xy_m=probe_coord)
+        self.assertEqual(conv.vacuum_status, 'NON_VACUUM')
+        self.assertEqual(conv.convergence_status, 'NOT_ASSESSED')
+        self.assertFalse(conv.is_converged)
+        self.assertFalse(conv.is_stable)
+
+        # 4. Manifest generation serializes null fields and NON_VACUUM details
+        png_path, json_path = render(
+            output_png='test_r7_f1_baseline.png',
+            output_json='test_r7_f1_manifest.json',
+            config_2d=cfg,
+            study_probe_xy_m=probe_coord,
+            study_n_list=(41, 81),
+        )
+        try:
+            with open(json_path, 'r', encoding='utf-8') as f:
+                manifest = json.load(f)
+            case1 = manifest['cases']['case_1_grounded_box_2d']
+            row0 = case1['mesh_study_probe'][0]
+            self.assertFalse(row0['requested_probe_in_vacuum'])
+            self.assertFalse(row0['probe_in_vacuum'])
+            self.assertIsNone(row0['probe_ex_v_per_m'])
+            self.assertIsNone(row0['probe_ey_v_per_m'])
+            details = case1['probe_convergence_details']
+            self.assertEqual(details['vacuum_status'], 'NON_VACUUM')
+            self.assertEqual(details['convergence_status'], 'NOT_ASSESSED')
+            self.assertFalse(details['is_converged'])
+            self.assertFalse(details['is_stable'])
+        finally:
+            png_path.unlink(missing_ok=True)
+            json_path.unlink(missing_ok=True)
+
+        # 5. Boundary penetration continuous check
+        with self.assertRaises(ValueError) as ctx:
+            electrode_pair_mesh_study(
+                n_list=(41,),
+                box_width_m=0.04,
+                probe_xy_m=(0.021, 0.0),
+                config=cfg,
+                require_vacuum_probe=True,
+            )
+        self.assertIn('grounded boundary', str(ctx.exception))
+
+    def test_r7_f2_stability_flag_distinction_and_manifest_flags(self):
+        """R7-F2 regression: STABLE_WITHIN_TESTED_GRID_TOLERANCE sets is_stable=True but keeps is_converged=False."""
+        baseline_study = electrode_pair_mesh_study(n_list=(41, 81, 101, 161), probe_xy_m=(0.0, 0.0))
+        eval_base = assess_probe_convergence(baseline_study, requested_probe_xy_m=(0.0, 0.0))
+
+        # Direct assessment object assertions
+        self.assertEqual(eval_base.convergence_status, 'STABLE_WITHIN_TESTED_GRID_TOLERANCE')
+        self.assertTrue(eval_base.is_stable)
+        self.assertFalse(eval_base.is_converged, "is_converged must be False without asymptotic extrapolation proof")
+
+        # Serialized JSON manifest assertions
+        png_path, json_path = render(
+            output_png='test_r7_f2_baseline.png',
+            output_json='test_r7_f2_manifest.json',
+        )
+        try:
+            with open(json_path, 'r', encoding='utf-8') as f:
+                manifest = json.load(f)
+            case1 = manifest['cases']['case_1_grounded_box_2d']
+            conv_details = case1['probe_convergence_details']
+            self.assertEqual(conv_details['convergence_status'], 'STABLE_WITHIN_TESTED_GRID_TOLERANCE')
+            self.assertIs(conv_details['is_stable'], True)
+            self.assertIs(conv_details['is_converged'], False)
+            self.assertIn('convergence_flag_note', conv_details)
+            self.assertEqual(case1['validation_status'], 'ILLUSTRATIVE / NON-CONVERGED')
         finally:
             png_path.unlink(missing_ok=True)
             json_path.unlink(missing_ok=True)
