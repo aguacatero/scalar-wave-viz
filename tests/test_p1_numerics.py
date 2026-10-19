@@ -122,14 +122,14 @@ class MaxwellStressContourTests(unittest.TestCase):
         self.assertIn('intersects non-vacuum', str(ctx.exception))
 
     def test_asymmetric_voltage_geometry_produces_nonzero_enclosure_reaction(self):
-        """P1-R1-F3 regression: asymmetric voltages produce demonstrably nonzero enclosure reaction force."""
+        """P1-R1-F3 / P1-R2-F3 regression: asymmetric voltages produce nonzero enclosure reaction with tight residual."""
         cfg = eb.GroundedBoxConfig(
             left_electrode=eb.ElectrodeConfig(center_x_m=-0.008, voltage_v=600.0),
             right_electrode=eb.ElectrodeConfig(center_x_m=0.008, voltage_v=100.0),
             n=81,
         )
         sol = eb.electrode_pair_in_grounded_box(config=cfg)
-        budget = en.evaluate_whole_apparatus_force_budget(sol, tolerance_n_per_m=2e-4)
+        budget = en.evaluate_whole_apparatus_force_budget(sol, tolerance_n_per_m=1e-6)
 
         # Net electrode force is non-zero (asymmetric pull)
         f_elec = budget.left_electrode_fx_n_per_m + budget.right_electrode_fx_n_per_m
@@ -140,30 +140,75 @@ class MaxwellStressContourTests(unittest.TestCase):
         self.assertAlmostEqual(
             budget.enclosure_reaction_fx_n_per_m,
             -f_elec,
-            places=4,
+            places=6,
         )
+
+        # P1-R2-F3: Assert tight bound on actual vector residual (observed ~2.79e-8 N/m)
+        residual = budget.net_electrostatic_force_fx_n_per_m
+        self.assertLess(abs(residual), 1e-7)
+        self.assertLess(abs(residual) / abs(f_elec), 1e-3)  # < 0.1% relative residual
 
         # Full system balances without algebraic cancellation
         self.assertTrue(budget.is_force_balanced_to_tolerance)
 
     def test_force_mesh_convergence(self):
-        """P1-R1-F3 regression: individual Maxwell stress forces converge asymptotically under mesh refinement."""
-        study = en.force_mesh_convergence_study(n_list=(41, 81, 161))
-        self.assertEqual(len(study.rows), 3)
-        self.assertTrue(study.is_converged_to_tolerance)
-        self.assertLess(study.uncertainty_budget_n_per_m, 5e-4)
+        """P1-R1-F3 / P1-R2-F2 regression: all force components converge asymptotically under mesh refinement."""
+        # 1. Symmetric setup (+-500V)
+        study_sym = en.force_mesh_convergence_study(n_list=(41, 81, 161), tolerance_relative_change=0.05)
+        self.assertEqual(len(study_sym.rows), 3)
+        self.assertTrue(study_sym.is_converged_to_tolerance)
+        self.assertLess(study_sym.max_component_relative_change, 0.05)
+        self.assertLess(study_sym.uncertainty_budget_n_per_m, 5e-4)
 
-        # Verify individual forces are non-zero and converge
-        for r in study.rows:
+        for r in study_sym.rows:
             self.assertGreater(r.left_electrode_fx_n_per_m, 0.0)
             self.assertLess(r.right_electrode_fx_n_per_m, 0.0)
+            self.assertLess(abs(r.net_residual_fx_n_per_m), 1e-6)
+
+        # 2. Asymmetric setup (+600V / +100V) evaluating nonzero enclosure reaction convergence
+        cfg_asym = eb.GroundedBoxConfig(
+            left_electrode=eb.ElectrodeConfig(center_x_m=-0.008, voltage_v=600.0),
+            right_electrode=eb.ElectrodeConfig(center_x_m=0.008, voltage_v=100.0),
+        )
+        study_asym = en.force_mesh_convergence_study(
+            n_list=(41, 81, 161),
+            config=cfg_asym,
+            tolerance_relative_change=0.05,
+            tolerance_residual_n_per_m=1e-7,
+        )
+        self.assertTrue(study_asym.is_converged_to_tolerance)
+        self.assertLess(study_asym.max_component_relative_change, 0.05)
+        # Verify enclosure reaction is non-zero and converged
+        self.assertGreater(abs(study_asym.rows[-1].enclosure_reaction_fx_n_per_m), 1e-4)
+        self.assertLess(abs(study_asym.rows[-1].net_residual_fx_n_per_m), 1e-7)
+
+    def test_virtual_work_force_cross_check(self):
+        """P1-R2-F2 regression: independent cross-check comparing Maxwell stress tensor to virtual work (+dU/dx)_V."""
+        cfg = eb.GroundedBoxConfig(n=81)
+        res = en.cross_check_maxwell_stress_with_virtual_work(cfg, electrode='left', tolerance_relative_diff=0.15)
+        self.assertTrue(res.is_consistent_to_tolerance)
+        self.assertLess(res.relative_difference, 0.15)
+        self.assertGreater(res.maxwell_stress_fx_n_per_m, 0.0)
+        self.assertGreater(res.virtual_work_fx_n_per_m, 0.0)
 
     def test_contour_invariance_in_vacuum(self):
-        """P1-R1-F3 regression: Maxwell stress integral is invariant across concentric vacuum loops."""
-        sol = eb.electrode_pair_in_grounded_box(n=81)
-        res = en.contour_invariance_study(sol, electrode='left', margins_m=(0.0018, 0.0024, 0.0030))
-        self.assertTrue(res.is_invariant_to_tolerance)
-        self.assertLess(res.max_relative_variation, 0.01)  # < 1% variation across loops
+        """P1-R1-F3 / P1-R2-F2 regression: Maxwell stress integral is invariant across concentric vacuum loops."""
+        # 1. Electrode contour invariance
+        sol_sym = eb.electrode_pair_in_grounded_box(n=81)
+        res_elec = en.contour_invariance_study(sol_sym, electrode='left', margins_m=(0.0018, 0.0024, 0.0030))
+        self.assertTrue(res_elec.is_invariant_to_tolerance)
+        self.assertLess(res_elec.max_relative_variation, 0.01)  # < 1% variation across loops
+
+        # 2. Enclosure inner boundary contour invariance on asymmetric geometry
+        cfg_asym = eb.GroundedBoxConfig(
+            left_electrode=eb.ElectrodeConfig(center_x_m=-0.008, voltage_v=600.0),
+            right_electrode=eb.ElectrodeConfig(center_x_m=0.008, voltage_v=100.0),
+            n=81,
+        )
+        sol_asym = eb.electrode_pair_in_grounded_box(config=cfg_asym)
+        res_box = en.contour_invariance_study(sol_asym, electrode='enclosure')
+        self.assertTrue(res_box.is_invariant_to_tolerance)
+        self.assertLess(res_box.max_relative_variation, 0.01)  # < 1% variation across enclosure loops
 
 
 if __name__ == '__main__':

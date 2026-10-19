@@ -118,28 +118,51 @@ class PulsePropagationBenchmarkTests(unittest.TestCase):
 
 
 class BoundaryReflectionBenchmarkTests(unittest.TestCase):
-    def test_sponge_boundary_reflection_probe(self):
-        """P1-R1-F2 regression: Probe reflection measurement and smooth interior energy without mask-edge artifacts."""
-        res = sw.benchmark_sponge_reflection_probe(
+    def test_sponge_boundary_reflection_probe_legacy_proxy(self):
+        """P1-R1-F2 / P1-R2-F1 regression: Legacy fixed-window proxy reproduces historical values for audit."""
+        res = sw.fixed_window_late_early_probe_amplitude_proxy(
             grid_size=48, sponge_width=10, max_sigma=3.0, n_steps=70
         )
         self.assertTrue(res.is_absorbed_to_tolerance)
         self.assertLess(res.power_reflection_coefficient, 0.05)
-
-        # Continuous interior energy density must be <= total domain energy (no artificial interface energy)
         self.assertLessEqual(res.final_interior_energy, res.final_total_energy + 1e-12)
-
         # Legacy masked proxy reproduces the reviewer-identified ~2.51% value
         self.assertAlmostEqual(res.masked_proxy_ratio, 0.0251, delta=0.010)
 
+    def test_sponge_boundary_reflection_reference_subtracted(self):
+        """P1-R2-F1 regression: Reference-subtracted reflection measurement with exact pre-arrival isolation."""
+        res = sw.benchmark_sponge_reflection_reference_subtracted(
+            grid_size=40, sponge_width=8, max_sigma=3.0, n_steps=80, ref_grid_size=90, probe_offset=6
+        )
+        self.assertTrue(res.is_absorbed_to_tolerance)
+        self.assertLess(res.power_reflection_coefficient, 0.05)
+        # Pre-arrival difference is bounded by Gaussian tail (< 1e-8) before reflected pulse returns
+        self.assertLess(res.pre_arrival_difference_max, 1e-8)
+
+    def test_sponge_reflection_negative_and_positive_controls(self):
+        """P1-R2-F1 regression: Negative (sigma=0) and positive sponge controls demonstrate selective absorption."""
+        rows = sw.benchmark_sponge_reflection_controls(
+            sigma_list=(0.0, 0.5, 3.0, 15.0), grid_size=40, sponge_width=8, n_steps=80, ref_grid_size=90
+        )
+        ctrl_map = {r.max_sigma: r for r in rows}
+
+        # 1. Negative control: undamped Dirichlet wall (sigma=0) produces strong reflection (> 10%)
+        self.assertGreater(ctrl_map[0.0].power_reflection_coefficient, 0.10)
+
+        # 2. Positive control: design sponge damping (sigma=3.0) suppresses reflection to < 5%
+        self.assertLess(ctrl_map[3.0].power_reflection_coefficient, 0.05)
+
+        # 3. High-sigma control: impedance mismatch at entrance increases reflection compared to optimal sponge
+        self.assertGreater(ctrl_map[15.0].power_reflection_coefficient, ctrl_map[0.5].power_reflection_coefficient)
+
 
 class DiscreteEnergyConservationTests(unittest.TestCase):
-    def test_energy_conservation_in_undamped_medium(self):
-        """P1-C: Discrete wave Hamiltonian is conserved in free space prior to boundary arrival."""
-        nx = 40
+    def test_exact_discrete_leapfrog_energy_conservation(self):
+        """P1-R2-F4 regression: Exact discrete staggered leapfrog Hamiltonian is conserved to machine precision."""
+        nx = 24
         dx = 1.0
         c0 = 1.0
-        dt = 0.85 * dx / (c0 * np.sqrt(3.0))
+        dt = 0.5 * dx / (c0 * np.sqrt(3.0))
 
         c_field = np.full((nx, nx, nx), c0, dtype=float)
         sigma_field = np.zeros_like(c_field)
@@ -147,11 +170,14 @@ class DiscreteEnergyConservationTests(unittest.TestCase):
         coords = np.arange(nx) * dx
         mid = nx // 2
         x0 = float(mid * dx)
-        sigma_pulse = 2.5 * dx
+        sigma_pulse = 2.0 * dx
 
         X, Y, Z = np.meshgrid(coords, coords, coords, indexing='ij')
         r_sq = (X - x0)**2 + (Y - x0)**2 + (Z - x0)**2
         phi_0 = np.exp(-r_sq / (2.0 * sigma_pulse**2))
+        phi_0[0, :, :] = phi_0[-1, :, :] = 0.0
+        phi_0[:, 0, :] = phi_0[:, -1, :] = 0.0
+        phi_0[:, :, 0] = phi_0[:, :, -1] = 0.0
 
         lap_0 = sw.laplacian_3d_clamped(phi_0, dx)
         phi_minus_1 = phi_0 + 0.5 * (dt ** 2) * (c0 ** 2) * lap_0
@@ -159,25 +185,87 @@ class DiscreteEnergyConservationTests(unittest.TestCase):
         phi = phi_0.copy()
         phi_prev = phi_minus_1.copy()
 
-        energies = []
-        for step in range(15):
-            e = sw.compute_discrete_wave_energy(phi, phi_prev, c_field, dt, dx)
-            energies.append(e)
+        phi_1 = sw.step_wave_fdtd(phi, phi_prev, c_field, sigma_field, dt, dx)
+        h_initial = sw.compute_exact_discrete_leapfrog_energy(phi_1, phi, c_field, dt, dx)
+        phi_prev, phi = phi, phi_1
+
+        drifts = []
+        for _ in range(40):
             phi_next = sw.step_wave_fdtd(phi, phi_prev, c_field, sigma_field, dt, dx)
+            h = sw.compute_exact_discrete_leapfrog_energy(phi_next, phi, c_field, dt, dx)
+            drifts.append(abs(h - h_initial) / h_initial)
             phi_prev, phi = phi, phi_next
 
-        e_initial = energies[0]
-        e_final = energies[-1]
-        relative_energy_drift = abs(e_final - e_initial) / e_initial
-        self.assertLess(relative_energy_drift, 0.05)
+        max_drift = max(drifts)
+        self.assertLess(max_drift, 1e-12)  # Exact conservation to machine precision
 
     def test_two_material_undamped_energy_conservation(self):
-        """P1-R1-F4 regression: Discrete Hamiltonian is conserved across a two-medium interface."""
+        """P1-R1-F4 / P1-R2-F4 regression: Exact discrete Hamiltonian conserved across two-medium interface."""
         res = sw.benchmark_two_material_energy_conservation(
             grid_size=36, n_steps=35, c1=1.0, c2=0.60
         )
         self.assertTrue(res.is_conserved_to_tolerance)
-        self.assertLess(res.max_energy_drift_ratio, 0.08)
+        self.assertLess(res.max_discrete_hamiltonian_drift_ratio, 1e-10)
+        self.assertLess(res.max_continuum_diagnostic_drift_ratio, 0.08)
+
+
+class WaveMeshConvergenceAndSourceNormalizationTests(unittest.TestCase):
+    def test_wave_source_dt_independence(self):
+        """P1-R2-F5 regression: Prescribed source injection waveform is invariant under dt refinement."""
+        n = 24
+        dx = 1.0
+        c0 = 1.0
+        c_field = np.full((n, n, n), c0)
+        sigma_field = np.zeros((n, n, n))
+
+        dt1 = 0.5 * dx / (c0 * np.sqrt(3.0))
+        dt2 = dt1 / 2.0
+        steps1 = 30
+        steps2 = 60
+
+        src = (6, 12, 12)
+        obs = (12, 12, 12)
+        omega = 2.0 * np.pi * 0.05
+
+        # Evolve with dt1
+        phi1 = np.zeros((n, n, n))
+        phi1_prev = np.zeros((n, n, n))
+        trace1 = []
+        for s in range(steps1):
+            pn = sw.step_wave_fdtd(phi1, phi1_prev, c_field, sigma_field, dt1, dx)
+            pn[src] = np.sin(omega * (s + 1) * dt1)
+            phi1_prev, phi1 = phi1, pn
+            trace1.append(float(phi1[obs]))
+
+        # Evolve with dt2
+        phi2 = np.zeros((n, n, n))
+        phi2_prev = np.zeros((n, n, n))
+        trace2 = []
+        for s in range(steps2):
+            pn = sw.step_wave_fdtd(phi2, phi2_prev, c_field, sigma_field, dt2, dx)
+            pn[src] = np.sin(omega * (s + 1) * dt2)
+            phi2_prev, phi2 = phi2, pn
+            trace2.append(float(phi2[obs]))
+
+        p1 = max(trace1)
+        p2 = max(trace2)
+        rel_diff = abs(p2 - p1) / p1 if p1 > 0 else 0.0
+        self.assertLess(rel_diff, 0.01)  # < 1% difference under dt halving (observed 0.056%)
+
+    def test_wave_grid_convergence_second_order(self):
+        """P1-R2-F5 regression: 3D wave solver exhibits asymptotic second-order convergence rate p ~= 2.0."""
+        res = sw.benchmark_wave_grid_convergence(n_list=(17, 33, 65), T=0.5, c0=1.0, tolerance_min_order=1.70)
+        self.assertTrue(res.is_second_order_converged)
+        for p in res.observed_orders:
+            self.assertGreaterEqual(p, 1.70)
+            self.assertLessEqual(p, 2.30)
+
+    def test_two_material_interface_transmission(self):
+        """P1-R2-F5 regression: Pulse partially transmits into second medium with consistent amplitudes."""
+        res = sw.benchmark_two_material_interface_transmission(grid_size=48, c1=1.0, c2=0.6, n_steps=60)
+        self.assertTrue(res.is_consistent)
+        self.assertGreater(res.transmitted_peak, 0.0)
+        self.assertLess(res.transmitted_peak, res.incident_peak)
 
 
 class NotebookIntegrationTests(unittest.TestCase):
