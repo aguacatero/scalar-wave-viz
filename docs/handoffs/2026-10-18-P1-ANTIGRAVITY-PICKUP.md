@@ -5,6 +5,7 @@
 - Repository: https://github.com/aguacatero/scalar-wave-viz
 - Tracker: [Issue #6](https://github.com/aguacatero/scalar-wave-viz/issues/6)
 - Branch: `p1-numerics-force-accounting-2026-10-18`; base: `main`
+- **Current draft PR: [#10](https://github.com/aguacatero/scalar-wave-viz/pull/10)** — initialized with handoff/governance only; no P1 implementation or validation yet.
 - P0 merged [PR #5](https://github.com/aguacatero/scalar-wave-viz/pull/5) as merge commit `174c6b895a0c2ec416b6d46ab9e0835b14a8cb49` on 2026-10-18 (Pacific)
 - Independently accepted P0 implementation code SHA: `57067164b47d7d374a1d7bb1c8ce00bb79aa07f8` — [R8 scientific acceptance](https://github.com/aguacatero/scalar-wave-viz/pull/5#pullrequestreview-5566614469), [35-test CI](https://github.com/aguacatero/scalar-wave-viz/actions/runs/39187698432), [sign-off ledger](2026-10-18-P0-CHATGPT-R8-ACCEPTED.md).
 - Next milestone: P1 **only**. P2 patent FIGS. 4–8 model is reserved for [Issue #7](https://github.com/aguacatero/scalar-wave-viz/issues/7) after P1's independent acceptance.
