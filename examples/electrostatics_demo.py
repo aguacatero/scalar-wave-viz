@@ -4,6 +4,7 @@ From repository root: python examples/electrostatics_demo.py
 """
 from __future__ import annotations
 
+import functools
 import json
 import os
 from pathlib import Path
@@ -306,42 +307,7 @@ def generate_manifest(
                     'net_modeled_force_fy_n_per_m': float(en.evaluate_whole_apparatus_force_budget(result_2d).net_electrostatic_force_fy_n_per_m),
                     'is_force_balanced': bool(en.evaluate_whole_apparatus_force_budget(result_2d).is_force_balanced_to_tolerance),
                     'unmodeled_reaction_note': en.evaluate_whole_apparatus_force_budget(result_2d).unmodeled_reaction_explanation,
-                    'force_mesh_convergence_study': (lambda f_study: {
-                        'description': 'Mesh convergence of individual Maxwell stress forces and net balance residual across resolutions',
-                        'parameters': {'n_list': [41, 81, 161], 'tolerance_relative_change': 0.05, 'tolerance_residual_n_per_m': 1e-6},
-                        'rows': [
-                            {
-                                'n': r.n,
-                                'grid_spacing_m': r.grid_spacing_m,
-                                'left_electrode_fx_n_per_m': r.left_electrode_fx_n_per_m,
-                                'right_electrode_fx_n_per_m': r.right_electrode_fx_n_per_m,
-                                'enclosure_reaction_fx_n_per_m': r.enclosure_reaction_fx_n_per_m,
-                                'net_residual_fx_n_per_m': r.net_residual_fx_n_per_m,
-                                'relative_change_left_to_prev': r.relative_change_left_to_prev,
-                                'relative_change_right_to_prev': r.relative_change_right_to_prev,
-                                'relative_change_box_to_prev': r.relative_change_box_to_prev,
-                                'max_relative_change_to_prev': r.max_relative_change_to_prev,
-                            }
-                            for r in f_study.rows
-                        ],
-                        'observed_order_left_electrode': f_study.observed_order_left_electrode,
-                        'observed_order_right_electrode': f_study.observed_order_right_electrode,
-                        'observed_order_enclosure': f_study.observed_order_enclosure,
-                        'max_component_relative_change': f_study.max_component_relative_change,
-                        'uncertainty_budget_n_per_m': f_study.uncertainty_budget_n_per_m,
-                        'is_converged_to_tolerance': f_study.is_converged_to_tolerance,
-                    })(en.force_mesh_convergence_study((41, 81, 161), config=active_config)),
-                    'virtual_work_crosscheck': (lambda vw: {
-                        'description': 'Independent cross-check comparing Maxwell stress tensor force to virtual work (+dU/dx)_V at constant potential',
-                        'electrode': 'left',
-                        'n': vw.n,
-                        'delta_x_m': vw.delta_x_m,
-                        'maxwell_stress_fx_n_per_m': vw.maxwell_stress_fx_n_per_m,
-                        'virtual_work_fx_n_per_m': vw.virtual_work_fx_n_per_m,
-                        'relative_difference': vw.relative_difference,
-                        'is_consistent_to_tolerance': vw.is_consistent_to_tolerance,
-                        'diagnostic_note': vw.diagnostic_note,
-                    })(en.cross_check_maxwell_stress_with_virtual_work(active_config, electrode='left')),
+                    **_get_cached_force_sub_studies(active_config),
                     'contour_invariance_study': {
                         'description': 'Demonstration of path independence of Maxwell stress in vacuum across concentric loops',
                         'contour_margins_m': en.contour_invariance_study(result_2d, electrode='left').contour_margins_m,
@@ -349,55 +315,6 @@ def generate_manifest(
                         'max_relative_variation': en.contour_invariance_study(result_2d, electrode='left').max_relative_variation,
                         'is_invariant_to_tolerance': en.contour_invariance_study(result_2d, electrode='left').is_invariant_to_tolerance,
                     },
-                    'asymmetric_voltage_demonstration': (lambda b, asym_study: {
-                        'description': 'Non-trivial whole-apparatus force balance with unequal voltages (+600V, +100V) producing nonzero box reaction',
-                        'parameters': {
-                            'left_electrode_voltage_v': 600.0,
-                            'right_electrode_voltage_v': 100.0,
-                            'box_width_m': active_config.box_width_m,
-                        },
-                        'n81_results': {
-                            'left_electrode_fx_n_per_m': float(b.left_electrode_fx_n_per_m),
-                            'right_electrode_fx_n_per_m': float(b.right_electrode_fx_n_per_m),
-                            'enclosure_reaction_fx_n_per_m': float(b.enclosure_reaction_fx_n_per_m),
-                            'net_residual_fx_n_per_m': float(b.net_electrostatic_force_fx_n_per_m),
-                            'relative_residual': float(abs(b.net_electrostatic_force_fx_n_per_m) / abs(b.enclosure_reaction_fx_n_per_m)),
-                            'is_force_balanced': bool(b.is_force_balanced_to_tolerance),
-                        },
-                        'asymmetric_mesh_convergence': [
-                            {
-                                'n': r.n,
-                                'grid_spacing_m': r.grid_spacing_m,
-                                'left_electrode_fx_n_per_m': r.left_electrode_fx_n_per_m,
-                                'right_electrode_fx_n_per_m': r.right_electrode_fx_n_per_m,
-                                'enclosure_reaction_fx_n_per_m': r.enclosure_reaction_fx_n_per_m,
-                                'net_residual_fx_n_per_m': r.net_residual_fx_n_per_m,
-                                'relative_change_left_to_prev': r.relative_change_left_to_prev,
-                                'relative_change_box_to_prev': r.relative_change_box_to_prev,
-                                'max_relative_change_to_prev': r.max_relative_change_to_prev,
-                            }
-                            for r in asym_study.rows
-                        ],
-                        'asymmetric_enclosure_reaction_converged': asym_study.is_converged_to_tolerance,
-                    })(
-                        en.evaluate_whole_apparatus_force_budget(
-                            electrode_pair_in_grounded_box(config=GroundedBoxConfig(
-                                left_electrode=ElectrodeConfig(center_x_m=-0.008, voltage_v=600.0),
-                                right_electrode=ElectrodeConfig(center_x_m=0.008, voltage_v=100.0),
-                                n=81,
-                            )),
-                            tolerance_n_per_m=1e-6,
-                        ),
-                        en.force_mesh_convergence_study(
-                            (41, 81, 161),
-                            config=GroundedBoxConfig(
-                                left_electrode=ElectrodeConfig(center_x_m=-0.008, voltage_v=600.0),
-                                right_electrode=ElectrodeConfig(center_x_m=0.008, voltage_v=100.0),
-                            ),
-                            tolerance_relative_change=0.05,
-                            tolerance_residual_n_per_m=1e-7,
-                        ),
-                    ),
                 },
             },
             'case_2_parallel_plate_1d': {
@@ -422,136 +339,8 @@ def generate_manifest(
                 },
                 'virtual_work_crosscheck': vw_check,
             },
-            'p1_analytic_convergence_benchmarks': {
-                'description': 'P1-A independent analytic harmonic benchmarks and enclosure sensitivity studies',
-                'cubic_harmonic_polynomial_benchmark': [
-                    {
-                        'n': r.n,
-                        'grid_spacing_m': r.grid_spacing_m,
-                        'max_potential_error_v': r.max_potential_error_v,
-                        'max_discrete_residual_v': r.max_discrete_residual_v,
-                        'is_exact_to_tolerance': r.is_exact_to_tolerance,
-                    }
-                    for r in en.harmonic_polynomial_benchmark((21, 41, 81, 161), box_width_m=active_config.box_width_m)
-                ],
-                'smooth_harmonic_trig_convergence': [
-                    {
-                        'n': r.n,
-                        'grid_spacing_m': r.grid_spacing_m,
-                        'max_potential_error_v': r.max_potential_error_v,
-                        'l2_potential_error_v': r.l2_potential_error_v,
-                        'max_field_error_v_per_m': r.max_field_error_v_per_m,
-                        'observed_order_potential': r.observed_order_potential,
-                        'observed_order_field': r.observed_order_field,
-                    }
-                    for r in en.harmonic_trig_benchmark((21, 41, 81, 161), box_width_m=active_config.box_width_m)
-                ],
-                'enclosure_size_sensitivity_study': [
-                    {
-                        'box_width_m': r.box_width_m,
-                        'n': r.n,
-                        'midpoint_ex_v_per_m': r.midpoint_ex_v_per_m,
-                        'max_outer_wall_field_v_per_m': r.max_outer_wall_field_v_per_m,
-                    }
-                    for r in en.enclosure_size_sensitivity_study((0.03, 0.04, 0.06, 0.08))
-                ],
-            },
-            'p1_3d_scalar_wave_numerics_audit': {
-                'description': 'P1-C 3D scalar wave numerics, CFL stability, energy conservation, and sponge absorption benchmarks',
-                'cfl_standard': 'dt = 0.85 * dx / (c * sqrt(3)) <= 1/sqrt(3)',
-                'sponge_boundary_absorption': 'Quadratic damping conductivity layer sigma(d) = max_sigma * (d/w)^2',
-                'energy_density_units': 'arbitrary_energy_units (dimensionless toy field model, not Joules)',
-                'pulse_propagation_benchmark': {
-                    'description': 'Pulse propagation velocity tracking centroid along 3D axis',
-                    'parameters': {'grid_size': 40, 'n_steps': 20, 'c_m_per_s': 1.0, 'tolerance': 0.05},
-                    'n_steps': sw.benchmark_pulse_propagation_speed(40, 20).n_steps,
-                    'dt_s': sw.benchmark_pulse_propagation_speed(40, 20).dt_s,
-                    'theoretical_distance_m': sw.benchmark_pulse_propagation_speed(40, 20).theoretical_distance_m,
-                    'measured_distance_m': sw.benchmark_pulse_propagation_speed(40, 20).measured_distance_m,
-                    'relative_speed_error': sw.benchmark_pulse_propagation_speed(40, 20).relative_speed_error,
-                    'is_accurate_to_tolerance': sw.benchmark_pulse_propagation_speed(40, 20).is_accurate_to_tolerance,
-                },
-                'sponge_boundary_reflection_reference_subtracted_benchmark': (lambda res: {
-                    'description': 'Reference-subtracted reflection measurement with exact pre-arrival time isolation (P1-R2-F1)',
-                    'parameters': {
-                        'grid_size': res.grid_size,
-                        'sponge_width': res.sponge_width,
-                        'max_sigma': res.max_sigma,
-                        'n_steps': res.n_steps,
-                        'ref_grid_size': 90,
-                        'probe_offset': 6,
-                        'tolerance_power_reflection': 0.05,
-                    },
-                    'incident_peak_amplitude': res.incident_peak_amplitude,
-                    'reflected_peak_amplitude': res.reflected_peak_amplitude,
-                    'amplitude_reflection_coefficient': res.amplitude_reflection_coefficient,
-                    'power_reflection_coefficient': res.power_reflection_coefficient,
-                    'pre_arrival_difference_max': res.pre_arrival_difference_max,
-                    'is_absorbed_to_tolerance': res.is_absorbed_to_tolerance,
-                    'diagnostic_note': res.diagnostic_note,
-                })(sw.benchmark_sponge_reflection_reference_subtracted(40, 8, max_sigma=3.0, n_steps=80)),
-                'sponge_absorption_control_sweep': [
-                    {
-                        'max_sigma': r.max_sigma,
-                        'reflected_peak': r.reflected_peak,
-                        'amplitude_reflection_coefficient': r.amplitude_reflection_coefficient,
-                        'power_reflection_coefficient': r.power_reflection_coefficient,
-                        'description': r.description,
-                    }
-                    for r in sw.benchmark_sponge_reflection_controls((0.0, 0.5, 1.5, 3.0, 15.0), grid_size=40, sponge_width=8, n_steps=80)
-                ],
-                'fixed_window_late_early_probe_amplitude_proxy': (lambda res: {
-                    'description': 'Fixed-window late/early probe amplitude proxy (legacy metric, retained for audit comparison)',
-                    'parameters': {'grid_size': 48, 'sponge_width': 10, 'max_sigma': 3.0, 'n_steps': 70, 'arrival_window': 25},
-                    'incident_peak_amplitude': res.incident_peak_amplitude,
-                    'reflected_peak_amplitude': res.reflected_peak_amplitude,
-                    'amplitude_reflection_coefficient': res.amplitude_reflection_coefficient,
-                    'power_reflection_coefficient': res.power_reflection_coefficient,
-                    'initial_total_energy': res.initial_total_energy,
-                    'final_interior_energy': res.final_interior_energy,
-                    'interior_energy_retention_ratio': res.interior_energy_retention_ratio,
-                    'legacy_masked_proxy_ratio': res.masked_proxy_ratio,
-                    'is_absorbed_to_tolerance': res.is_absorbed_to_tolerance,
-                    'epistemic_note': 'Measures outgoing pulse tail at step 25 without reference subtraction (~3.2% power ratio for all sigma).',
-                })(sw.fixed_window_late_early_probe_amplitude_proxy(48, 10, max_sigma=3.0, n_steps=70)),
-                'two_material_energy_conservation_benchmark': (lambda res: {
-                    'description': 'Long-time discrete Hamiltonian conservation across c1=1.0 -> c2=0.6 step interface (sigma=0)',
-                    'parameters': {'grid_size': 36, 'n_steps': 35, 'dx_m': 1.0, 'c1': 1.0, 'c2': 0.60, 'courant_factor': 0.85, 'tolerance_drift': 0.08},
-                    'initial_energy': res.initial_energy,
-                    'final_energy': res.final_energy,
-                    'max_discrete_hamiltonian_drift_ratio': res.max_discrete_hamiltonian_drift_ratio,
-                    'max_continuum_diagnostic_drift_ratio': res.max_continuum_diagnostic_drift_ratio,
-                    'is_conserved_to_tolerance': res.is_conserved_to_tolerance,
-                    'diagnostic_note': res.diagnostic_note,
-                })(sw.benchmark_two_material_energy_conservation(36, 35)),
-                'wave_grid_convergence_benchmark': (lambda res: {
-                    'description': 'Spatial and temporal second-order convergence against exact 3D standing analytical mode',
-                    'parameters': {'n_list': [17, 33, 65], 'T_s': 0.5, 'c0': 1.0, 'tolerance_min_order': 1.70},
-                    'rows': [
-                        {'n': r.n, 'dx': r.dx, 'dt': r.dt, 'n_steps': r.n_steps, 'linf_error': r.linf_error}
-                        for r in res.rows
-                    ],
-                    'observed_orders': res.observed_orders,
-                    'is_second_order_converged': res.is_second_order_converged,
-                    'diagnostic_note': res.diagnostic_note,
-                })(sw.benchmark_wave_grid_convergence((17, 33, 65))),
-                'materials_library_audit': [
-                    {
-                        'material': a.material_name,
-                        'wave_speed': a.wave_speed,
-                        'points_per_wavelength': a.points_per_wavelength,
-                        'status': a.status,
-                        'epistemic_label': a.epistemic_label,
-                        'diagnostic_note': a.diagnostic_note,
-                    }
-                    for a in [
-                        sw.audit_wavelength_resolution('Air (baseline)', 1.00),
-                        sw.audit_wavelength_resolution('Bismuth', 0.55),
-                        sw.audit_wavelength_resolution('Element 115 — Moscovium', 0.15),
-                        sw.audit_wavelength_resolution('Exotic metamaterial', 0.04),
-                    ]
-                ],
-            },
+            'p1_analytic_convergence_benchmarks': _get_cached_analytic_benchmarks(float(active_config.box_width_m)),
+            'p1_3d_scalar_wave_numerics_audit': _get_cached_wave_audit(),
         },
         'disclaimer': (
             'Conventional electrostatics and mathematical wave baseline. No anomalous thrust model. '
@@ -559,6 +348,511 @@ def generate_manifest(
         ),
     }
     return manifest
+
+
+@functools.lru_cache(maxsize=8)
+def _get_cached_force_sub_studies(active_config: GroundedBoxConfig) -> dict:
+    """Compute and cache deterministic P1 force convergence and virtual-work sub-studies for active_config."""
+    f_study = en.force_mesh_convergence_study((41, 81, 161), config=active_config)
+    vw = en.cross_check_maxwell_stress_with_virtual_work(active_config, electrode='left')
+    vw_sym = en.virtual_work_convergence_and_sensitivity_study(active_config, n_list=(81, 161))
+    vw_asym = en.virtual_work_convergence_and_sensitivity_study(
+        GroundedBoxConfig(
+            box_width_m=active_config.box_width_m,
+            left_electrode=ElectrodeConfig(center_x_m=-0.008, voltage_v=600.0),
+            right_electrode=ElectrodeConfig(center_x_m=0.008, voltage_v=100.0),
+        ),
+        n_list=(81, 161),
+    )
+    b_asym = en.evaluate_whole_apparatus_force_budget(
+        electrode_pair_in_grounded_box(config=GroundedBoxConfig(
+            box_width_m=active_config.box_width_m,
+            left_electrode=ElectrodeConfig(center_x_m=-0.008, voltage_v=600.0),
+            right_electrode=ElectrodeConfig(center_x_m=0.008, voltage_v=100.0),
+            n=81,
+        )),
+        tolerance_n_per_m=1e-6,
+    )
+    asym_study = en.force_mesh_convergence_study(
+        (41, 81, 161),
+        config=GroundedBoxConfig(
+            box_width_m=active_config.box_width_m,
+            left_electrode=ElectrodeConfig(center_x_m=-0.008, voltage_v=600.0),
+            right_electrode=ElectrodeConfig(center_x_m=0.008, voltage_v=100.0),
+        ),
+        tolerance_relative_change=0.05,
+        tolerance_residual_n_per_m=1e-7,
+    )
+    off_study = en.force_mesh_convergence_study(
+        (41, 81, 161),
+        config=GroundedBoxConfig(
+            box_width_m=active_config.box_width_m,
+            left_electrode=ElectrodeConfig(center_x_m=-0.008, center_y_m=0.004, radius_m=0.003, voltage_v=600.0),
+            right_electrode=ElectrodeConfig(center_x_m=0.008, center_y_m=-0.002, radius_m=0.003, voltage_v=-400.0),
+        ),
+        tolerance_relative_change=0.05,
+        tolerance_residual_n_per_m=1e-7,
+    )
+    return {
+        'force_mesh_convergence_study': {
+            'description': 'Full-vector 6-component mesh convergence of Maxwell stress forces and 2D net balance residual across resolutions (P1-R3-F1)',
+            'parameters': {
+                'n_list': [41, 81, 161],
+                'tolerance_relative_change': 0.05,
+                'tolerance_abs_change_n_per_m': 5e-4,
+                'tolerance_near_zero_n_per_m': 1e-6,
+                'tolerance_residual_n_per_m': 1e-6,
+            },
+            'rows': [
+                {
+                    'n': r.n,
+                    'grid_spacing_m': r.grid_spacing_m,
+                    'left_electrode_fx_n_per_m': r.left_electrode_fx_n_per_m,
+                    'left_electrode_fy_n_per_m': r.left_electrode_fy_n_per_m,
+                    'right_electrode_fx_n_per_m': r.right_electrode_fx_n_per_m,
+                    'right_electrode_fy_n_per_m': r.right_electrode_fy_n_per_m,
+                    'enclosure_reaction_fx_n_per_m': r.enclosure_reaction_fx_n_per_m,
+                    'enclosure_reaction_fy_n_per_m': r.enclosure_reaction_fy_n_per_m,
+                    'net_residual_fx_n_per_m': r.net_residual_fx_n_per_m,
+                    'net_residual_fy_n_per_m': r.net_residual_fy_n_per_m,
+                    'net_residual_magnitude_n_per_m': r.net_residual_magnitude_n_per_m,
+                    'relative_change_left_to_prev': r.relative_change_left_to_prev,
+                    'relative_change_right_to_prev': r.relative_change_right_to_prev,
+                    'relative_change_box_to_prev': r.relative_change_box_to_prev,
+                    'max_relative_change_to_prev': r.max_relative_change_to_prev,
+                    'max_abs_change_to_prev_n_per_m': r.max_abs_change_to_prev,
+                }
+                for r in f_study.rows
+            ],
+            'component_assessments': {
+                k: {
+                    'regime': v.regime,
+                    'finest_value_n_per_m': v.finest_value_n_per_m,
+                    'penultimate_value_n_per_m': v.penultimate_value_n_per_m,
+                    'last_step_abs_diff_n_per_m': v.last_step_abs_diff_n_per_m,
+                    'last_step_relative_change': v.last_step_relative_change,
+                    'observed_order': v.observed_order,
+                    'is_converged': v.is_converged,
+                }
+                for k, v in f_study.component_assessments.items()
+            },
+            'observed_order_left_electrode': f_study.observed_order_left_electrode,
+            'observed_order_right_electrode': f_study.observed_order_right_electrode,
+            'observed_order_enclosure': f_study.observed_order_enclosure,
+            'max_component_relative_change': f_study.max_component_relative_change,
+            'per_component_last_step_diff_n_per_m': f_study.per_component_last_step_diff_n_per_m,
+            'max_component_last_step_diff_n_per_m': f_study.max_component_last_step_diff_n_per_m,
+            'max_vector_last_step_diff_n_per_m': f_study.max_vector_last_step_diff_n_per_m,
+            'left_fx_last_step_diff_n_per_m': f_study.left_fx_last_step_diff_n_per_m,
+            'discretization_error_note': f_study.discretization_error_note,
+            'is_converged_to_tolerance': f_study.is_converged_to_tolerance,
+        },
+        'virtual_work_crosscheck': {
+            'description': 'Independent cross-check comparing Maxwell stress tensor force to virtual work (+dU/dx)_V at constant potential',
+            'electrode': 'left',
+            'n': vw.n,
+            'delta_x_m': vw.delta_x_m,
+            'maxwell_stress_fx_n_per_m': vw.maxwell_stress_fx_n_per_m,
+            'virtual_work_fx_n_per_m': vw.virtual_work_fx_n_per_m,
+            'relative_difference': vw.relative_difference,
+            'is_consistent_to_tolerance': vw.is_consistent_to_tolerance,
+            'epistemic_limitation_note': vw.epistemic_limitation_note,
+            'diagnostic_note': vw.diagnostic_note,
+        },
+        'virtual_work_multi_resolution_and_sensitivity_study': {
+            'description': 'Multi-resolution (n=81, 161) and step-size (1h vs 2h) virtual-work cross-check for both electrodes on symmetric and asymmetric setups (P1-R3-F2)',
+            'symmetric_setup': {
+                'rows': [
+                    {
+                        'n': r.n,
+                        'grid_spacing_m': r.grid_spacing_m,
+                        'left_mst_fx_n_per_m': r.left_mst_fx_n_per_m,
+                        'left_vw_fx_1h_n_per_m': r.left_vw_fx_1h_n_per_m,
+                        'left_vw_fx_2h_n_per_m': r.left_vw_fx_2h_n_per_m,
+                        'left_rel_diff_1h': r.left_rel_diff_1h,
+                        'left_rel_diff_2h': r.left_rel_diff_2h,
+                        'left_step_sensitivity_rel': r.left_step_sensitivity_rel,
+                        'left_same_sign': r.left_same_sign,
+                        'right_mst_fx_n_per_m': r.right_mst_fx_n_per_m,
+                        'right_vw_fx_1h_n_per_m': r.right_vw_fx_1h_n_per_m,
+                        'right_vw_fx_2h_n_per_m': r.right_vw_fx_2h_n_per_m,
+                        'right_rel_diff_1h': r.right_rel_diff_1h,
+                        'right_rel_diff_2h': r.right_rel_diff_2h,
+                        'right_step_sensitivity_rel': r.right_step_sensitivity_rel,
+                        'right_same_sign': r.right_same_sign,
+                        'enclosure_mst_fx_n_per_m': r.enclosure_mst_fx_n_per_m,
+                        'net_electrode_mst_fx_n_per_m': r.net_electrode_mst_fx_n_per_m,
+                        'net_electrode_vw_fx_1h_n_per_m': r.net_electrode_vw_fx_1h_n_per_m,
+                        'net_electrode_rel_diff_1h': r.net_electrode_rel_diff_1h,
+                    }
+                    for r in vw_sym.rows
+                ],
+                'left_discrepancy_decreases_with_refinement': vw_sym.left_discrepancy_decreases_with_refinement,
+                'right_discrepancy_decreases_with_refinement': vw_sym.right_discrepancy_decreases_with_refinement,
+                'all_signs_consistent': vw_sym.all_signs_consistent,
+                'is_consistent_to_tolerance': vw_sym.is_consistent_to_tolerance,
+                'epistemic_limitation_note': vw_sym.epistemic_limitation_note,
+                'diagnostic_note': vw_sym.diagnostic_note,
+            },
+            'asymmetric_setup_600v_100v': {
+                'rows': [
+                    {
+                        'n': r.n,
+                        'grid_spacing_m': r.grid_spacing_m,
+                        'left_mst_fx_n_per_m': r.left_mst_fx_n_per_m,
+                        'left_vw_fx_1h_n_per_m': r.left_vw_fx_1h_n_per_m,
+                        'left_vw_fx_2h_n_per_m': r.left_vw_fx_2h_n_per_m,
+                        'left_rel_diff_1h': r.left_rel_diff_1h,
+                        'left_rel_diff_2h': r.left_rel_diff_2h,
+                        'left_step_sensitivity_rel': r.left_step_sensitivity_rel,
+                        'left_same_sign': r.left_same_sign,
+                        'right_mst_fx_n_per_m': r.right_mst_fx_n_per_m,
+                        'right_vw_fx_1h_n_per_m': r.right_vw_fx_1h_n_per_m,
+                        'right_vw_fx_2h_n_per_m': r.right_vw_fx_2h_n_per_m,
+                        'right_rel_diff_1h': r.right_rel_diff_1h,
+                        'right_rel_diff_2h': r.right_rel_diff_2h,
+                        'right_step_sensitivity_rel': r.right_step_sensitivity_rel,
+                        'right_same_sign': r.right_same_sign,
+                        'enclosure_mst_fx_n_per_m': r.enclosure_mst_fx_n_per_m,
+                        'net_electrode_mst_fx_n_per_m': r.net_electrode_mst_fx_n_per_m,
+                        'net_electrode_vw_fx_1h_n_per_m': r.net_electrode_vw_fx_1h_n_per_m,
+                        'net_electrode_rel_diff_1h': r.net_electrode_rel_diff_1h,
+                    }
+                    for r in vw_asym.rows
+                ],
+                'left_discrepancy_decreases_with_refinement': vw_asym.left_discrepancy_decreases_with_refinement,
+                'right_discrepancy_decreases_with_refinement': vw_asym.right_discrepancy_decreases_with_refinement,
+                'all_signs_consistent': vw_asym.all_signs_consistent,
+                'is_consistent_to_tolerance': vw_asym.is_consistent_to_tolerance,
+                'epistemic_limitation_note': vw_asym.epistemic_limitation_note,
+                'diagnostic_note': vw_asym.diagnostic_note,
+            },
+        },
+        'asymmetric_voltage_demonstration': {
+            'description': 'Non-trivial whole-apparatus force balance with unequal voltages (+600V, +100V) producing nonzero box reaction',
+            'parameters': {
+                'left_electrode_voltage_v': 600.0,
+                'right_electrode_voltage_v': 100.0,
+                'box_width_m': active_config.box_width_m,
+            },
+            'n81_results': {
+                'left_electrode_fx_n_per_m': float(b_asym.left_electrode_fx_n_per_m),
+                'left_electrode_fy_n_per_m': float(b_asym.left_electrode_fy_n_per_m),
+                'right_electrode_fx_n_per_m': float(b_asym.right_electrode_fx_n_per_m),
+                'right_electrode_fy_n_per_m': float(b_asym.right_electrode_fy_n_per_m),
+                'enclosure_reaction_fx_n_per_m': float(b_asym.enclosure_reaction_fx_n_per_m),
+                'enclosure_reaction_fy_n_per_m': float(b_asym.enclosure_reaction_fy_n_per_m),
+                'net_residual_fx_n_per_m': float(b_asym.net_electrostatic_force_fx_n_per_m),
+                'net_residual_fy_n_per_m': float(b_asym.net_electrostatic_force_fy_n_per_m),
+                'relative_residual': float(abs(b_asym.net_electrostatic_force_fx_n_per_m) / abs(b_asym.enclosure_reaction_fx_n_per_m)),
+                'is_force_balanced': bool(b_asym.is_force_balanced_to_tolerance),
+            },
+            'asymmetric_mesh_convergence': [
+                {
+                    'n': r.n,
+                    'grid_spacing_m': r.grid_spacing_m,
+                    'left_electrode_fx_n_per_m': r.left_electrode_fx_n_per_m,
+                    'left_electrode_fy_n_per_m': r.left_electrode_fy_n_per_m,
+                    'right_electrode_fx_n_per_m': r.right_electrode_fx_n_per_m,
+                    'right_electrode_fy_n_per_m': r.right_electrode_fy_n_per_m,
+                    'enclosure_reaction_fx_n_per_m': r.enclosure_reaction_fx_n_per_m,
+                    'enclosure_reaction_fy_n_per_m': r.enclosure_reaction_fy_n_per_m,
+                    'net_residual_fx_n_per_m': r.net_residual_fx_n_per_m,
+                    'net_residual_fy_n_per_m': r.net_residual_fy_n_per_m,
+                    'net_residual_magnitude_n_per_m': r.net_residual_magnitude_n_per_m,
+                    'relative_change_left_to_prev': r.relative_change_left_to_prev,
+                    'relative_change_box_to_prev': r.relative_change_box_to_prev,
+                    'max_relative_change_to_prev': r.max_relative_change_to_prev,
+                }
+                for r in asym_study.rows
+            ],
+            'per_component_last_step_diff_n_per_m': asym_study.per_component_last_step_diff_n_per_m,
+            'max_component_last_step_diff_n_per_m': asym_study.max_component_last_step_diff_n_per_m,
+            'asymmetric_enclosure_reaction_converged': asym_study.is_converged_to_tolerance,
+        },
+        'off_axis_y_asymmetric_demonstration': {
+            'description': 'Full-vector 2D force balance and convergence with off-axis y-asymmetric electrodes activating all 6 Fx and Fy components (P1-R3-F1)',
+            'parameters': {
+                'left_electrode': {'center_x_m': -0.008, 'center_y_m': 0.004, 'voltage_v': 600.0},
+                'right_electrode': {'center_x_m': 0.008, 'center_y_m': -0.002, 'voltage_v': -400.0},
+                'n_list': [41, 81, 161],
+            },
+            'rows': [
+                {
+                    'n': r.n,
+                    'left_electrode_fx_n_per_m': r.left_electrode_fx_n_per_m,
+                    'left_electrode_fy_n_per_m': r.left_electrode_fy_n_per_m,
+                    'right_electrode_fx_n_per_m': r.right_electrode_fx_n_per_m,
+                    'right_electrode_fy_n_per_m': r.right_electrode_fy_n_per_m,
+                    'enclosure_reaction_fx_n_per_m': r.enclosure_reaction_fx_n_per_m,
+                    'enclosure_reaction_fy_n_per_m': r.enclosure_reaction_fy_n_per_m,
+                    'net_residual_fx_n_per_m': r.net_residual_fx_n_per_m,
+                    'net_residual_fy_n_per_m': r.net_residual_fy_n_per_m,
+                    'net_residual_magnitude_n_per_m': r.net_residual_magnitude_n_per_m,
+                    'max_relative_change_to_prev': r.max_relative_change_to_prev,
+                }
+                for r in off_study.rows
+            ],
+            'per_component_last_step_diff_n_per_m': off_study.per_component_last_step_diff_n_per_m,
+            'max_component_last_step_diff_n_per_m': off_study.max_component_last_step_diff_n_per_m,
+            'max_vector_last_step_diff_n_per_m': off_study.max_vector_last_step_diff_n_per_m,
+            'is_converged_to_tolerance': off_study.is_converged_to_tolerance,
+        },
+    }
+
+
+@functools.lru_cache(maxsize=8)
+def _get_cached_analytic_benchmarks(box_width_m: float) -> dict:
+    """Compute and cache P1-A analytic harmonic benchmarks and enclosure sensitivity studies."""
+    return {
+        'description': 'P1-A independent analytic harmonic benchmarks and enclosure sensitivity studies',
+        'cubic_harmonic_polynomial_benchmark': [
+            {
+                'n': r.n,
+                'grid_spacing_m': r.grid_spacing_m,
+                'max_potential_error_v': r.max_potential_error_v,
+                'max_discrete_residual_v': r.max_discrete_residual_v,
+                'is_exact_to_tolerance': r.is_exact_to_tolerance,
+            }
+            for r in en.harmonic_polynomial_benchmark((21, 41, 81, 161), box_width_m=box_width_m)
+        ],
+        'smooth_harmonic_trig_convergence': [
+            {
+                'n': r.n,
+                'grid_spacing_m': r.grid_spacing_m,
+                'max_potential_error_v': r.max_potential_error_v,
+                'l2_potential_error_v': r.l2_potential_error_v,
+                'max_field_error_v_per_m': r.max_field_error_v_per_m,
+                'observed_order_potential': r.observed_order_potential,
+                'observed_order_field': r.observed_order_field,
+            }
+            for r in en.harmonic_trig_benchmark((21, 41, 81, 161), box_width_m=box_width_m)
+        ],
+        'enclosure_size_sensitivity_study': [
+            {
+                'box_width_m': r.box_width_m,
+                'n': r.n,
+                'midpoint_ex_v_per_m': r.midpoint_ex_v_per_m,
+                'max_outer_wall_field_v_per_m': r.max_outer_wall_field_v_per_m,
+            }
+            for r in en.enclosure_size_sensitivity_study((0.03, 0.04, 0.06, 0.08))
+        ],
+    }
+
+
+@functools.lru_cache(maxsize=2)
+def _get_cached_wave_audit() -> dict:
+    """Compute and cache deterministic P1-C 3D scalar wave numerics audit section."""
+    res_prop = sw.benchmark_pulse_propagation_speed(40, 20)
+    res_sponge = sw.benchmark_sponge_reflection_reference_subtracted(40, 8, max_sigma=3.0, n_steps=80)
+    ctrl_rows = sw.benchmark_sponge_reflection_controls((0.0, 0.5, 1.5, 3.0, 15.0), grid_size=40, sponge_width=8, n_steps=80)
+    sweep = sw.benchmark_sponge_reflection_parameter_sweep()
+    res_legacy = sw.fixed_window_late_early_probe_amplitude_proxy(48, 10, max_sigma=3.0, n_steps=70)
+    res_energy = sw.benchmark_two_material_energy_conservation(36, 35)
+    slow = sw.benchmark_two_material_interface_transmission(c1=1.0, c2=0.6, dx_list=(1.0, 0.5, 0.25))
+    fast = sw.benchmark_two_material_interface_transmission(c1=0.6, c2=1.0, dx_list=(1.0, 0.5, 0.25))
+    res_grid = sw.benchmark_wave_grid_convergence((17, 33, 65))
+    return {
+        'description': 'P1-C 3D scalar wave numerics, CFL stability, energy conservation, interface reflection/transmission, and sponge absorption benchmarks',
+        'cfl_standard': 'dt = 0.85 * dx / (c * sqrt(3)) <= 1/sqrt(3)',
+        'sponge_boundary_absorption': 'Quadratic damping conductivity layer sigma(d) = max_sigma * (d/w)^2',
+        'energy_density_units': 'arbitrary_energy_units (dimensionless toy field model, not Joules)',
+        'pulse_propagation_benchmark': {
+            'description': 'Pulse propagation velocity tracking centroid along 3D axis',
+            'parameters': {'grid_size': 40, 'n_steps': 20, 'c_m_per_s': 1.0, 'tolerance': 0.05},
+            'n_steps': res_prop.n_steps,
+            'dt_s': res_prop.dt_s,
+            'theoretical_distance_m': res_prop.theoretical_distance_m,
+            'measured_distance_m': res_prop.measured_distance_m,
+            'relative_speed_error': res_prop.relative_speed_error,
+            'is_accurate_to_tolerance': res_prop.is_accurate_to_tolerance,
+        },
+        'sponge_boundary_reflection_reference_subtracted_benchmark': {
+            'description': 'Reference-subtracted reflection measurement with geometric travel-time gating and 3D volume-integrated reflected energy fraction (P1-R2-F1, P1-R3-F4)',
+            'parameters': {
+                'grid_size': res_sponge.grid_size,
+                'sponge_width': res_sponge.sponge_width,
+                'max_sigma': res_sponge.max_sigma,
+                'n_steps': res_sponge.n_steps,
+                'ref_grid_size': res_sponge.ref_grid_size,
+                'probe_offset': 6,
+                'dt_factor': res_sponge.dt_factor,
+                'tolerance_power_reflection': 0.05,
+            },
+            'incident_peak_amplitude': res_sponge.incident_peak_amplitude,
+            'reflected_peak_amplitude': res_sponge.reflected_peak_amplitude,
+            'probe_amplitude_reflection_ratio': res_sponge.probe_amplitude_reflection_ratio,
+            'probe_peak_squared_reflection_proxy': res_sponge.probe_peak_squared_reflection_proxy,
+            'integrated_reflected_energy_fraction': res_sponge.integrated_reflected_energy_fraction,
+            'amplitude_reflection_coefficient': res_sponge.amplitude_reflection_coefficient,
+            'power_reflection_coefficient': res_sponge.power_reflection_coefficient,
+            'geometric_pre_arrival_step': res_sponge.geometric_pre_arrival_step,
+            'geometric_peak_return_step': res_sponge.geometric_peak_return_step,
+            'reference_wall_return_step': res_sponge.reference_wall_return_step,
+            'reference_domain_free_of_wall_return': res_sponge.reference_domain_free_of_wall_return,
+            'pre_arrival_difference_max': res_sponge.pre_arrival_difference_max,
+            'is_absorbed_to_tolerance': res_sponge.is_absorbed_to_tolerance,
+            'metric_definition_note': res_sponge.metric_definition_note,
+            'diagnostic_note': res_sponge.diagnostic_note,
+        },
+        'sponge_absorption_control_sweep': [
+            {
+                'max_sigma': r.max_sigma,
+                'reflected_peak': r.reflected_peak,
+                'probe_amplitude_reflection_ratio': r.probe_amplitude_reflection_ratio,
+                'probe_peak_squared_reflection_proxy': r.probe_peak_squared_reflection_proxy,
+                'integrated_reflected_energy_fraction': r.integrated_reflected_energy_fraction,
+                'amplitude_reflection_coefficient': r.amplitude_reflection_coefficient,
+                'power_reflection_coefficient': r.power_reflection_coefficient,
+                'description': r.description,
+            }
+            for r in ctrl_rows
+        ],
+        'sponge_reflection_parameter_sweep': {
+            'description': 'Parameter sweep verifying reference-domain size invariance, dt refinement stability, and monotonic sponge-width absorption (P1-R3-F4)',
+            'rows': [
+                {
+                    'label': r.label,
+                    'grid_size': r.grid_size,
+                    'sponge_width': r.sponge_width,
+                    'max_sigma': r.max_sigma,
+                    'dt_factor': r.dt_factor,
+                    'n_steps': r.n_steps,
+                    'ref_grid_size': r.ref_grid_size,
+                    'probe_peak_squared_reflection_proxy': r.probe_peak_squared_reflection_proxy,
+                    'integrated_reflected_energy_fraction': r.integrated_reflected_energy_fraction,
+                    'reference_wall_return_step': r.reference_wall_return_step,
+                    'reference_domain_free_of_wall_return': r.reference_domain_free_of_wall_return,
+                }
+                for r in sweep.rows
+            ],
+            'reference_domain_invariance_diff': sweep.reference_domain_invariance_diff,
+            'dt_refinement_relative_diff': sweep.dt_refinement_relative_diff,
+            'monotonic_with_sponge_width': sweep.monotonic_with_sponge_width,
+            'is_sweep_stable': sweep.is_sweep_stable,
+            'diagnostic_note': sweep.diagnostic_note,
+        },
+        'fixed_window_late_early_probe_amplitude_proxy': {
+            'description': 'Fixed-window late/early probe amplitude proxy (legacy metric, retained for audit comparison)',
+            'parameters': {'grid_size': 48, 'sponge_width': 10, 'max_sigma': 3.0, 'n_steps': 70, 'arrival_window': 25},
+            'incident_peak_amplitude': res_legacy.incident_peak_amplitude,
+            'reflected_peak_amplitude': res_legacy.reflected_peak_amplitude,
+            'amplitude_reflection_coefficient': res_legacy.amplitude_reflection_coefficient,
+            'power_reflection_coefficient': res_legacy.power_reflection_coefficient,
+            'initial_total_energy': res_legacy.initial_total_energy,
+            'final_interior_energy': res_legacy.final_interior_energy,
+            'interior_energy_retention_ratio': res_legacy.interior_energy_retention_ratio,
+            'legacy_masked_proxy_ratio': res_legacy.masked_proxy_ratio,
+            'is_absorbed_to_tolerance': res_legacy.is_absorbed_to_tolerance,
+            'epistemic_note': 'Measures outgoing pulse tail at step 25 without reference subtraction (~3.2% power ratio for all sigma).',
+        },
+        'two_material_energy_conservation_benchmark': {
+            'description': 'Long-time discrete Hamiltonian conservation and actual terminal continuum energy across c1=1.0 -> c2=0.6 step interface (P1-R2-F4, P1-R3-F5)',
+            'parameters': {'grid_size': 36, 'n_steps': 35, 'dx_m': 1.0, 'c1': 1.0, 'c2': 0.60, 'courant_factor': 0.85, 'tolerance_drift': 0.08},
+            'initial_energy': res_energy.initial_energy,
+            'final_energy': res_energy.final_energy,
+            'terminal_continuum_signed_drift_ratio': res_energy.terminal_continuum_signed_drift_ratio,
+            'max_discrete_hamiltonian_drift_ratio': res_energy.max_discrete_hamiltonian_drift_ratio,
+            'max_continuum_diagnostic_drift_ratio': res_energy.max_continuum_diagnostic_drift_ratio,
+            'initial_discrete_hamiltonian': res_energy.initial_discrete_hamiltonian,
+            'final_discrete_hamiltonian': res_energy.final_discrete_hamiltonian,
+            'is_conserved_to_tolerance': res_energy.is_conserved_to_tolerance,
+            'diagnostic_note': res_energy.diagnostic_note,
+        },
+        'two_material_interface_transmission_benchmark': {
+            'description': 'Analytical reflection & transmission benchmark across planar two-medium step interface with mesh refinement convergence (P1-R3-F3)',
+            'interface_derivation_note': slow.interface_derivation_note,
+            'high_to_low_speed_c1_1p0_to_c2_0p6': {
+                'c1': slow.c1,
+                'c2': slow.c2,
+                'analytical_r_amp': slow.analytical_r_amp,
+                'analytical_t_amp': slow.analytical_t_amp,
+                'analytical_r_energy': slow.analytical_r_energy,
+                'analytical_t_energy': slow.analytical_t_energy,
+                'measured_r_amp_finest': slow.measured_r_amp,
+                'measured_t_amp_finest': slow.measured_t_amp,
+                'r_amp_abs_error_finest': slow.r_amp_abs_error,
+                't_amp_abs_error_finest': slow.t_amp_abs_error,
+                'measured_energy_partition_sum_finest': slow.measured_energy_partition_sum,
+                'energy_partition_abs_error_finest': slow.energy_partition_abs_error,
+                'errors_decrease_with_refinement': slow.errors_decrease_with_refinement,
+                'is_consistent': slow.is_consistent,
+                'refinement_rows': [
+                    {
+                        'dx': r.dx,
+                        'nx': r.nx,
+                        'n_steps': r.n_steps,
+                        'measured_r_amp': r.measured_r_amp,
+                        'measured_t_amp': r.measured_t_amp,
+                        'r_amp_abs_error': r.r_amp_abs_error,
+                        't_amp_abs_error': r.t_amp_abs_error,
+                        'measured_energy_partition_sum': r.measured_energy_partition_sum,
+                        'energy_partition_abs_error': r.energy_partition_abs_error,
+                    }
+                    for r in slow.refinement_rows
+                ],
+                'diagnostic_note': slow.diagnostic_note,
+            },
+            'low_to_high_speed_c1_0p6_to_c2_1p0': {
+                'c1': fast.c1,
+                'c2': fast.c2,
+                'analytical_r_amp': fast.analytical_r_amp,
+                'analytical_t_amp': fast.analytical_t_amp,
+                'analytical_r_energy': fast.analytical_r_energy,
+                'analytical_t_energy': fast.analytical_t_energy,
+                'measured_r_amp_finest': fast.measured_r_amp,
+                'measured_t_amp_finest': fast.measured_t_amp,
+                'r_amp_abs_error_finest': fast.r_amp_abs_error,
+                't_amp_abs_error_finest': fast.t_amp_abs_error,
+                'measured_energy_partition_sum_finest': fast.measured_energy_partition_sum,
+                'energy_partition_abs_error_finest': fast.energy_partition_abs_error,
+                'errors_decrease_with_refinement': fast.errors_decrease_with_refinement,
+                'is_consistent': fast.is_consistent,
+                'refinement_rows': [
+                    {
+                        'dx': r.dx,
+                        'nx': r.nx,
+                        'n_steps': r.n_steps,
+                        'measured_r_amp': r.measured_r_amp,
+                        'measured_t_amp': r.measured_t_amp,
+                        'r_amp_abs_error': r.r_amp_abs_error,
+                        't_amp_abs_error': r.t_amp_abs_error,
+                        'measured_energy_partition_sum': r.measured_energy_partition_sum,
+                        'energy_partition_abs_error': r.energy_partition_abs_error,
+                    }
+                    for r in fast.refinement_rows
+                ],
+                'diagnostic_note': fast.diagnostic_note,
+            },
+        },
+        'wave_grid_convergence_benchmark': {
+            'description': 'Spatial and temporal second-order convergence against exact 3D standing analytical mode',
+            'parameters': {'n_list': [17, 33, 65], 'T_s': 0.5, 'c0': 1.0, 'tolerance_min_order': 1.70},
+            'rows': [
+                {'n': r.n, 'dx': r.dx, 'dt': r.dt, 'n_steps': r.n_steps, 'linf_error': r.linf_error}
+                for r in res_grid.rows
+            ],
+            'observed_orders': res_grid.observed_orders,
+            'is_second_order_converged': res_grid.is_second_order_converged,
+            'diagnostic_note': res_grid.diagnostic_note,
+        },
+        'materials_library_audit': [
+            {
+                'material': a.material_name,
+                'wave_speed': a.wave_speed,
+                'points_per_wavelength': a.points_per_wavelength,
+                'status': a.status,
+                'epistemic_label': a.epistemic_label,
+                'diagnostic_note': a.diagnostic_note,
+            }
+            for a in [
+                sw.audit_wavelength_resolution('Air (baseline)', 1.00),
+                sw.audit_wavelength_resolution('Bismuth', 0.55),
+                sw.audit_wavelength_resolution('Element 115 — Moscovium', 0.15),
+                sw.audit_wavelength_resolution('Exotic metamaterial', 0.04),
+            ]
+        ],
+    }
 
 
 def render(

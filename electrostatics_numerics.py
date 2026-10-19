@@ -484,6 +484,18 @@ def evaluate_whole_apparatus_force_budget(
 
 
 @dataclass(frozen=True)
+class ComponentConvergenceAssessment:
+    component_name: str
+    finest_value_n_per_m: float
+    penultimate_value_n_per_m: float
+    last_step_abs_diff_n_per_m: float
+    last_step_relative_change: float | None
+    observed_order: float | None
+    regime: str
+    is_converged: bool
+
+
+@dataclass(frozen=True)
 class ForceMeshConvergenceRow:
     n: int
     grid_spacing_m: float
@@ -491,10 +503,28 @@ class ForceMeshConvergenceRow:
     right_electrode_fx_n_per_m: float
     enclosure_reaction_fx_n_per_m: float
     net_residual_fx_n_per_m: float
+    left_electrode_fy_n_per_m: float = 0.0
+    right_electrode_fy_n_per_m: float = 0.0
+    enclosure_reaction_fy_n_per_m: float = 0.0
+    net_residual_fy_n_per_m: float = 0.0
+    net_residual_magnitude_n_per_m: float = 0.0
+    abs_change_left_fx_to_prev: float | None = None
+    abs_change_left_fy_to_prev: float | None = None
+    abs_change_right_fx_to_prev: float | None = None
+    abs_change_right_fy_to_prev: float | None = None
+    abs_change_box_fx_to_prev: float | None = None
+    abs_change_box_fy_to_prev: float | None = None
+    max_abs_change_to_prev: float | None = None
     relative_change_to_prev: float | None = None
     relative_change_left_to_prev: float | None = None
     relative_change_right_to_prev: float | None = None
     relative_change_box_to_prev: float | None = None
+    relative_change_left_fx_to_prev: float | None = None
+    relative_change_left_fy_to_prev: float | None = None
+    relative_change_right_fx_to_prev: float | None = None
+    relative_change_right_fy_to_prev: float | None = None
+    relative_change_box_fx_to_prev: float | None = None
+    relative_change_box_fy_to_prev: float | None = None
     max_relative_change_to_prev: float | None = None
 
 
@@ -504,24 +534,190 @@ class ForceMeshConvergenceStudy:
     observed_order_left_electrode: float | None
     observed_order_right_electrode: float | None
     observed_order_enclosure: float | None
+    observed_orders_by_component: dict[str, float | None]
+    component_assessments: dict[str, ComponentConvergenceAssessment]
+    per_component_last_step_diff_n_per_m: dict[str, float]
+    max_component_last_step_diff_n_per_m: float
+    max_vector_last_step_diff_n_per_m: float
+    left_fx_last_step_diff_n_per_m: float
     is_converged_to_tolerance: bool
     max_component_relative_change: float
-    uncertainty_budget_n_per_m: float
+    finest_net_residual_magnitude_n_per_m: float
+    discretization_error_note: str
     diagnostic_note: str
+
+
+def evaluate_force_convergence_from_rows(
+    rows: Sequence[ForceMeshConvergenceRow],
+    tolerance_relative_change: float = 0.05,
+    tolerance_abs_change_n_per_m: float = 5e-4,
+    tolerance_near_zero_abs_n_per_m: float = 1e-6,
+    significant_force_threshold_n_per_m: float = 1e-6,
+    tolerance_residual_n_per_m: float = 1e-6,
+) -> ForceMeshConvergenceStudy:
+    """Evaluate full-vector 6-component convergence and 2D vector residual gates from mesh rows (P1-R3-F1).
+
+    Examines all six conductor force components (left_fx, left_fy, right_fx, right_fy, box_fx, box_fy)
+    and full 2D net residual vector (net_fx, net_fy, hypot(net_fx, net_fy)).
+    Near-zero components are explicitly gated by absolute change and absolute magnitude bounds
+    rather than being silently skipped.
+    """
+    if len(rows) < 2:
+        raise ValueError('At least 2 mesh levels are required to evaluate force convergence')
+
+    def _calc_order(vals: list[float], h_ratios: float) -> float | None:
+        if len(vals) < 3:
+            return None
+        d1 = abs(vals[-3] - vals[-2])
+        d2 = abs(vals[-2] - vals[-1])
+        if d1 > 1e-12 and d2 > 1e-12:
+            return float(np.log(d1 / d2) / np.log(h_ratios))
+        return None
+
+    h_ratio = rows[-3].grid_spacing_m / rows[-2].grid_spacing_m if len(rows) >= 3 else 2.0
+
+    comp_getters = {
+        'left_fx': lambda r: r.left_electrode_fx_n_per_m,
+        'left_fy': lambda r: r.left_electrode_fy_n_per_m,
+        'right_fx': lambda r: r.right_electrode_fx_n_per_m,
+        'right_fy': lambda r: r.right_electrode_fy_n_per_m,
+        'box_fx': lambda r: r.enclosure_reaction_fx_n_per_m,
+        'box_fy': lambda r: r.enclosure_reaction_fy_n_per_m,
+    }
+
+    orders_by_comp: dict[str, float | None] = {}
+    assessments: dict[str, ComponentConvergenceAssessment] = {}
+    per_comp_diff: dict[str, float] = {}
+    active_rel_changes: list[float] = []
+
+    prev_row = rows[-2]
+    finest_row = rows[-1]
+
+    for name, getter in comp_getters.items():
+        series = [float(getter(r)) for r in rows]
+        order = _calc_order(series, h_ratio) if len(rows) >= 3 else None
+        orders_by_comp[name] = order
+
+        curr_val = float(getter(finest_row))
+        prev_val = float(getter(prev_row))
+        abs_diff = float(abs(curr_val - prev_val))
+        per_comp_diff[name] = abs_diff
+
+        scale = max(abs(curr_val), abs(prev_val))
+        if scale > significant_force_threshold_n_per_m:
+            regime = 'ACTIVE_RELATIVE_AND_ABS'
+            denom = abs(curr_val) if abs(curr_val) > significant_force_threshold_n_per_m else scale
+            rel_change = float(abs_diff / denom)
+            active_rel_changes.append(rel_change)
+            comp_ok = bool(rel_change <= tolerance_relative_change and abs_diff <= tolerance_abs_change_n_per_m)
+        else:
+            regime = 'NEAR_ZERO_ABSOLUTE'
+            rel_change = None
+            comp_ok = bool(
+                abs_diff <= tolerance_near_zero_abs_n_per_m
+                and abs(curr_val) <= tolerance_near_zero_abs_n_per_m
+            )
+
+        assessments[name] = ComponentConvergenceAssessment(
+            component_name=name,
+            finest_value_n_per_m=curr_val,
+            penultimate_value_n_per_m=prev_val,
+            last_step_abs_diff_n_per_m=abs_diff,
+            last_step_relative_change=rel_change,
+            observed_order=order,
+            regime=regime,
+            is_converged=comp_ok,
+        )
+
+    max_rel_change = float(max(active_rel_changes)) if active_rel_changes else 0.0
+    max_comp_diff = float(max(per_comp_diff.values()))
+    left_vec_diff = float(np.hypot(per_comp_diff['left_fx'], per_comp_diff['left_fy']))
+    right_vec_diff = float(np.hypot(per_comp_diff['right_fx'], per_comp_diff['right_fy']))
+    box_vec_diff = float(np.hypot(per_comp_diff['box_fx'], per_comp_diff['box_fy']))
+    max_vec_diff = float(max(left_vec_diff, right_vec_diff, box_vec_diff))
+    left_fx_diff = per_comp_diff['left_fx']
+
+    # Verify algebraic consistency of reported residual with component sums on finest grid
+    expected_res_fx = (
+        finest_row.left_electrode_fx_n_per_m
+        + finest_row.right_electrode_fx_n_per_m
+        + finest_row.enclosure_reaction_fx_n_per_m
+    )
+    expected_res_fy = (
+        finest_row.left_electrode_fy_n_per_m
+        + finest_row.right_electrode_fy_n_per_m
+        + finest_row.enclosure_reaction_fy_n_per_m
+    )
+    res_fx = float(finest_row.net_residual_fx_n_per_m)
+    res_fy = float(finest_row.net_residual_fy_n_per_m)
+    res_mag = float(np.hypot(res_fx, res_fy))
+
+    residual_consistent = bool(
+        abs(res_fx - expected_res_fx) <= 1e-11
+        and abs(res_fy - expected_res_fy) <= 1e-11
+        and abs(finest_row.net_residual_magnitude_n_per_m - res_mag) <= 1e-11
+    )
+    residual_ok = bool(
+        residual_consistent
+        and abs(res_fx) <= tolerance_residual_n_per_m
+        and abs(res_fy) <= tolerance_residual_n_per_m
+        and res_mag <= tolerance_residual_n_per_m
+    )
+
+    all_comps_ok = all(a.is_converged for a in assessments.values())
+    is_ok = bool(all_comps_ok and residual_ok)
+
+    disc_note = (
+        'Two-grid differences |F_k(n_finest) - F_k(n_penultimate)| are reported per component '
+        '(left_fx, left_fy, right_fx, right_fy, box_fx, box_fy) and as max_component_last_step_diff_n_per_m. '
+        'These measure the last mesh-refinement shift on a Cartesian staircase grid and are NOT a formal '
+        'probabilistic uncertainty budget.'
+    )
+
+    note = (
+        f'Full-vector 6-component mesh study across n={[r.n for r in rows]}: '
+        f'F_left=({finest_row.left_electrode_fx_n_per_m:.6e}, {finest_row.left_electrode_fy_n_per_m:.6e}) N/m, '
+        f'F_right=({finest_row.right_electrode_fx_n_per_m:.6e}, {finest_row.right_electrode_fy_n_per_m:.6e}) N/m, '
+        f'F_box=({finest_row.enclosure_reaction_fx_n_per_m:.6e}, {finest_row.enclosure_reaction_fy_n_per_m:.6e}) N/m, '
+        f'Residual=({res_fx:.6e}, {res_fy:.6e}) N/m (|F_res|={res_mag:.6e} N/m). '
+        f'Max active relative shift: {max_rel_change:.2%}, '
+        f'max component last-step diff: {max_comp_diff:.2e} N/m (left_fx diff: {left_fx_diff:.2e} N/m).'
+    )
+
+    return ForceMeshConvergenceStudy(
+        rows=list(rows),
+        observed_order_left_electrode=orders_by_comp['left_fx'],
+        observed_order_right_electrode=orders_by_comp['right_fx'],
+        observed_order_enclosure=orders_by_comp['box_fx'],
+        observed_orders_by_component=orders_by_comp,
+        component_assessments=assessments,
+        per_component_last_step_diff_n_per_m=per_comp_diff,
+        max_component_last_step_diff_n_per_m=max_comp_diff,
+        max_vector_last_step_diff_n_per_m=max_vec_diff,
+        left_fx_last_step_diff_n_per_m=left_fx_diff,
+        is_converged_to_tolerance=is_ok,
+        max_component_relative_change=max_rel_change,
+        finest_net_residual_magnitude_n_per_m=res_mag,
+        discretization_error_note=disc_note,
+        diagnostic_note=note,
+    )
 
 
 def force_mesh_convergence_study(
     n_list: Sequence[int] = (41, 81, 161),
     config: GroundedBoxConfig | None = None,
     tolerance_relative_change: float = 0.05,
+    tolerance_abs_change_n_per_m: float = 5e-4,
+    tolerance_near_zero_abs_n_per_m: float = 1e-6,
+    significant_force_threshold_n_per_m: float = 1e-6,
     tolerance_residual_n_per_m: float = 1e-6,
 ) -> ForceMeshConvergenceStudy:
-    """Evaluate grid convergence of individual Maxwell stress forces and net balance residual.
+    """Evaluate full-vector 6-component grid convergence of Maxwell stress forces and 2D vector residual.
 
-    Resolves P1-R2-F2:
-    - Demonstrates asymptotic convergence of left electrode, right electrode, and enclosure reaction forces.
-    - Evaluates multi-component convergence rather than checking only the left electrode.
-    - Quantifies discretization uncertainty and residual behavior under mesh refinement.
+    Resolves P1-R2-F2 and P1-R3-F1:
+    - Tracks all six conductor force components (left Fx/Fy, right Fx/Fy, enclosure Fx/Fy) and 2D vector residual.
+    - Gates both relative changes for active components and absolute bounds for near-zero components.
+    - Reports per-component convergence and last-step discretization differences honestly.
     """
     cfg = config or GroundedBoxConfig()
     rows: list[ForceMeshConvergenceRow] = []
@@ -537,28 +733,39 @@ def force_mesh_convergence_study(
         budget = evaluate_whole_apparatus_force_budget(sol, tolerance_n_per_m=1e-3)
         h = float(sol.grid_spacing_m)
 
-        rel_left = None
-        rel_right = None
-        rel_box = None
-        rel_max = None
+        res_fx = float(budget.net_electrostatic_force_fx_n_per_m)
+        res_fy = float(budget.net_electrostatic_force_fy_n_per_m)
+        res_mag = float(np.hypot(res_fx, res_fy))
+
+        abs_l_fx = abs_l_fy = abs_r_fx = abs_r_fy = abs_b_fx = abs_b_fy = max_abs = None
+        rel_l_fx = rel_l_fy = rel_r_fx = rel_r_fy = rel_b_fx = rel_b_fy = rel_max = None
+
         if i > 0:
             prev = rows[i - 1]
-            curr_l = budget.left_electrode_fx_n_per_m
-            curr_r = budget.right_electrode_fx_n_per_m
-            curr_b = budget.enclosure_reaction_fx_n_per_m
+            abs_l_fx = float(abs(budget.left_electrode_fx_n_per_m - prev.left_electrode_fx_n_per_m))
+            abs_l_fy = float(abs(budget.left_electrode_fy_n_per_m - prev.left_electrode_fy_n_per_m))
+            abs_r_fx = float(abs(budget.right_electrode_fx_n_per_m - prev.right_electrode_fx_n_per_m))
+            abs_r_fy = float(abs(budget.right_electrode_fy_n_per_m - prev.right_electrode_fy_n_per_m))
+            abs_b_fx = float(abs(budget.enclosure_reaction_fx_n_per_m - prev.enclosure_reaction_fx_n_per_m))
+            abs_b_fy = float(abs(budget.enclosure_reaction_fy_n_per_m - prev.enclosure_reaction_fy_n_per_m))
+            max_abs = float(max(abs_l_fx, abs_l_fy, abs_r_fx, abs_r_fy, abs_b_fx, abs_b_fy))
 
-            comps_rel = []
-            if abs(curr_l) > 1e-6:
-                rel_left = float(abs(curr_l - prev.left_electrode_fx_n_per_m) / abs(curr_l))
-                comps_rel.append(rel_left)
-            if abs(curr_r) > 1e-6:
-                rel_right = float(abs(curr_r - prev.right_electrode_fx_n_per_m) / abs(curr_r))
-                comps_rel.append(rel_right)
-            if abs(curr_b) > 1e-6:
-                rel_box = float(abs(curr_b - prev.enclosure_reaction_fx_n_per_m) / abs(curr_b))
-                comps_rel.append(rel_box)
+            def _rel(curr_v: float, prev_v: float, diff_v: float) -> float | None:
+                scale = max(abs(curr_v), abs(prev_v))
+                if scale > significant_force_threshold_n_per_m:
+                    denom = abs(curr_v) if abs(curr_v) > significant_force_threshold_n_per_m else scale
+                    return float(diff_v / denom)
+                return None
 
-            rel_max = float(max(comps_rel)) if comps_rel else 0.0
+            rel_l_fx = _rel(budget.left_electrode_fx_n_per_m, prev.left_electrode_fx_n_per_m, abs_l_fx)
+            rel_l_fy = _rel(budget.left_electrode_fy_n_per_m, prev.left_electrode_fy_n_per_m, abs_l_fy)
+            rel_r_fx = _rel(budget.right_electrode_fx_n_per_m, prev.right_electrode_fx_n_per_m, abs_r_fx)
+            rel_r_fy = _rel(budget.right_electrode_fy_n_per_m, prev.right_electrode_fy_n_per_m, abs_r_fy)
+            rel_b_fx = _rel(budget.enclosure_reaction_fx_n_per_m, prev.enclosure_reaction_fx_n_per_m, abs_b_fx)
+            rel_b_fy = _rel(budget.enclosure_reaction_fy_n_per_m, prev.enclosure_reaction_fy_n_per_m, abs_b_fy)
+
+            rels = [r for r in (rel_l_fx, rel_l_fy, rel_r_fx, rel_r_fy, rel_b_fx, rel_b_fy) if r is not None]
+            rel_max = float(max(rels)) if rels else 0.0
 
         rows.append(ForceMeshConvergenceRow(
             n=n,
@@ -566,76 +773,88 @@ def force_mesh_convergence_study(
             left_electrode_fx_n_per_m=budget.left_electrode_fx_n_per_m,
             right_electrode_fx_n_per_m=budget.right_electrode_fx_n_per_m,
             enclosure_reaction_fx_n_per_m=budget.enclosure_reaction_fx_n_per_m,
-            net_residual_fx_n_per_m=budget.net_electrostatic_force_fx_n_per_m,
-            relative_change_to_prev=rel_left,
-            relative_change_left_to_prev=rel_left,
-            relative_change_right_to_prev=rel_right,
-            relative_change_box_to_prev=rel_box,
+            net_residual_fx_n_per_m=res_fx,
+            left_electrode_fy_n_per_m=budget.left_electrode_fy_n_per_m,
+            right_electrode_fy_n_per_m=budget.right_electrode_fy_n_per_m,
+            enclosure_reaction_fy_n_per_m=budget.enclosure_reaction_fy_n_per_m,
+            net_residual_fy_n_per_m=res_fy,
+            net_residual_magnitude_n_per_m=res_mag,
+            abs_change_left_fx_to_prev=abs_l_fx,
+            abs_change_left_fy_to_prev=abs_l_fy,
+            abs_change_right_fx_to_prev=abs_r_fx,
+            abs_change_right_fy_to_prev=abs_r_fy,
+            abs_change_box_fx_to_prev=abs_b_fx,
+            abs_change_box_fy_to_prev=abs_b_fy,
+            max_abs_change_to_prev=max_abs,
+            relative_change_to_prev=rel_l_fx,
+            relative_change_left_to_prev=rel_l_fx,
+            relative_change_right_to_prev=rel_r_fx,
+            relative_change_box_to_prev=rel_b_fx,
+            relative_change_left_fx_to_prev=rel_l_fx,
+            relative_change_left_fy_to_prev=rel_l_fy,
+            relative_change_right_fx_to_prev=rel_r_fx,
+            relative_change_right_fy_to_prev=rel_r_fy,
+            relative_change_box_fx_to_prev=rel_b_fx,
+            relative_change_box_fy_to_prev=rel_b_fy,
             max_relative_change_to_prev=rel_max,
         ))
 
-    def _calc_order(vals: list[float], h_ratios: float) -> float | None:
-        if len(vals) < 3:
-            return None
-        d1 = abs(vals[0] - vals[1])
-        d2 = abs(vals[1] - vals[2])
-        if d1 > 1e-12 and d2 > 1e-12:
-            return float(np.log(d1 / d2) / np.log(h_ratios))
-        return None
-
-    order_left = None
-    order_right = None
-    order_box = None
-    if len(rows) >= 3:
-        h_ratio = rows[0].grid_spacing_m / rows[1].grid_spacing_m
-        order_left = _calc_order([r.left_electrode_fx_n_per_m for r in rows], h_ratio)
-        order_right = _calc_order([r.right_electrode_fx_n_per_m for r in rows], h_ratio)
-        order_box = _calc_order([r.enclosure_reaction_fx_n_per_m for r in rows], h_ratio)
-
-    finest_row = rows[-1]
-    max_change = finest_row.max_relative_change_to_prev if finest_row.max_relative_change_to_prev is not None else 0.0
-    res_finest = abs(finest_row.net_residual_fx_n_per_m)
-
-    is_ok = bool(
-        max_change <= tolerance_relative_change
-        and res_finest <= tolerance_residual_n_per_m
-    )
-
-    uncert = float(abs(rows[-1].left_electrode_fx_n_per_m - rows[-2].left_electrode_fx_n_per_m)) if len(rows) >= 2 else 0.0
-
-    note = (
-        f'Mesh study across n={list(n_list)}: '
-        f'F_left={finest_row.left_electrode_fx_n_per_m:.6e} N/m, '
-        f'F_right={finest_row.right_electrode_fx_n_per_m:.6e} N/m, '
-        f'F_box={finest_row.enclosure_reaction_fx_n_per_m:.6e} N/m, '
-        f'Residual={finest_row.net_residual_fx_n_per_m:.6e} N/m. '
-        f'Max component relative shift (penultimate -> finest): {max_change:.2%}, '
-        f'uncertainty budget: {uncert:.2e} N/m. '
-        + (f'Observed orders: p_left={order_left:.2f}, ' if order_left is not None else '')
-        + (f'p_right={order_right:.2f}, ' if order_right is not None else '')
-        + (f'p_box={order_box:.2f}.' if order_box is not None else '')
-    )
-
-    return ForceMeshConvergenceStudy(
+    return evaluate_force_convergence_from_rows(
         rows=rows,
-        observed_order_left_electrode=order_left,
-        observed_order_right_electrode=order_right,
-        observed_order_enclosure=order_box,
-        is_converged_to_tolerance=is_ok,
-        max_component_relative_change=max_change,
-        uncertainty_budget_n_per_m=uncert,
-        diagnostic_note=note,
+        tolerance_relative_change=tolerance_relative_change,
+        tolerance_abs_change_n_per_m=tolerance_abs_change_n_per_m,
+        tolerance_near_zero_abs_n_per_m=tolerance_near_zero_abs_n_per_m,
+        significant_force_threshold_n_per_m=significant_force_threshold_n_per_m,
+        tolerance_residual_n_per_m=tolerance_residual_n_per_m,
     )
 
 
 @dataclass(frozen=True)
 class VirtualWorkCrossCheckResult:
     n: int
+    electrode: str
     delta_x_m: float
     maxwell_stress_fx_n_per_m: float
     virtual_work_fx_n_per_m: float
     relative_difference: float
+    same_sign: bool
     is_consistent_to_tolerance: bool
+    epistemic_limitation_note: str
+    diagnostic_note: str
+
+
+@dataclass(frozen=True)
+class VirtualWorkSensitivityRow:
+    n: int
+    grid_spacing_m: float
+    left_mst_fx_n_per_m: float
+    left_vw_fx_1h_n_per_m: float
+    left_vw_fx_2h_n_per_m: float
+    left_rel_diff_1h: float
+    left_rel_diff_2h: float
+    left_step_sensitivity_rel: float
+    left_same_sign: bool
+    right_mst_fx_n_per_m: float
+    right_vw_fx_1h_n_per_m: float
+    right_vw_fx_2h_n_per_m: float
+    right_rel_diff_1h: float
+    right_rel_diff_2h: float
+    right_step_sensitivity_rel: float
+    right_same_sign: bool
+    enclosure_mst_fx_n_per_m: float
+    net_electrode_mst_fx_n_per_m: float
+    net_electrode_vw_fx_1h_n_per_m: float
+    net_electrode_rel_diff_1h: float
+
+
+@dataclass(frozen=True)
+class VirtualWorkConvergenceAndSensitivityStudy:
+    rows: list[VirtualWorkSensitivityRow]
+    left_discrepancy_decreases_with_refinement: bool
+    right_discrepancy_decreases_with_refinement: bool
+    all_signs_consistent: bool
+    is_consistent_to_tolerance: bool
+    epistemic_limitation_note: str
     diagnostic_note: str
 
 
@@ -643,6 +862,8 @@ def compute_stored_electrostatic_energy(solution: FieldSolution) -> float:
     """Compute total stored electrostatic field energy in 2D vacuum interior (J/m).
 
     U = 0.5 * eps0 * int |E|^2 dx dy
+    Note: Uses masked central-difference field gradients on the uniform grid, which carries
+    O(h) staircase boundary truncation near curved conductor masks.
     """
     eps0 = 8.8541878128e-12
     mask = solution.vacuum_mask
@@ -663,9 +884,55 @@ def compute_virtual_work_force_x(
     delta W_battery = sum V_i delta Q_i = 2 delta U
     F_x = +(dU/dx)_V ~= [U(x0 + dx) - U(x0 - dx)] / (2 * dx)
     Ref: Jackson, Classical Electrodynamics, Sec. 1.11.
+
+    When delta_x_m is an integer multiple k*h of the grid spacing (within 1e-9),
+    translates the discrete electrode mask by exact integer lattice steps (+/- k)
+    to prevent IEEE-754 floating-point tie-breaking on (x - cx)^2 + (y - cy)^2 <= r^2
+    from changing the discrete circle pixel count between +dx and -dx.
     """
-    h = config.box_width_m / (config.n - 1)
+    n = config.n
+    h = config.box_width_m / (n - 1)
     dh = delta_x_m if delta_x_m is not None else h
+    k_shift = int(round(dh / h))
+
+    if k_shift >= 1 and abs(dh - k_shift * h) <= 1e-9 * h:
+        coords = np.linspace(-config.box_width_m / 2.0, config.box_width_m / 2.0, n)
+        x, y = np.meshgrid(coords, coords, indexing='ij')
+        le = config.left_electrode
+        re = config.right_electrode
+        left0 = (x - le.center_x_m)**2 + (y - le.center_y_m)**2 <= le.radius_m**2
+        right0 = (x - re.center_x_m)**2 + (y - re.center_y_m)**2 <= re.radius_m**2
+
+        b_mask = np.zeros((n, n), dtype=bool)
+        b_mask[0, :] = b_mask[-1, :] = True
+        b_mask[:, 0] = b_mask[:, -1] = True
+
+        def _shift_mask(m: np.ndarray, shift: int) -> np.ndarray:
+            out = np.zeros_like(m)
+            if shift > 0:
+                out[shift:, :] = m[:-shift, :]
+            elif shift < 0:
+                out[:shift, :] = m[-shift:, :]
+            else:
+                out[:, :] = m
+            return out
+
+        def _solve_with_shift(shift: int) -> FieldSolution:
+            l_m = _shift_mask(left0, shift) if electrode == 'left' else left0.copy()
+            r_m = _shift_mask(right0, shift) if electrode == 'right' else right0.copy()
+            c_m = l_m | r_m
+            f_m = b_mask | c_m
+            pot = np.zeros((n, n), dtype=float)
+            pot[l_m] = le.voltage_v
+            pot[r_m] = re.voltage_v
+            return solve_dirichlet(f_m, pot, h, conductor_mask=c_m, boundary_mask=b_mask, config=config)
+
+        sol_plus = _solve_with_shift(+k_shift)
+        sol_minus = _solve_with_shift(-k_shift)
+        actual_dh = float(k_shift * h)
+        u_plus = compute_stored_electrostatic_energy(sol_plus)
+        u_minus = compute_stored_electrostatic_energy(sol_minus)
+        return float((u_plus - u_minus) / (2.0 * actual_dh))
 
     elec = config.left_electrode if electrode == 'left' else config.right_electrode
     other = config.right_electrode if electrode == 'left' else config.left_electrode
@@ -715,9 +982,9 @@ def cross_check_maxwell_stress_with_virtual_work(
     config: GroundedBoxConfig | None = None,
     delta_x_m: float | None = None,
     electrode: str = 'left',
-    tolerance_relative_diff: float = 0.25,
+    tolerance_relative_diff: float = 0.20,
 ) -> VirtualWorkCrossCheckResult:
-    """Independent cross-check comparing Maxwell stress tensor force to virtual work (P1-R2-F2)."""
+    """Limited finite-grid electrode-shift virtual-work cross-check against Maxwell stress (P1-R2-F2, P1-R3-F2)."""
     cfg = config or GroundedBoxConfig()
     sol = electrode_pair_in_grounded_box(config=cfg)
     budget = evaluate_whole_apparatus_force_budget(sol)
@@ -727,22 +994,146 @@ def cross_check_maxwell_stress_with_virtual_work(
     vw_f = compute_virtual_work_force_x(cfg, delta_x_m=dh, electrode=electrode)
 
     rel_diff = float(abs(vw_f - mst_f) / abs(mst_f)) if abs(mst_f) > 0 else 0.0
-    is_ok = bool(rel_diff <= tolerance_relative_diff)
+    same_sign = bool(np.sign(vw_f) == np.sign(mst_f))
+    is_ok = bool(same_sign and rel_diff <= tolerance_relative_diff)
+
+    limitation = (
+        'Virtual work is evaluated via lattice-aligned perturbation (+dU/dx)_V of masked central-gradient '
+        'field energy. It carries O(h) staircase boundary truncation near circular electrode masks and '
+        'serves as an electrode-force consistency benchmark, not a direct measurement of outer enclosure wall traction.'
+    )
 
     note = (
-        f'Independent force cross-check on {electrode} electrode (n={cfg.n}): '
-        f'Maxwell stress Fx = {mst_f:.6e} N/m, Virtual work (+dU/dx)_V = {vw_f:.6e} N/m. '
-        f'Relative difference: {rel_diff:.2%} (tolerance: {tolerance_relative_diff:.0%}). '
-        f'Confirms Maxwell stress evaluation against perturbation of stored field energy.'
+        f'Electrode-shift virtual-work benchmark on {electrode} electrode (n={cfg.n}, dx_shift={dh:.4e} m): '
+        f'Maxwell stress Fx = {mst_f:.6e} N/m, Virtual work (+dU/dx)_V = {vw_f:.6e} N/m '
+        f'(same_sign={same_sign}, rel_diff={rel_diff:.2%}, tolerance={tolerance_relative_diff:.0%}).'
     )
 
     return VirtualWorkCrossCheckResult(
         n=cfg.n,
+        electrode=electrode,
         delta_x_m=dh,
         maxwell_stress_fx_n_per_m=mst_f,
         virtual_work_fx_n_per_m=vw_f,
         relative_difference=rel_diff,
+        same_sign=same_sign,
         is_consistent_to_tolerance=is_ok,
+        epistemic_limitation_note=limitation,
+        diagnostic_note=note,
+    )
+
+
+def virtual_work_convergence_and_sensitivity_study(
+    config: GroundedBoxConfig | None = None,
+    n_list: Sequence[int] = (81, 161),
+    tolerance_finest_rel_diff: float = 0.12,
+) -> VirtualWorkConvergenceAndSensitivityStudy:
+    """Evaluate virtual-work cross-check for both electrodes across resolutions and step sizes (P1-R3-F2).
+
+    Evaluates:
+    - Both left and right electrode shifts on symmetric or asymmetric (+600V/+100V) configurations.
+    - Perturbation step-size sensitivity comparing delta_x = 1*h vs delta_x = 2*h.
+    - Convergence of the relative discrepancy between Maxwell stress and virtual work as n increases.
+    """
+    cfg = config or GroundedBoxConfig()
+    rows: list[VirtualWorkSensitivityRow] = []
+
+    for n in n_list:
+        cfg_n = GroundedBoxConfig(
+            n=n,
+            box_width_m=cfg.box_width_m,
+            left_electrode=cfg.left_electrode,
+            right_electrode=cfg.right_electrode,
+        )
+        sol = electrode_pair_in_grounded_box(config=cfg_n)
+        budget = evaluate_whole_apparatus_force_budget(sol)
+        h = float(sol.grid_spacing_m)
+
+        l_mst = float(budget.left_electrode_fx_n_per_m)
+        r_mst = float(budget.right_electrode_fx_n_per_m)
+        b_mst = float(budget.enclosure_reaction_fx_n_per_m)
+
+        l_vw_1h = compute_virtual_work_force_x(cfg_n, delta_x_m=h, electrode='left')
+        l_vw_2h = compute_virtual_work_force_x(cfg_n, delta_x_m=2.0 * h, electrode='left')
+        r_vw_1h = compute_virtual_work_force_x(cfg_n, delta_x_m=h, electrode='right')
+        r_vw_2h = compute_virtual_work_force_x(cfg_n, delta_x_m=2.0 * h, electrode='right')
+
+        l_diff_1h = float(abs(l_vw_1h - l_mst) / abs(l_mst)) if abs(l_mst) > 0 else 0.0
+        l_diff_2h = float(abs(l_vw_2h - l_mst) / abs(l_mst)) if abs(l_mst) > 0 else 0.0
+        l_sens = float(abs(l_vw_2h - l_vw_1h) / abs(l_vw_1h)) if abs(l_vw_1h) > 0 else 0.0
+        l_sign = bool(np.sign(l_vw_1h) == np.sign(l_mst) and np.sign(l_vw_2h) == np.sign(l_mst))
+
+        r_diff_1h = float(abs(r_vw_1h - r_mst) / abs(r_mst)) if abs(r_mst) > 0 else 0.0
+        r_diff_2h = float(abs(r_vw_2h - r_mst) / abs(r_mst)) if abs(r_mst) > 0 else 0.0
+        r_sens = float(abs(r_vw_2h - r_vw_1h) / abs(r_vw_1h)) if abs(r_vw_1h) > 0 else 0.0
+        r_sign = bool(np.sign(r_vw_1h) == np.sign(r_mst) and np.sign(r_vw_2h) == np.sign(r_mst))
+
+        net_mst = float(l_mst + r_mst)
+        net_vw_1h = float(l_vw_1h + r_vw_1h)
+        net_diff_1h = float(abs(net_vw_1h - net_mst) / abs(net_mst)) if abs(net_mst) > 1e-9 else 0.0
+
+        rows.append(VirtualWorkSensitivityRow(
+            n=n,
+            grid_spacing_m=h,
+            left_mst_fx_n_per_m=l_mst,
+            left_vw_fx_1h_n_per_m=l_vw_1h,
+            left_vw_fx_2h_n_per_m=l_vw_2h,
+            left_rel_diff_1h=l_diff_1h,
+            left_rel_diff_2h=l_diff_2h,
+            left_step_sensitivity_rel=l_sens,
+            left_same_sign=l_sign,
+            right_mst_fx_n_per_m=r_mst,
+            right_vw_fx_1h_n_per_m=r_vw_1h,
+            right_vw_fx_2h_n_per_m=r_vw_2h,
+            right_rel_diff_1h=r_diff_1h,
+            right_rel_diff_2h=r_diff_2h,
+            right_step_sensitivity_rel=r_sens,
+            right_same_sign=r_sign,
+            enclosure_mst_fx_n_per_m=b_mst,
+            net_electrode_mst_fx_n_per_m=net_mst,
+            net_electrode_vw_fx_1h_n_per_m=net_vw_1h,
+            net_electrode_rel_diff_1h=net_diff_1h,
+        ))
+
+    left_decreases = bool(
+        all(rows[i + 1].left_rel_diff_1h < rows[i].left_rel_diff_1h for i in range(len(rows) - 1))
+    ) if len(rows) >= 2 else False
+    right_decreases = bool(
+        all(rows[i + 1].right_rel_diff_1h < rows[i].right_rel_diff_1h for i in range(len(rows) - 1))
+    ) if len(rows) >= 2 else False
+    all_signs = bool(all(r.left_same_sign and r.right_same_sign for r in rows))
+
+    finest = rows[-1]
+    is_ok = bool(
+        all_signs
+        and left_decreases
+        and right_decreases
+        and finest.left_rel_diff_1h <= tolerance_finest_rel_diff
+        and finest.right_rel_diff_1h <= tolerance_finest_rel_diff
+    )
+
+    limitation = (
+        'Virtual-work forces are computed by shifting individual electrode masks by lattice steps (1h, 2h) '
+        'and differentiating masked central-gradient field energy U. Because U has O(h) staircase boundary '
+        'truncation at curved electrode perimeters, the discrepancy vs vacuum Maxwell stress contours is O(h) '
+        'and decreases under grid refinement. This is a limited electrode-force benchmark, not a direct '
+        'enclosure-wall perturbation measurement.'
+    )
+
+    note = (
+        f'Virtual-work convergence & step-sensitivity study across n={[r.n for r in rows]}: '
+        f'Finest (n={finest.n}) left rel_diff={finest.left_rel_diff_1h:.2%} (step sens 1h vs 2h: {finest.left_step_sensitivity_rel:.2%}), '
+        f'right rel_diff={finest.right_rel_diff_1h:.2%} (step sens 1h vs 2h: {finest.right_step_sensitivity_rel:.2%}). '
+        f'Discrepancy decreases with refinement: left={left_decreases}, right={right_decreases}.'
+    )
+
+    return VirtualWorkConvergenceAndSensitivityStudy(
+        rows=rows,
+        left_discrepancy_decreases_with_refinement=left_decreases,
+        right_discrepancy_decreases_with_refinement=right_decreases,
+        all_signs_consistent=all_signs,
+        is_consistent_to_tolerance=is_ok,
+        epistemic_limitation_note=limitation,
         diagnostic_note=note,
     )
 

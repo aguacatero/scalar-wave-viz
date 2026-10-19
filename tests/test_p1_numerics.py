@@ -122,7 +122,7 @@ class MaxwellStressContourTests(unittest.TestCase):
         self.assertIn('intersects non-vacuum', str(ctx.exception))
 
     def test_asymmetric_voltage_geometry_produces_nonzero_enclosure_reaction(self):
-        """P1-R1-F3 / P1-R2-F3 regression: asymmetric voltages produce nonzero enclosure reaction with tight residual."""
+        """P1-R1-F3 / P1-R2-F3 / P1-R3-F1 regression: asymmetric voltages produce nonzero enclosure reaction with full 2D vector residual closure."""
         cfg = eb.GroundedBoxConfig(
             left_electrode=eb.ElectrodeConfig(center_x_m=-0.008, voltage_v=600.0),
             right_electrode=eb.ElectrodeConfig(center_x_m=0.008, voltage_v=100.0),
@@ -132,38 +132,100 @@ class MaxwellStressContourTests(unittest.TestCase):
         budget = en.evaluate_whole_apparatus_force_budget(sol, tolerance_n_per_m=1e-6)
 
         # Net electrode force is non-zero (asymmetric pull)
-        f_elec = budget.left_electrode_fx_n_per_m + budget.right_electrode_fx_n_per_m
-        self.assertGreater(abs(f_elec), 1e-4)
+        f_elec_x = budget.left_electrode_fx_n_per_m + budget.right_electrode_fx_n_per_m
+        f_elec_y = budget.left_electrode_fy_n_per_m + budget.right_electrode_fy_n_per_m
+        self.assertGreater(abs(f_elec_x), 1e-4)
 
-        # Enclosure reaction force is demonstrably non-zero and opposes electrode sum
+        # Enclosure reaction force is demonstrably non-zero and opposes electrode sum in both x and y
         self.assertGreater(abs(budget.enclosure_reaction_fx_n_per_m), 1e-4)
-        self.assertAlmostEqual(
-            budget.enclosure_reaction_fx_n_per_m,
-            -f_elec,
-            places=6,
-        )
+        self.assertAlmostEqual(budget.enclosure_reaction_fx_n_per_m, -f_elec_x, places=6)
+        self.assertAlmostEqual(budget.enclosure_reaction_fy_n_per_m, -f_elec_y, places=6)
 
-        # P1-R2-F3: Assert tight bound on actual vector residual (observed ~2.79e-8 N/m)
-        residual = budget.net_electrostatic_force_fx_n_per_m
-        self.assertLess(abs(residual), 1e-7)
-        self.assertLess(abs(residual) / abs(f_elec), 1e-3)  # < 0.1% relative residual
+        # P1-R2-F3 & P1-R3-F1: Assert tight bound on full 2D vector residual (fx, fy, and 2D norm)
+        res_x = budget.net_electrostatic_force_fx_n_per_m
+        res_y = budget.net_electrostatic_force_fy_n_per_m
+        res_mag = float(np.hypot(res_x, res_y))
+        self.assertLess(abs(res_x), 1e-7)
+        self.assertLess(abs(res_y), 1e-7)
+        self.assertLess(res_mag, 1e-7)
+        self.assertLess(res_mag / abs(f_elec_x), 1e-3)  # < 0.1% relative 2D vector residual
+
+        # Near-zero vertical components on y-symmetric geometry are explicitly bounded
+        self.assertLess(abs(budget.left_electrode_fy_n_per_m), 1e-7)
+        self.assertLess(abs(budget.right_electrode_fy_n_per_m), 1e-7)
+        self.assertLess(abs(budget.enclosure_reaction_fy_n_per_m), 1e-7)
 
         # Full system balances without algebraic cancellation
         self.assertTrue(budget.is_force_balanced_to_tolerance)
 
+    def test_off_axis_y_asymmetric_geometry_full_vector_balance_and_convergence(self):
+        """P1-R3-F1 regression: off-axis y-asymmetric electrodes produce nontrivial Fx and Fy on all conductors with full 6-component convergence."""
+        cfg_off_axis = eb.GroundedBoxConfig(
+            left_electrode=eb.ElectrodeConfig(center_x_m=-0.008, center_y_m=0.004, voltage_v=600.0),
+            right_electrode=eb.ElectrodeConfig(center_x_m=0.008, center_y_m=-0.002, voltage_v=-400.0),
+            n=81,
+        )
+        sol = eb.electrode_pair_in_grounded_box(config=cfg_off_axis)
+        budget = en.evaluate_whole_apparatus_force_budget(sol, tolerance_n_per_m=1e-6)
+
+        # All six conductor force components (left Fx/Fy, right Fx/Fy, box Fx/Fy) are demonstrably non-zero
+        self.assertGreater(abs(budget.left_electrode_fx_n_per_m), 1e-5)
+        self.assertGreater(abs(budget.left_electrode_fy_n_per_m), 1e-5)
+        self.assertGreater(abs(budget.right_electrode_fx_n_per_m), 1e-5)
+        self.assertGreater(abs(budget.right_electrode_fy_n_per_m), 1e-5)
+        self.assertGreater(abs(budget.enclosure_reaction_fx_n_per_m), 1e-5)
+        self.assertGreater(abs(budget.enclosure_reaction_fy_n_per_m), 1e-5)
+
+        # Full 2D vector balance
+        res_x = budget.net_electrostatic_force_fx_n_per_m
+        res_y = budget.net_electrostatic_force_fy_n_per_m
+        res_mag = float(np.hypot(res_x, res_y))
+        f_box_mag = float(np.hypot(budget.enclosure_reaction_fx_n_per_m, budget.enclosure_reaction_fy_n_per_m))
+        self.assertLess(abs(res_x), 1e-7)
+        self.assertLess(abs(res_y), 1e-7)
+        self.assertLess(res_mag, 1e-7)
+        self.assertLess(res_mag / f_box_mag, 1e-3)
+        self.assertTrue(budget.is_force_balanced_to_tolerance)
+
+        # Mesh convergence across (41, 81, 161) on off-axis configuration
+        study_off = en.force_mesh_convergence_study(
+            n_list=(41, 81, 161),
+            config=cfg_off_axis,
+            tolerance_relative_change=0.05,
+            tolerance_residual_n_per_m=1e-7,
+        )
+        self.assertTrue(study_off.is_converged_to_tolerance)
+        self.assertEqual(set(study_off.component_assessments.keys()), {
+            'left_fx', 'left_fy', 'right_fx', 'right_fy', 'box_fx', 'box_fy',
+        })
+        for name, comp in study_off.component_assessments.items():
+            self.assertEqual(comp.regime, 'ACTIVE_RELATIVE_AND_ABS', f'{name} should be in active regime')
+            self.assertTrue(comp.is_converged, f'{name} failed convergence')
+            self.assertIsNotNone(comp.last_step_relative_change)
+            self.assertLessEqual(comp.last_step_relative_change, 0.05)
+
     def test_force_mesh_convergence(self):
-        """P1-R1-F3 / P1-R2-F2 regression: all force components converge asymptotically under mesh refinement."""
-        # 1. Symmetric setup (+-500V)
+        """P1-R1-F3 / P1-R2-F2 / P1-R3-F1 regression: all 6 force components and 2D vector residual converge under mesh refinement."""
+        # 1. Symmetric setup (+-500V): Fx active, Fy near-zero and gated by absolute tolerance
         study_sym = en.force_mesh_convergence_study(n_list=(41, 81, 161), tolerance_relative_change=0.05)
         self.assertEqual(len(study_sym.rows), 3)
         self.assertTrue(study_sym.is_converged_to_tolerance)
         self.assertLess(study_sym.max_component_relative_change, 0.05)
-        self.assertLess(study_sym.uncertainty_budget_n_per_m, 5e-4)
+        self.assertLess(study_sym.max_component_last_step_diff_n_per_m, 5e-4)
+        self.assertLess(study_sym.left_fx_last_step_diff_n_per_m, 5e-4)
+        self.assertIn('NOT a formal probabilistic uncertainty budget', study_sym.discretization_error_note)
+
+        # Verify near-zero components (left_fy, right_fy, box_fy, box_fx) are explicitly assessed in NEAR_ZERO_ABSOLUTE regime
+        for comp_name in ('left_fy', 'right_fy', 'box_fx', 'box_fy'):
+            comp = study_sym.component_assessments[comp_name]
+            self.assertEqual(comp.regime, 'NEAR_ZERO_ABSOLUTE')
+            self.assertTrue(comp.is_converged)
+            self.assertLessEqual(comp.last_step_abs_diff_n_per_m, 1e-6)
 
         for r in study_sym.rows:
             self.assertGreater(r.left_electrode_fx_n_per_m, 0.0)
             self.assertLess(r.right_electrode_fx_n_per_m, 0.0)
-            self.assertLess(abs(r.net_residual_fx_n_per_m), 1e-6)
+            self.assertLess(r.net_residual_magnitude_n_per_m, 1e-6)
 
         # 2. Asymmetric setup (+600V / +100V) evaluating nonzero enclosure reaction convergence
         cfg_asym = eb.GroundedBoxConfig(
@@ -178,18 +240,135 @@ class MaxwellStressContourTests(unittest.TestCase):
         )
         self.assertTrue(study_asym.is_converged_to_tolerance)
         self.assertLess(study_asym.max_component_relative_change, 0.05)
-        # Verify enclosure reaction is non-zero and converged
         self.assertGreater(abs(study_asym.rows[-1].enclosure_reaction_fx_n_per_m), 1e-4)
-        self.assertLess(abs(study_asym.rows[-1].net_residual_fx_n_per_m), 1e-7)
+        self.assertLess(study_asym.rows[-1].net_residual_magnitude_n_per_m, 1e-7)
+        self.assertEqual(study_asym.component_assessments['box_fx'].regime, 'ACTIVE_RELATIVE_AND_ABS')
+        self.assertTrue(study_asym.component_assessments['box_fx'].is_converged)
+
+    def test_force_convergence_gate_rejects_corrupted_fy_or_near_zero_or_residual(self):
+        """P1-R3-F1 adversarial regression: convergence gate fails closed on Fy drift, near-zero drift, or y-residual."""
+        study_base = en.force_mesh_convergence_study(n_list=(41, 81, 161))
+        self.assertTrue(study_base.is_converged_to_tolerance)
+        r0, r1, r2 = study_base.rows
+
+        # Case A: Near-zero component (left_fy) shifts by 5e-6 N/m (> 1e-6 near-zero tolerance) while balanced by box_fy
+        r2_bad_near_zero = en.ForceMeshConvergenceRow(
+            n=r2.n,
+            grid_spacing_m=r2.grid_spacing_m,
+            left_electrode_fx_n_per_m=r2.left_electrode_fx_n_per_m,
+            right_electrode_fx_n_per_m=r2.right_electrode_fx_n_per_m,
+            enclosure_reaction_fx_n_per_m=r2.enclosure_reaction_fx_n_per_m,
+            net_residual_fx_n_per_m=r2.net_residual_fx_n_per_m,
+            left_electrode_fy_n_per_m=5e-6,
+            right_electrode_fy_n_per_m=0.0,
+            enclosure_reaction_fy_n_per_m=-5e-6,
+            net_residual_fy_n_per_m=0.0,
+            net_residual_magnitude_n_per_m=abs(r2.net_residual_fx_n_per_m),
+        )
+        eval_bad_nz = en.evaluate_force_convergence_from_rows([r0, r1, r2_bad_near_zero])
+        self.assertFalse(eval_bad_nz.is_converged_to_tolerance)
+        self.assertFalse(eval_bad_nz.component_assessments['left_fy'].is_converged)
+
+        # Case B: Active Fy component shifts by 20% (> 5% relative tolerance)
+        r1_active_fy = en.ForceMeshConvergenceRow(
+            n=r1.n,
+            grid_spacing_m=r1.grid_spacing_m,
+            left_electrode_fx_n_per_m=r1.left_electrode_fx_n_per_m,
+            right_electrode_fx_n_per_m=r1.right_electrode_fx_n_per_m,
+            enclosure_reaction_fx_n_per_m=r1.enclosure_reaction_fx_n_per_m,
+            net_residual_fx_n_per_m=r1.net_residual_fx_n_per_m,
+            left_electrode_fy_n_per_m=1.0e-4,
+            right_electrode_fy_n_per_m=0.0,
+            enclosure_reaction_fy_n_per_m=-1.0e-4,
+            net_residual_fy_n_per_m=0.0,
+            net_residual_magnitude_n_per_m=abs(r1.net_residual_fx_n_per_m),
+        )
+        r2_bad_active_fy = en.ForceMeshConvergenceRow(
+            n=r2.n,
+            grid_spacing_m=r2.grid_spacing_m,
+            left_electrode_fx_n_per_m=r2.left_electrode_fx_n_per_m,
+            right_electrode_fx_n_per_m=r2.right_electrode_fx_n_per_m,
+            enclosure_reaction_fx_n_per_m=r2.enclosure_reaction_fx_n_per_m,
+            net_residual_fx_n_per_m=r2.net_residual_fx_n_per_m,
+            left_electrode_fy_n_per_m=1.3e-4,
+            right_electrode_fy_n_per_m=0.0,
+            enclosure_reaction_fy_n_per_m=-1.3e-4,
+            net_residual_fy_n_per_m=0.0,
+            net_residual_magnitude_n_per_m=abs(r2.net_residual_fx_n_per_m),
+        )
+        eval_bad_fy = en.evaluate_force_convergence_from_rows([r0, r1_active_fy, r2_bad_active_fy])
+        self.assertFalse(eval_bad_fy.is_converged_to_tolerance)
+        self.assertFalse(eval_bad_fy.component_assessments['left_fy'].is_converged)
+
+        # Case C: Non-zero net_residual_fy violates residual gate even when net_residual_fx is tiny
+        r2_bad_res_y = en.ForceMeshConvergenceRow(
+            n=r2.n,
+            grid_spacing_m=r2.grid_spacing_m,
+            left_electrode_fx_n_per_m=r2.left_electrode_fx_n_per_m,
+            right_electrode_fx_n_per_m=r2.right_electrode_fx_n_per_m,
+            enclosure_reaction_fx_n_per_m=r2.enclosure_reaction_fx_n_per_m,
+            net_residual_fx_n_per_m=r2.net_residual_fx_n_per_m,
+            left_electrode_fy_n_per_m=5e-7,
+            right_electrode_fy_n_per_m=5e-7,
+            enclosure_reaction_fy_n_per_m=5e-7,
+            net_residual_fy_n_per_m=1.5e-6,
+            net_residual_magnitude_n_per_m=float(np.hypot(r2.net_residual_fx_n_per_m, 1.5e-6)),
+        )
+        eval_bad_res_y = en.evaluate_force_convergence_from_rows(
+            [r0, r1, r2_bad_res_y], tolerance_residual_n_per_m=1e-6
+        )
+        self.assertFalse(eval_bad_res_y.is_converged_to_tolerance)
 
     def test_virtual_work_force_cross_check(self):
-        """P1-R2-F2 regression: independent cross-check comparing Maxwell stress tensor to virtual work (+dU/dx)_V."""
-        cfg = eb.GroundedBoxConfig(n=81)
-        res = en.cross_check_maxwell_stress_with_virtual_work(cfg, electrode='left', tolerance_relative_diff=0.15)
-        self.assertTrue(res.is_consistent_to_tolerance)
-        self.assertLess(res.relative_difference, 0.15)
-        self.assertGreater(res.maxwell_stress_fx_n_per_m, 0.0)
-        self.assertGreater(res.virtual_work_fx_n_per_m, 0.0)
+        """P1-R2-F2 / P1-R3-F2 regression: multi-resolution virtual-work cross-check on symmetric and asymmetric (+600V/+100V) setups for both electrodes."""
+        # 1. Symmetric (+-500V) convergence & step-size sensitivity across n=(81, 161)
+        study_sym = en.virtual_work_convergence_and_sensitivity_study(
+            config=eb.GroundedBoxConfig(),
+            n_list=(81, 161),
+            tolerance_finest_rel_diff=0.07,
+        )
+        self.assertTrue(study_sym.is_consistent_to_tolerance)
+        self.assertTrue(study_sym.all_signs_consistent)
+        self.assertTrue(study_sym.left_discrepancy_decreases_with_refinement)
+        self.assertTrue(study_sym.right_discrepancy_decreases_with_refinement)
+        # Assert n=81 (~8.62%) and refined n=161 (~4.49%) agreement and exact left/right symmetry
+        self.assertLess(study_sym.rows[0].left_rel_diff_1h, 0.09)
+        self.assertLess(study_sym.rows[-1].left_rel_diff_1h, 0.05)
+        self.assertLess(study_sym.rows[-1].right_rel_diff_1h, 0.05)
+        self.assertLess(study_sym.rows[-1].left_step_sensitivity_rel, 0.005)
+        self.assertAlmostEqual(
+            study_sym.rows[-1].left_vw_fx_1h_n_per_m,
+            -study_sym.rows[-1].right_vw_fx_1h_n_per_m,
+            places=10,
+        )
+
+        # 2. Asymmetric (+600V / +100V) convergence & step-size sensitivity across n=(81, 161) for both electrodes
+        cfg_asym = eb.GroundedBoxConfig(
+            left_electrode=eb.ElectrodeConfig(center_x_m=-0.008, voltage_v=600.0),
+            right_electrode=eb.ElectrodeConfig(center_x_m=0.008, voltage_v=100.0),
+        )
+        study_asym = en.virtual_work_convergence_and_sensitivity_study(
+            config=cfg_asym,
+            n_list=(81, 161),
+            tolerance_finest_rel_diff=0.10,
+        )
+        self.assertTrue(study_asym.is_consistent_to_tolerance)
+        self.assertTrue(study_asym.all_signs_consistent)
+        self.assertTrue(study_asym.left_discrepancy_decreases_with_refinement)
+        self.assertTrue(study_asym.right_discrepancy_decreases_with_refinement)
+
+        # In +600V/+100V, both left and right electrodes are pulled in -x; enclosure reaction is +x
+        finest_asym = study_asym.rows[-1]
+        self.assertLess(finest_asym.left_mst_fx_n_per_m, 0.0)
+        self.assertLess(finest_asym.left_vw_fx_1h_n_per_m, 0.0)
+        self.assertLess(finest_asym.right_mst_fx_n_per_m, 0.0)
+        self.assertLess(finest_asym.right_vw_fx_1h_n_per_m, 0.0)
+        self.assertLess(finest_asym.left_rel_diff_1h, 0.065)         # ~6.00% at n=161 (down from 11.84% at n=81)
+        self.assertLess(finest_asym.right_rel_diff_1h, 0.10)         # ~9.61% at n=161 (down from 18.68% at n=81)
+        self.assertLess(finest_asym.net_electrode_rel_diff_1h, 0.07) # ~6.67% on combined electrode pull at n=161 (down from 13.08% at n=81)
+        self.assertLess(finest_asym.left_step_sensitivity_rel, 0.01) # ~0.17% step sensitivity (1h vs 2h)
+        self.assertLess(finest_asym.right_step_sensitivity_rel, 0.01) # ~0.33% step sensitivity (1h vs 2h)
+        self.assertIn('limited electrode-force benchmark', study_asym.epistemic_limitation_note)
 
     def test_contour_invariance_in_vacuum(self):
         """P1-R1-F3 / P1-R2-F2 regression: Maxwell stress integral is invariant across concentric vacuum loops."""

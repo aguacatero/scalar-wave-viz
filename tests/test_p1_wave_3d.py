@@ -130,30 +130,55 @@ class BoundaryReflectionBenchmarkTests(unittest.TestCase):
         self.assertAlmostEqual(res.masked_proxy_ratio, 0.0251, delta=0.010)
 
     def test_sponge_boundary_reflection_reference_subtracted(self):
-        """P1-R2-F1 regression: Reference-subtracted reflection measurement with exact pre-arrival isolation."""
+        """P1-R2-F1 / P1-R3-F4 regression: Reference-subtracted reflection with geometric arrival gating and 3D energy."""
         res = sw.benchmark_sponge_reflection_reference_subtracted(
             grid_size=40, sponge_width=8, max_sigma=3.0, n_steps=80, ref_grid_size=90, probe_offset=6
         )
         self.assertTrue(res.is_absorbed_to_tolerance)
-        self.assertLess(res.power_reflection_coefficient, 0.05)
+        self.assertTrue(res.reference_domain_free_of_wall_return)
+        self.assertGreater(res.reference_wall_return_step, res.n_steps)
+        self.assertEqual(res.geometric_pre_arrival_step, 10)
+        self.assertLess(res.probe_peak_squared_reflection_proxy, 0.05)
+        self.assertLess(res.integrated_reflected_energy_fraction, 0.015)
         # Pre-arrival difference is bounded by Gaussian tail (< 1e-8) before reflected pulse returns
         self.assertLess(res.pre_arrival_difference_max, 1e-8)
 
+    def test_sponge_reflection_parameter_sweep_and_adversarial_ref_domain(self):
+        """P1-R3-F4 regression: Parameter sweep stability and adversarial rejection of contaminated reference domain."""
+        sweep = sw.benchmark_sponge_reflection_parameter_sweep()
+        self.assertTrue(sweep.is_sweep_stable)
+        self.assertLess(sweep.reference_domain_invariance_diff, 1e-10)
+        self.assertLess(sweep.dt_refinement_relative_diff, 0.15)
+        self.assertTrue(sweep.monotonic_with_sponge_width)
+
+        # Adversarial negative control: reference domain too small (ref_grid_size=50 for n_steps=80)
+        # allows outer reference wall reflection to return before n_steps completes
+        contaminated = sw.benchmark_sponge_reflection_reference_subtracted(
+            grid_size=40, sponge_width=8, max_sigma=3.0, n_steps=80, ref_grid_size=50, probe_offset=6
+        )
+        self.assertFalse(contaminated.reference_domain_free_of_wall_return)
+        self.assertFalse(contaminated.is_absorbed_to_tolerance)
+
     def test_sponge_reflection_negative_and_positive_controls(self):
-        """P1-R2-F1 regression: Negative (sigma=0) and positive sponge controls demonstrate selective absorption."""
+        """P1-R2-F1 / P1-R3-F4 regression: Negative (sigma=0) and positive sponge controls on both probe and 3D energy."""
         rows = sw.benchmark_sponge_reflection_controls(
             sigma_list=(0.0, 0.5, 3.0, 15.0), grid_size=40, sponge_width=8, n_steps=80, ref_grid_size=90
         )
         ctrl_map = {r.max_sigma: r for r in rows}
 
-        # 1. Negative control: undamped Dirichlet wall (sigma=0) produces strong reflection (> 10%)
-        self.assertGreater(ctrl_map[0.0].power_reflection_coefficient, 0.10)
+        # 1. Negative control: undamped Dirichlet wall (sigma=0) produces strong reflection (> 10% proxy, > 15% interior energy)
+        self.assertGreater(ctrl_map[0.0].probe_peak_squared_reflection_proxy, 0.10)
+        self.assertGreater(ctrl_map[0.0].integrated_reflected_energy_fraction, 0.15)
 
-        # 2. Positive control: design sponge damping (sigma=3.0) suppresses reflection to < 5%
-        self.assertLess(ctrl_map[3.0].power_reflection_coefficient, 0.05)
+        # 2. Positive control: design sponge damping (sigma=3.0) suppresses reflection (> 20x energy reduction)
+        self.assertLess(ctrl_map[3.0].probe_peak_squared_reflection_proxy, 0.05)
+        self.assertLess(ctrl_map[3.0].integrated_reflected_energy_fraction, 0.015)
 
         # 3. High-sigma control: impedance mismatch at entrance increases reflection compared to optimal sponge
-        self.assertGreater(ctrl_map[15.0].power_reflection_coefficient, ctrl_map[0.5].power_reflection_coefficient)
+        self.assertGreater(
+            ctrl_map[15.0].integrated_reflected_energy_fraction,
+            ctrl_map[3.0].integrated_reflected_energy_fraction,
+        )
 
 
 class DiscreteEnergyConservationTests(unittest.TestCase):
@@ -200,13 +225,29 @@ class DiscreteEnergyConservationTests(unittest.TestCase):
         self.assertLess(max_drift, 1e-12)  # Exact conservation to machine precision
 
     def test_two_material_undamped_energy_conservation(self):
-        """P1-R1-F4 / P1-R2-F4 regression: Exact discrete Hamiltonian conserved across two-medium interface."""
+        """P1-R1-F4 / P1-R2-F4 / P1-R3-F5 regression: Exact discrete Hamiltonian and actual terminal continuum energy."""
         res = sw.benchmark_two_material_energy_conservation(
             grid_size=36, n_steps=35, c1=1.0, c2=0.60
         )
         self.assertTrue(res.is_conserved_to_tolerance)
         self.assertLess(res.max_discrete_hamiltonian_drift_ratio, 1e-10)
         self.assertLess(res.max_continuum_diagnostic_drift_ratio, 0.08)
+
+        # P1-R3-F5: final_energy must be the actual terminal trajectory value, not fabricated from max drift
+        self.assertAlmostEqual(res.final_energy, res.continuum_energy_trajectory[-1], places=12)
+        fabricated_max = res.initial_energy * (1.0 + res.max_continuum_diagnostic_drift_ratio)
+        self.assertNotAlmostEqual(res.final_energy, fabricated_max, places=3)
+        expected_signed_drift = (res.final_energy - res.initial_energy) / res.initial_energy
+        self.assertAlmostEqual(res.terminal_continuum_signed_drift_ratio, expected_signed_drift, places=12)
+
+        # Adversarial negative-drift check: at n_steps=32, terminal continuum energy is strictly below initial_energy
+        res_neg = sw.benchmark_two_material_energy_conservation(
+            grid_size=36, n_steps=32, c1=1.0, c2=0.60
+        )
+        self.assertLess(res_neg.max_discrete_hamiltonian_drift_ratio, 1e-10)
+        self.assertAlmostEqual(res_neg.final_energy, res_neg.continuum_energy_trajectory[-1], places=12)
+        self.assertLess(res_neg.final_energy, res_neg.initial_energy)
+        self.assertLess(res_neg.terminal_continuum_signed_drift_ratio, 0.0)
 
 
 class WaveMeshConvergenceAndSourceNormalizationTests(unittest.TestCase):
@@ -261,11 +302,28 @@ class WaveMeshConvergenceAndSourceNormalizationTests(unittest.TestCase):
             self.assertLessEqual(p, 2.30)
 
     def test_two_material_interface_transmission(self):
-        """P1-R2-F5 regression: Pulse partially transmits into second medium with consistent amplitudes."""
-        res = sw.benchmark_two_material_interface_transmission(grid_size=48, c1=1.0, c2=0.6, n_steps=60)
-        self.assertTrue(res.is_consistent)
-        self.assertGreater(res.transmitted_peak, 0.0)
-        self.assertLess(res.transmitted_peak, res.incident_peak)
+        """P1-R2-F5 / P1-R3-F3 regression: Analytical reflection & transmission coefficients across planar interface."""
+        # 1. High-to-low wave speed (c1=1.0 -> c2=0.6): R_exact = -0.25, T_exact = +0.75
+        res_slow = sw.benchmark_two_material_interface_transmission(c1=1.0, c2=0.6, dx_list=(1.0, 0.5, 0.25))
+        self.assertTrue(res_slow.is_consistent)
+        self.assertTrue(res_slow.errors_decrease_with_refinement)
+        self.assertAlmostEqual(res_slow.analytical_r_amp, -0.25, places=12)
+        self.assertAlmostEqual(res_slow.analytical_t_amp, 0.75, places=12)
+        self.assertLess(res_slow.r_amp_abs_error, 0.005)
+        self.assertLess(res_slow.t_amp_abs_error, 0.005)
+        self.assertLess(res_slow.energy_partition_abs_error, 0.005)
+
+        # 2. Adversarial low-to-high wave speed (c1=0.6 -> c2=1.0): R_exact = +0.25, T_exact = +1.25 > 1.0
+        # Under the old P1-R2 heuristic (0 < T < I), this physically valid case would have failed because T_amp > 1.
+        res_fast = sw.benchmark_two_material_interface_transmission(c1=0.6, c2=1.0, dx_list=(1.0, 0.5, 0.25))
+        self.assertTrue(res_fast.is_consistent)
+        self.assertTrue(res_fast.errors_decrease_with_refinement)
+        self.assertAlmostEqual(res_fast.analytical_r_amp, 0.25, places=12)
+        self.assertAlmostEqual(res_fast.analytical_t_amp, 1.25, places=12)
+        self.assertGreater(res_fast.transmitted_peak, res_fast.incident_peak)
+        self.assertLess(res_fast.r_amp_abs_error, 0.005)
+        self.assertLess(res_fast.t_amp_abs_error, 0.005)
+        self.assertLess(res_fast.energy_partition_abs_error, 0.005)
 
 
 class NotebookIntegrationTests(unittest.TestCase):
