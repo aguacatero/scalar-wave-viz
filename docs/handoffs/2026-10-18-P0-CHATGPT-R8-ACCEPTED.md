@@ -67,3 +67,11 @@ This sign-off applies strictly to the **P0 conventional electrostatic baseline**
    - Validated absorbing boundaries and dispersion benchmarks for legacy 3D wave solver.
 4. **P2 Milestone:** Followed separately under **Issue #7**:
    - Sourced, reproducible reproduction of Exodus patent FIGS. 4–8 geometry with strict H0/H1 separation and experimental null controls.
+
+---
+
+## 6. Post-acceptance owner merge (historical addendum; 2026-10-18 Pacific)
+
+The statements above that PR #5 was draft/open/unmerged are the **historical state at R8 sign-off**, not the current repository state. The repository owner explicitly authorized merging PR #5 on 2026-10-18. GitHub first rejected the merge because the unrelated progress-bar change on `main` conflicted with `README.md`. A two-parent reconciliation commit `bb14ccae1be828d9c61728d0ed34a4d5a4ff2765` preserved all R8 scientific code/test blobs byte-for-byte and reconciled only `README.md` and `assets/research-progress.svg`, marking P0 as independently accepted (1/5 gates). **PR #5 then merged successfully to `main` as commit `174c6b895a0c2ec416b6d46ab9e0835b14a8cb49`.**
+
+New work belongs to **P1 Issue #6 / draft PR #10**, from the postmerge `main` state. These merge/documentation actions do not broaden the independent P0 scientific claims.
