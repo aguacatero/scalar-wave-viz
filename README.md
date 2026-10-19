@@ -1,76 +1,44 @@
-# scalar-wave-viz
+# Scalar Wave Viz — hypothesis-driven physics visualizations
 
-Interactive visualizations exploring how scalar waves interact with different materials — including real exotic metals like **Bismuth** and the superheavy synthetic element **Moscovium (Element 115)** — and what a hypothetically stable version of Moscovium might look like.
+**Status: educational and exploratory. This project has not demonstrated anomalous propulsion, a physical exotic scalar wave, or special moscovium field properties.**
 
-[![Binder](https://mybinder.org/badge_logo.svg)](https://mybinder.org/v2/gh/aguacatero/scalar-wave-viz/HEAD?filepath=wave_3d.ipynb)
+The goal is to help people understand what **specified physical theories predict**, what is assumed, what is measured, and which experimental observations could discriminate between explanations.
 
 ## Research progress
 
-![Research progress: P0 under independent review; P1–P4 pending; 0 of 5 research gates accepted](assets/research-progress.svg)
+![Scientific roadmap: P0 accepted, P1 through P4 pending; 1 of 5 review gates accepted](assets/research-progress.svg)
 
-**Current: P0 — scientific baseline under independent review** ([draft PR #5](https://github.com/aguacatero/scalar-wave-viz/pull/5)). The exploratory notebooks are available, but their speculative material parameters are not independently validated. Next are [P1 — numerical and force validation](https://github.com/aguacatero/scalar-wave-viz/issues/6), [P2 — source-bounded Exodus patent reproduction](https://github.com/aguacatero/scalar-wave-viz/issues/7), followed by P3 — nuclear/scalar-field hypotheses and P4 — research dashboard (see the [draft P0–P4 roadmap](https://github.com/aguacatero/scalar-wave-viz/pull/5/files)).
+**P0 — ACCEPTED (independent R8 review, [PR #5](https://github.com/aguacatero/scalar-wave-viz/pull/5)).** The conventional electrostatics scientific baseline passed its scoped acceptance gate. **Next:** [P1 numerical validation and whole-apparatus force accounting](https://github.com/aguacatero/scalar-wave-viz/issues/6), followed by [P2 source-bound patent-geometry reproduction](https://github.com/aguacatero/scalar-wave-viz/issues/7). This bar tracks review milestones, **not** physical validity, anomalous propulsion, or experimental confirmation.
 
-*The bar reports review-gate status, not a percentage of scientific validity. No gate is marked complete before independent acceptance and merge; the project does not demonstrate anomalous propulsion or special Moscovium field properties.*
+## First reproducible conventional-electrostatics baseline
 
----
+This new code deliberately separates an **analytic ideal parallel-plate benchmark** from a **2D field calculation for cylindrical electrodes inside a grounded outer enclosure**. The examples do **not** reproduce a particular Exodus patent embodiment, do not calculate device thrust and do not show any anomalous propulsion.
 
-## What this project is about
+Run from repository root:
 
-The core question: *if you place an object made of an exotic or heavy material in the path of a scalar wave, how does it scatter, slow, and bend that wave — and what would change if the material were even more exotic?*
+    python -m pip install -r requirements.txt
+    python -m unittest discover -s tests -v
+    python examples/electrostatics_demo.py
 
-Starting from established physics (wave equations, diamagnetic properties of Bismuth, FDTD simulation), the project extends into speculative territory: what would the wave interaction look like for a **stable** version of Element 115, if the predicted "island of nuclear stability" could be reached?
+The exported electrostatics_baseline.png displays (A) potential in V, (B) electric field in kV/m, and (C) signed local opposing forces in µN for a **separate ideal parallel-plate case**. In that ideal case net pair force is **0 N**. The grounded box in the 2D example is an **external conductor**; it does not approximate an isolated device with free-space boundaries.
 
----
+Read: [Scientific charter](docs/SCIENCE_CHARTER.md) · [Exodus comparison contract](docs/EXODUS_MODEL_CONTRACT.md) · [Roadmap](docs/ROADMAP.md).
 
-## Notebooks
 
-### `wave_3d.ipynb` — 3D Wave Interaction Simulator
-The main visualization. A scalar wave propagates through a 3D volume and hits an object you choose. Watch the wave compress, bend, and scatter in real time.
+### Preview without opening Jupyter
 
-- **Shapes:** Sphere, Torus (waves pass through the hole), Pyramid, Bismuth Crystal (rhombohedral geometry)
-- **Materials:**
-  - *Air* — baseline, unobstructed wave
-  - *Bismuth* — real diamagnetic metal; measurably slows and bends waves
-  - *Element 115 — Moscovium* — superheavy synthetic element; hypothetical near-trapping
-  - *Exotic metamaterial* — theoretical near-zero wave speed; maximum interaction
-- **Controls:** Play/pause animation, scrub timeline, rotate the 3D scene
-- **Physics:** 3D leapfrog FDTD solver, absorbing boundaries (PML), ~10s compute per run
+Open the latest successful [Physics baseline tests workflow](https://github.com/aguacatero/scalar-wave-viz/actions/workflows/physics-tests.yml), then download the artifact named **conventional-electrostatics-preview**. The file `electrostatics_baseline.png` contains three labeled panels, and it is **not** a measurement or a patent-specific thrust prediction. GitHub retains the generated CI artifact for 30 days.
 
-### `mc_stability.ipynb` — Moscovium Nuclear Stability Explorer
-Answers the question: *what ion combination would produce a stable (or near-stable) version of Element 115, and what would its wave properties look like?*
+## Existing notebooks — illustrative, not experimentally verified
 
-- **Half-life chart** — measured Mc-287 through Mc-290 (from NUBASE2020) plus theoretical predictions out to Mc-299, showing the dramatic jump expected near the N=184 shell closure ("island of stability")
-- **Synthesis route ladder** — compares five target+beam combinations (Am + Ca variants) and shows exactly how many neutrons each reaction falls short of the island
-- **Interactive explorer** — pick a target nucleus and beam, see which Mc isotopes you'd produce, their half-lives, and how they map to wave-simulation parameters
-- **Wave connection** — links each Mc isotope back to a wave speed preset in `wave_3d.ipynb`
+- [wave_3d.ipynb](wave_3d.ipynb): a 3D *mathematical* scalar wave simulation, with user-selected relative material wave speeds Air=1, Bismuth=0.55, Moscovium=0.15, metamaterial=0.04. **These values are hypothetical presets**, not established material responses. Important numerical resolution/boundary issues remain.
+- [mc_stability.ipynb](mc_stability.ipynb): exploratory nuclear stability and synthesis charts. Hypothetical Mc-291–299 half-lives and the isotope-mass-to-wave-speed interpolation are **not derived by the software** from measured data or validated model predictions.
+- [wave_demo.ipynb](wave_demo.ipynb): educational wave examples; one saved output contains a Matplotlib error.
 
-> Data labels: 🟢 Measured (NUBASE2020) · 🟠 Predicted (WS4/FRDM2012 models) · 🔭 Speculative extrapolation
+[Legacy Binder demo](https://mybinder.org/v2/gh/aguacatero/scalar-wave-viz/HEAD?filepath=wave_3d.ipynb) (compatibility and physics not validated).
 
-### `wave_demo.ipynb` — 1D Wave Demos
-Introductory 1D simulations: animated E/B-field cosines with sliders, and a scalar wave passing through a Gaussian material barrier.
+## Research direction
 
----
+The [Exodus patents](https://ept.space/patents/) describe proposed forces from asymmetric electrostatic pressure; they do **not** establish the scalar material model above. Next, independently select and reproduce a fully specified patent geometry and compare conventional Maxwell-stress accounting with the explicitly cited patent model and experimental evidence, including external couplings and null controls.
 
-## Quick start
-
-**Run in browser (no install):**
-Click the Binder badge above — opens `wave_3d.ipynb` directly.
-
-**Run locally:**
-```bash
-pip install numpy matplotlib ipywidgets ipympl plotly
-jupyter notebook
-```
-Open `wave_3d.ipynb` or `mc_stability.ipynb`, run all cells, and use the interactive controls.
-
----
-
-## Key concepts (no physics background required)
-
-| Term | Plain meaning |
-|---|---|
-| Scalar wave | A wave described by a single value at each point in space — like pressure in sound |
-| FDTD | "Finite-Difference Time-Domain" — a method for simulating how waves evolve step by step on a grid |
-| Diamagnetic | A material that slightly repels magnetic fields; Bismuth is the strongest natural example |
-| Island of stability | A predicted region of the nuclear chart where superheavy elements become dramatically longer-lived due to filled nuclear shells |
-| N=184 | The predicted next "magic" neutron number — reaching it in Mc (Z=115) would give Mc-299, estimated half-life ~5 hours vs the current record of 0.65 seconds |
+All PRs changing physics must disclose equations, sources, units, boundaries, assumptions, benchmarks and uncertainty. Null results are successful scientific information.
