@@ -1,4 +1,6 @@
 """Unit and regression tests for P1-C 3D scalar wave numerics, CFL stability, and boundary absorption."""
+import json
+from pathlib import Path
 import unittest
 import numpy as np
 
@@ -24,6 +26,58 @@ class WaveGridConfigTests(unittest.TestCase):
         with self.assertRaises(ValueError) as ctx:
             sw.WaveGridConfig(sponge_width=8, source_x=6)
         self.assertIn('inside the 8-cell boundary sponge layer', str(ctx.exception))
+
+
+class FDTDStepperSafetyTests(unittest.TestCase):
+    def test_step_wave_fdtd_rejects_cfl_violation(self):
+        """P1-R1-F5 regression: step_wave_fdtd rejects inputs exceeding CFL limit 1/sqrt(3)."""
+        n = 16
+        phi = np.zeros((n, n, n))
+        phi_prev = np.zeros((n, n, n))
+        c_field = np.ones((n, n, n))
+        sigma_field = np.zeros((n, n, n))
+        dx = 1.0
+        dt_unstable = 0.60  # 0.60 > 1/sqrt(3) ~= 0.57735
+
+        with self.assertRaises(ValueError) as ctx:
+            sw.step_wave_fdtd(phi, phi_prev, c_field, sigma_field, dt=dt_unstable, dx=dx)
+        self.assertIn('CFL stability condition violated', str(ctx.exception))
+
+    def test_step_wave_fdtd_rejects_non_positive_or_non_finite_inputs(self):
+        """P1-R1-F5 regression: step_wave_fdtd validates positive/finite parameters and fields."""
+        n = 8
+        phi = np.zeros((n, n, n))
+        c_field = np.ones((n, n, n))
+        sigma_field = np.zeros((n, n, n))
+
+        # Non-positive dt
+        with self.assertRaises(ValueError):
+            sw.step_wave_fdtd(phi, phi, c_field, sigma_field, dt=-0.1, dx=1.0)
+
+        # Non-positive dx
+        with self.assertRaises(ValueError):
+            sw.step_wave_fdtd(phi, phi, c_field, sigma_field, dt=0.1, dx=0.0)
+
+        # Negative wave speed
+        bad_c = c_field.copy()
+        bad_c[2, 2, 2] = -1.0
+        with self.assertRaises(ValueError):
+            sw.step_wave_fdtd(phi, phi, bad_c, sigma_field, dt=0.1, dx=1.0)
+
+        # Negative sigma
+        bad_sig = sigma_field.copy()
+        bad_sig[2, 2, 2] = -0.5
+        with self.assertRaises(ValueError):
+            sw.step_wave_fdtd(phi, phi, c_field, bad_sig, dt=0.1, dx=1.0)
+
+    def test_step_wave_fdtd_rejects_mismatched_shapes(self):
+        """P1-R1-F5 regression: step_wave_fdtd rejects mismatched array shapes."""
+        phi = np.zeros((8, 8, 8))
+        phi_prev = np.zeros((8, 8, 8))
+        bad_c = np.ones((8, 8, 9))
+        sigma = np.zeros((8, 8, 8))
+        with self.assertRaises(ValueError):
+            sw.step_wave_fdtd(phi, phi_prev, bad_c, sigma, dt=0.1, dx=1.0)
 
 
 class WavelengthResolutionAuditTests(unittest.TestCase):
@@ -64,13 +118,19 @@ class PulsePropagationBenchmarkTests(unittest.TestCase):
 
 
 class BoundaryReflectionBenchmarkTests(unittest.TestCase):
-    def test_sponge_boundary_reflection_coefficient(self):
-        """P1-C: Quadratic sponge layer absorbs outgoing pulse with R < 5%."""
-        res = sw.benchmark_sponge_boundary_reflection(
+    def test_sponge_boundary_reflection_probe(self):
+        """P1-R1-F2 regression: Probe reflection measurement and smooth interior energy without mask-edge artifacts."""
+        res = sw.benchmark_sponge_reflection_probe(
             grid_size=48, sponge_width=10, max_sigma=3.0, n_steps=70
         )
         self.assertTrue(res.is_absorbed_to_tolerance)
-        self.assertLess(res.reflection_coefficient, 0.05)
+        self.assertLess(res.power_reflection_coefficient, 0.05)
+
+        # Continuous interior energy density must be <= total domain energy (no artificial interface energy)
+        self.assertLessEqual(res.final_interior_energy, res.final_total_energy + 1e-12)
+
+        # Legacy masked proxy reproduces the reviewer-identified ~2.51% value
+        self.assertAlmostEqual(res.masked_proxy_ratio, 0.0251, delta=0.010)
 
 
 class DiscreteEnergyConservationTests(unittest.TestCase):
@@ -93,8 +153,7 @@ class DiscreteEnergyConservationTests(unittest.TestCase):
         r_sq = (X - x0)**2 + (Y - x0)**2 + (Z - x0)**2
         phi_0 = np.exp(-r_sq / (2.0 * sigma_pulse**2))
 
-        # 2nd order Taylor expansion for zero initial velocity
-        lap_0 = sw.laplacian_3d_periodic_or_clamped(phi_0, dx, clamped=True)
+        lap_0 = sw.laplacian_3d_clamped(phi_0, dx)
         phi_minus_1 = phi_0 + 0.5 * (dt ** 2) * (c0 ** 2) * lap_0
 
         phi = phi_0.copy()
@@ -110,7 +169,50 @@ class DiscreteEnergyConservationTests(unittest.TestCase):
         e_initial = energies[0]
         e_final = energies[-1]
         relative_energy_drift = abs(e_final - e_initial) / e_initial
-        self.assertLess(relative_energy_drift, 0.05)  # < 5% numerical drift over 15 steps before boundary interaction
+        self.assertLess(relative_energy_drift, 0.05)
+
+    def test_two_material_undamped_energy_conservation(self):
+        """P1-R1-F4 regression: Discrete Hamiltonian is conserved across a two-medium interface."""
+        res = sw.benchmark_two_material_energy_conservation(
+            grid_size=36, n_steps=35, c1=1.0, c2=0.60
+        )
+        self.assertTrue(res.is_conserved_to_tolerance)
+        self.assertLess(res.max_energy_drift_ratio, 0.08)
+
+
+class NotebookIntegrationTests(unittest.TestCase):
+    def test_notebook_and_runner_end_to_end(self):
+        """P1-R1-F1 regression: wave_3d.ipynb uses validated runner and no defective legacy primitives."""
+        nb_path = Path(__file__).resolve().parent.parent / 'wave_3d.ipynb'
+        self.assertTrue(nb_path.exists())
+
+        with open(nb_path, 'r', encoding='utf-8') as f:
+            nb_data = json.load(f)
+
+        code_text = ''
+        for cell in nb_data.get('cells', []):
+            if cell.get('cell_type') == 'code':
+                code_text += ''.join(cell.get('source', [])) + '\n'
+
+        # Defective primitives must be purged
+        self.assertNotIn('np.roll', code_text, 'wave_3d.ipynb must not use periodic np.roll')
+        self.assertNotIn('*= pml', code_text, 'wave_3d.ipynb must not use multiplicative *= pml damping')
+
+        # Must import and call run_3d_simulation
+        self.assertIn('run_3d_simulation', code_text)
+
+        # End-to-end execution of production runner
+        snapshots, obj_mask, metadata = sw.run_3d_simulation(
+            shape='Sphere',
+            material='Air (baseline)',
+            n=24,
+            n_frames=4,
+            spf=2,
+        )
+        self.assertEqual(len(snapshots), 4)
+        self.assertEqual(snapshots[0].shape, (24, 24, 24))
+        self.assertTrue(np.all(np.isfinite(snapshots[-1])))
+        self.assertTrue(metadata['resolution_audit']['is_adequately_resolved'])
 
 
 if __name__ == '__main__':

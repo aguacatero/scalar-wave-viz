@@ -20,6 +20,7 @@ import numpy as np
 import scipy
 
 from electrostatics_baseline import (
+    ElectrodeConfig,
     FieldSolution,
     GroundedBoxConfig,
     PlateBenchmark,
@@ -305,6 +306,47 @@ def generate_manifest(
                     'net_modeled_force_fy_n_per_m': float(en.evaluate_whole_apparatus_force_budget(result_2d).net_electrostatic_force_fy_n_per_m),
                     'is_force_balanced': bool(en.evaluate_whole_apparatus_force_budget(result_2d).is_force_balanced_to_tolerance),
                     'unmodeled_reaction_note': en.evaluate_whole_apparatus_force_budget(result_2d).unmodeled_reaction_explanation,
+                    'force_mesh_convergence_study': {
+                        'description': 'Mesh convergence of individual Maxwell stress forces and net balance residual across resolutions',
+                        'rows': [
+                            {
+                                'n': r.n,
+                                'grid_spacing_m': r.grid_spacing_m,
+                                'left_electrode_fx_n_per_m': r.left_electrode_fx_n_per_m,
+                                'right_electrode_fx_n_per_m': r.right_electrode_fx_n_per_m,
+                                'enclosure_reaction_fx_n_per_m': r.enclosure_reaction_fx_n_per_m,
+                                'net_residual_fx_n_per_m': r.net_residual_fx_n_per_m,
+                                'relative_change_to_prev': r.relative_change_to_prev,
+                            }
+                            for r in en.force_mesh_convergence_study((41, 81, 161), config=active_config).rows
+                        ],
+                        'observed_order_left_electrode': en.force_mesh_convergence_study((41, 81, 161), config=active_config).observed_order_left_electrode,
+                        'uncertainty_budget_n_per_m': en.force_mesh_convergence_study((41, 81, 161), config=active_config).uncertainty_budget_n_per_m,
+                        'is_converged_to_tolerance': en.force_mesh_convergence_study((41, 81, 161), config=active_config).is_converged_to_tolerance,
+                    },
+                    'contour_invariance_study': {
+                        'description': 'Demonstration of path independence of Maxwell stress in vacuum across concentric loops',
+                        'contour_margins_m': en.contour_invariance_study(result_2d, electrode='left').contour_margins_m,
+                        'measured_fx_n_per_m': en.contour_invariance_study(result_2d, electrode='left').measured_fx_n_per_m,
+                        'max_relative_variation': en.contour_invariance_study(result_2d, electrode='left').max_relative_variation,
+                        'is_invariant_to_tolerance': en.contour_invariance_study(result_2d, electrode='left').is_invariant_to_tolerance,
+                    },
+                    'asymmetric_voltage_demonstration': (lambda b: {
+                        'description': 'Non-trivial whole-apparatus force balance with unequal voltages (+600V, +100V) producing nonzero box reaction',
+                        'left_electrode_voltage_v': 600.0,
+                        'right_electrode_voltage_v': 100.0,
+                        'left_electrode_fx_n_per_m': float(b.left_electrode_fx_n_per_m),
+                        'right_electrode_fx_n_per_m': float(b.right_electrode_fx_n_per_m),
+                        'enclosure_reaction_fx_n_per_m': float(b.enclosure_reaction_fx_n_per_m),
+                        'net_residual_fx_n_per_m': float(b.net_electrostatic_force_fx_n_per_m),
+                        'is_force_balanced': bool(b.is_force_balanced_to_tolerance),
+                    })(en.evaluate_whole_apparatus_force_budget(
+                        electrode_pair_in_grounded_box(config=GroundedBoxConfig(
+                            left_electrode=ElectrodeConfig(center_x_m=-0.008, voltage_v=600.0),
+                            right_electrode=ElectrodeConfig(center_x_m=0.008, voltage_v=100.0),
+                            n=81,
+                        ))
+                    )),
                 },
             },
             'case_2_parallel_plate_1d': {
@@ -339,7 +381,7 @@ def generate_manifest(
                         'max_discrete_residual_v': r.max_discrete_residual_v,
                         'is_exact_to_tolerance': r.is_exact_to_tolerance,
                     }
-                    for r in en.harmonic_polynomial_benchmark((21, 41, 81), box_width_m=active_config.box_width_m)
+                    for r in en.harmonic_polynomial_benchmark((21, 41, 81, 161), box_width_m=active_config.box_width_m)
                 ],
                 'smooth_harmonic_trig_convergence': [
                     {
@@ -351,7 +393,7 @@ def generate_manifest(
                         'observed_order_potential': r.observed_order_potential,
                         'observed_order_field': r.observed_order_field,
                     }
-                    for r in en.harmonic_trig_benchmark((21, 41, 81), box_width_m=active_config.box_width_m)
+                    for r in en.harmonic_trig_benchmark((21, 41, 81, 161), box_width_m=active_config.box_width_m)
                 ],
                 'enclosure_size_sensitivity_study': [
                     {
@@ -364,9 +406,40 @@ def generate_manifest(
                 ],
             },
             'p1_3d_scalar_wave_numerics_audit': {
-                'description': 'P1-C 3D scalar wave numerics, CFL stability, and points-per-wavelength audits',
+                'description': 'P1-C 3D scalar wave numerics, CFL stability, energy conservation, and sponge absorption benchmarks',
                 'cfl_standard': 'dt = 0.90 * dx / (c * sqrt(3)) <= 1/sqrt(3)',
                 'sponge_boundary_absorption': 'Quadratic damping conductivity layer sigma(d) = sigma0 * (d/w)^2',
+                'energy_density_units': 'arbitrary_energy_units (dimensionless toy field model, not Joules)',
+                'pulse_propagation_benchmark': {
+                    'description': 'Pulse propagation velocity tracking centroid along 3D axis',
+                    'n_steps': sw.benchmark_pulse_propagation_speed(40, 20).n_steps,
+                    'dt_s': sw.benchmark_pulse_propagation_speed(40, 20).dt_s,
+                    'theoretical_distance_m': sw.benchmark_pulse_propagation_speed(40, 20).theoretical_distance_m,
+                    'measured_distance_m': sw.benchmark_pulse_propagation_speed(40, 20).measured_distance_m,
+                    'relative_speed_error': sw.benchmark_pulse_propagation_speed(40, 20).relative_speed_error,
+                    'is_accurate_to_tolerance': sw.benchmark_pulse_propagation_speed(40, 20).is_accurate_to_tolerance,
+                },
+                'sponge_boundary_reflection_probe_benchmark': {
+                    'description': 'Probe time-series reflection measurement and smooth interior energy retention',
+                    'incident_peak_amplitude': sw.benchmark_sponge_reflection_probe(48, 10, max_sigma=3.0, n_steps=70).incident_peak_amplitude,
+                    'reflected_peak_amplitude': sw.benchmark_sponge_reflection_probe(48, 10, max_sigma=3.0, n_steps=70).reflected_peak_amplitude,
+                    'amplitude_reflection_coefficient': sw.benchmark_sponge_reflection_probe(48, 10, max_sigma=3.0, n_steps=70).amplitude_reflection_coefficient,
+                    'power_reflection_coefficient': sw.benchmark_sponge_reflection_probe(48, 10, max_sigma=3.0, n_steps=70).power_reflection_coefficient,
+                    'initial_total_energy': sw.benchmark_sponge_reflection_probe(48, 10, max_sigma=3.0, n_steps=70).initial_total_energy,
+                    'final_interior_energy': sw.benchmark_sponge_reflection_probe(48, 10, max_sigma=3.0, n_steps=70).final_interior_energy,
+                    'interior_energy_retention_ratio': sw.benchmark_sponge_reflection_probe(48, 10, max_sigma=3.0, n_steps=70).interior_energy_retention_ratio,
+                    'legacy_masked_proxy_ratio': sw.benchmark_sponge_reflection_probe(48, 10, max_sigma=3.0, n_steps=70).masked_proxy_ratio,
+                    'is_absorbed_to_tolerance': sw.benchmark_sponge_reflection_probe(48, 10, max_sigma=3.0, n_steps=70).is_absorbed_to_tolerance,
+                    'diagnostic_note': sw.benchmark_sponge_reflection_probe(48, 10, max_sigma=3.0, n_steps=70).diagnostic_note,
+                },
+                'two_material_energy_conservation_benchmark': {
+                    'description': 'Long-time discrete Hamiltonian conservation across c1=1.0 -> c2=0.6 step interface (sigma=0)',
+                    'initial_energy': sw.benchmark_two_material_energy_conservation(36, 35).initial_energy,
+                    'final_energy': sw.benchmark_two_material_energy_conservation(36, 35).final_energy,
+                    'max_energy_drift_ratio': sw.benchmark_two_material_energy_conservation(36, 35).max_energy_drift_ratio,
+                    'is_conserved_to_tolerance': sw.benchmark_two_material_energy_conservation(36, 35).is_conserved_to_tolerance,
+                    'diagnostic_note': sw.benchmark_two_material_energy_conservation(36, 35).diagnostic_note,
+                },
                 'materials_library_audit': [
                     {
                         'material': a.material_name,
