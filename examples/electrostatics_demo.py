@@ -33,6 +33,9 @@ from electrostatics_baseline import (
     parallel_plate_benchmark,
     verify_plate_force_virtual_work,
 )
+import electrostatics_numerics as en
+import scalar_wave_3d as sw
+
 
 
 def get_git_provenance() -> dict[str, str | bool]:
@@ -289,6 +292,20 @@ def generate_manifest(
                     'relative_field_drift': assessment.relative_field_drift,
                 },
                 'coaxial_analytic_benchmark': coax_table,
+                'maxwell_stress_force_budget_2d': {
+                    'description': '2D Maxwell stress closed-contour integration on all conductors (force per unit depth, N/m)',
+                    'units': 'N/m',
+                    'left_electrode_fx_n_per_m': float(en.evaluate_whole_apparatus_force_budget(result_2d).left_electrode_fx_n_per_m),
+                    'left_electrode_fy_n_per_m': float(en.evaluate_whole_apparatus_force_budget(result_2d).left_electrode_fy_n_per_m),
+                    'right_electrode_fx_n_per_m': float(en.evaluate_whole_apparatus_force_budget(result_2d).right_electrode_fx_n_per_m),
+                    'right_electrode_fy_n_per_m': float(en.evaluate_whole_apparatus_force_budget(result_2d).right_electrode_fy_n_per_m),
+                    'enclosure_reaction_fx_n_per_m': float(en.evaluate_whole_apparatus_force_budget(result_2d).enclosure_reaction_fx_n_per_m),
+                    'enclosure_reaction_fy_n_per_m': float(en.evaluate_whole_apparatus_force_budget(result_2d).enclosure_reaction_fy_n_per_m),
+                    'net_modeled_force_fx_n_per_m': float(en.evaluate_whole_apparatus_force_budget(result_2d).net_electrostatic_force_fx_n_per_m),
+                    'net_modeled_force_fy_n_per_m': float(en.evaluate_whole_apparatus_force_budget(result_2d).net_electrostatic_force_fy_n_per_m),
+                    'is_force_balanced': bool(en.evaluate_whole_apparatus_force_budget(result_2d).is_force_balanced_to_tolerance),
+                    'unmodeled_reaction_note': en.evaluate_whole_apparatus_force_budget(result_2d).unmodeled_reaction_explanation,
+                },
             },
             'case_2_parallel_plate_1d': {
                 'description': '1D ideal parallel-plate capacitor analytic reference (neglecting fringing)',
@@ -312,9 +329,64 @@ def generate_manifest(
                 },
                 'virtual_work_crosscheck': vw_check,
             },
+            'p1_analytic_convergence_benchmarks': {
+                'description': 'P1-A independent analytic harmonic benchmarks and enclosure sensitivity studies',
+                'cubic_harmonic_polynomial_benchmark': [
+                    {
+                        'n': r.n,
+                        'grid_spacing_m': r.grid_spacing_m,
+                        'max_potential_error_v': r.max_potential_error_v,
+                        'max_discrete_residual_v': r.max_discrete_residual_v,
+                        'is_exact_to_tolerance': r.is_exact_to_tolerance,
+                    }
+                    for r in en.harmonic_polynomial_benchmark((21, 41, 81), box_width_m=active_config.box_width_m)
+                ],
+                'smooth_harmonic_trig_convergence': [
+                    {
+                        'n': r.n,
+                        'grid_spacing_m': r.grid_spacing_m,
+                        'max_potential_error_v': r.max_potential_error_v,
+                        'l2_potential_error_v': r.l2_potential_error_v,
+                        'max_field_error_v_per_m': r.max_field_error_v_per_m,
+                        'observed_order_potential': r.observed_order_potential,
+                        'observed_order_field': r.observed_order_field,
+                    }
+                    for r in en.harmonic_trig_benchmark((21, 41, 81), box_width_m=active_config.box_width_m)
+                ],
+                'enclosure_size_sensitivity_study': [
+                    {
+                        'box_width_m': r.box_width_m,
+                        'n': r.n,
+                        'midpoint_ex_v_per_m': r.midpoint_ex_v_per_m,
+                        'max_outer_wall_field_v_per_m': r.max_outer_wall_field_v_per_m,
+                    }
+                    for r in en.enclosure_size_sensitivity_study((0.03, 0.04, 0.06, 0.08))
+                ],
+            },
+            'p1_3d_scalar_wave_numerics_audit': {
+                'description': 'P1-C 3D scalar wave numerics, CFL stability, and points-per-wavelength audits',
+                'cfl_standard': 'dt = 0.90 * dx / (c * sqrt(3)) <= 1/sqrt(3)',
+                'sponge_boundary_absorption': 'Quadratic damping conductivity layer sigma(d) = sigma0 * (d/w)^2',
+                'materials_library_audit': [
+                    {
+                        'material': a.material_name,
+                        'wave_speed': a.wave_speed,
+                        'points_per_wavelength': a.points_per_wavelength,
+                        'status': a.status,
+                        'epistemic_label': a.epistemic_label,
+                        'diagnostic_note': a.diagnostic_note,
+                    }
+                    for a in [
+                        sw.audit_wavelength_resolution('Air (baseline)', 1.00),
+                        sw.audit_wavelength_resolution('Bismuth', 0.55),
+                        sw.audit_wavelength_resolution('Element 115 — Moscovium', 0.15),
+                        sw.audit_wavelength_resolution('Exotic metamaterial', 0.04),
+                    ]
+                ],
+            },
         },
         'disclaimer': (
-            'Conventional electrostatics baseline. No anomalous thrust model. '
+            'Conventional electrostatics and mathematical wave baseline. No anomalous thrust model. '
             'Not Exodus patent geometry. Not experimental data.'
         ),
     }
