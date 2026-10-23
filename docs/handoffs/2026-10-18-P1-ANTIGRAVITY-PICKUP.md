@@ -1,11 +1,11 @@
 # P1 — Antigravity / Hermes implementation pickup and independent review contract
 
-**STATE: READY FOR CHATGPT INDEPENDENT RE-REVIEW — P1 R4. PR #10 REMAINS DRAFT; DO NOT MERGE.**
+**STATE: READY FOR CHATGPT INDEPENDENT RE-REVIEW — P1 R5. PR #10 REMAINS DRAFT; DO NOT MERGE.**
 
 - Repository: https://github.com/aguacatero/scalar-wave-viz
 - Tracker: [Issue #6](https://github.com/aguacatero/scalar-wave-viz/issues/6)
 - Branch: `p1-numerics-force-accounting-2026-10-18`; base: `main`
-- **Current draft PR: [#10](https://github.com/aguacatero/scalar-wave-viz/pull/10)** — P1-A, P1-B, P1-C, and P1-D fully implemented and tested with 65 passing unit tests (0 failures, 0 errors).
+- **Current draft PR: [#10](https://github.com/aguacatero/scalar-wave-viz/pull/10)** — P1-A, P1-B, P1-C, and P1-D fully implemented and tested with 68 passing unit tests (0 failures, 0 errors).
 - P0 merged [PR #5](https://github.com/aguacatero/scalar-wave-viz/pull/5) as merge commit `174c6b895a0c2ec416b6d46ab9e0835b14a8cb49` on 2026-10-18 (Pacific)
 - Independently accepted P0 implementation code SHA: `57067164b47d7d374a1d7bb1c8ce00bb79aa07f8` — preserved byte-for-byte in `electrostatics_baseline.py`.
 - Next milestone: P1 **only**. P2 patent FIGS. 4–8 model is reserved for [Issue #7](https://github.com/aguacatero/scalar-wave-viz/issues/7) after P1's independent acceptance.
@@ -14,6 +14,7 @@
   - `docs/handoffs/2026-10-19-P1-CHATGPT-R1-FIX-QUEUE.md` tracking R1 review [`pullrequestreview-5571628683`](https://github.com/aguacatero/scalar-wave-viz/pull/10#pullrequestreview-5571628683).
   - `docs/handoffs/2026-10-19-P1-CHATGPT-R2-FIX-QUEUE.md` tracking R2 review [`pullrequestreview-5573216899`](https://github.com/aguacatero/scalar-wave-viz/pull/10#pullrequestreview-5573216899).
   - `docs/handoffs/2026-10-19-P1-CHATGPT-R3-FIX-QUEUE.md` tracking R3 review [`pullrequestreview-5575193859`](https://github.com/aguacatero/scalar-wave-viz/pull/10#pullrequestreview-5575193859).
+  - `docs/handoffs/2026-10-19-P1-CHATGPT-R4-FIX-QUEUE.md` tracking R4 review [`pullrequestreview-5576900379`](https://github.com/aguacatero/scalar-wave-viz/pull/10#pullrequestreview-5576900379).
 
 ---
 
@@ -56,9 +57,9 @@
 ---
 
 ## 2. Test Suite & Evidence
-- **Total unit tests:** **65 passed** (0 failures, 0 errors).
+- **Total unit tests:** **68 passed** (0 failures, 0 errors).
   - 35 baseline regression tests in `tests/test_electrostatics_baseline.py` (all green).
-  - 13 P1 electrostatic numerics & Maxwell stress tests in `tests/test_p1_numerics.py` (all green).
+  - 16 P1 electrostatic numerics, independent solvers & Maxwell stress tests in `tests/test_p1_numerics.py` (all green).
   - 17 P1 3D scalar wave numerics & benchmark tests in `tests/test_p1_wave_3d.py` (all green).
 - Local execution: `python3 -m unittest discover -s tests -v`.
 - Demo and manifest execution: `MPLBACKEND=Agg python3 examples/electrostatics_demo.py` generates valid PNG and RFC 8259 compliant manifest.

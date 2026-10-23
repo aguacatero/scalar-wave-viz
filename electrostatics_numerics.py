@@ -1209,3 +1209,438 @@ def contour_invariance_study(
         diagnostic_note=note,
     )
 
+
+def solve_dirichlet_independent_matrix_free_sor(
+    config: GroundedBoxConfig | None = None,
+    tolerance_v: float = 1e-11,
+    max_iterations: int = 20000,
+) -> FieldSolution:
+    """Independently implemented matrix-free Red-Black SOR 5-point Laplace solver (P1-R4-F3).
+
+    Solves the discrete 5-point Dirichlet Laplace BVP on the staircase grid using vectorized
+    Red-Black Successive Over-Relaxation (SOR) without calling electrostatics_baseline.solve_dirichlet
+    or scipy.sparse.linalg.spsolve.
+    """
+    cfg = config or GroundedBoxConfig()
+    n = cfg.n
+    h = cfg.box_width_m / (n - 1)
+    coords = np.linspace(-cfg.box_width_m / 2.0, cfg.box_width_m / 2.0, n)
+    x, y = np.meshgrid(coords, coords, indexing='ij')
+
+    le = cfg.left_electrode
+    re = cfg.right_electrode
+    left_mask = (x - le.center_x_m) ** 2 + (y - le.center_y_m) ** 2 <= le.radius_m ** 2
+    right_mask = (x - re.center_x_m) ** 2 + (y - re.center_y_m) ** 2 <= re.radius_m ** 2
+    conductor_mask = left_mask | right_mask
+
+    boundary_mask = np.zeros((n, n), dtype=bool)
+    boundary_mask[0, :] = boundary_mask[-1, :] = True
+    boundary_mask[:, 0] = boundary_mask[:, -1] = True
+    fixed_mask = boundary_mask | conductor_mask
+    free_mask = ~fixed_mask
+
+    pot = np.zeros((n, n), dtype=float)
+    pot[left_mask] = le.voltage_v
+    pot[right_mask] = re.voltage_v
+
+    # Optimal spectral radius SOR relaxation factor for 2D Poisson on n x n grid
+    rho_jacobi = np.cos(np.pi / (n - 1))
+    omega = 2.0 / (1.0 + np.sqrt(max(1e-12, 1.0 - rho_jacobi ** 2)))
+
+    idx_sum = (np.arange(n)[:, None] + np.arange(n)[None, :])
+    red_free = free_mask & ((idx_sum % 2) == 0)
+    black_free = free_mask & ((idx_sum % 2) == 1)
+
+    for _ in range(max_iterations):
+        # Update Red nodes
+        avg_r = 0.25 * (
+            np.roll(pot, 1, axis=0) + np.roll(pot, -1, axis=0)
+            + np.roll(pot, 1, axis=1) + np.roll(pot, -1, axis=1)
+        )
+        diff_r = avg_r - pot
+        pot[red_free] += omega * diff_r[red_free]
+
+        # Update Black nodes
+        avg_b = 0.25 * (
+            np.roll(pot, 1, axis=0) + np.roll(pot, -1, axis=0)
+            + np.roll(pot, 1, axis=1) + np.roll(pot, -1, axis=1)
+        )
+        diff_b = avg_b - pot
+        pot[black_free] += omega * diff_b[black_free]
+
+        # Check discrete residual every 25 iterations
+        res_interior = np.abs(
+            0.25 * (pot[2:, 1:-1] + pot[:-2, 1:-1] + pot[1:-1, 2:] + pot[1:-1, :-2]) - pot[1:-1, 1:-1]
+        )
+        max_res = float(np.max(res_interior[free_mask[1:-1, 1:-1]]))
+        if max_res <= tolerance_v:
+            break
+
+    raw_ex = -np.gradient(pot, h, axis=0, edge_order=2)
+    raw_ey = -np.gradient(pot, h, axis=1, edge_order=2)
+
+    vac_mask = ~fixed_mask
+    vac_ex = np.full_like(raw_ex, np.nan)
+    vac_ey = np.full_like(raw_ey, np.nan)
+    vac_ex[vac_mask] = raw_ex[vac_mask]
+    vac_ey[vac_mask] = raw_ey[vac_mask]
+
+    res_full = np.zeros_like(pot)
+    res_full[1:-1, 1:-1] = np.abs(
+        pot[2:, 1:-1] + pot[:-2, 1:-1] + pot[1:-1, 2:] + pot[1:-1, :-2] - 4.0 * pot[1:-1, 1:-1]
+    )
+    max_disc_res = float(np.max(res_full[vac_mask]))
+
+    return FieldSolution(
+        potential_v=pot,
+        ex_v_per_m=vac_ex,
+        ey_v_per_m=vac_ey,
+        vacuum_mask=vac_mask,
+        conductor_mask=conductor_mask,
+        boundary_mask=boundary_mask,
+        fixed_mask=fixed_mask,
+        grid_spacing_m=h,
+        max_discrete_residual_v=max_disc_res,
+        raw_gradient_x_v_per_m=raw_ex,
+        raw_gradient_y_v_per_m=raw_ey,
+        config=cfg,
+    )
+
+
+@dataclass(frozen=True)
+class MFSContinuousLaplaceSolution:
+    """Grid-free continuous Method of Fundamental Solutions (MFS) Laplace solution (P1-R4-F3).
+
+    Represents V(x,y) in the continuous vacuum domain Omega_vac as an analytical harmonic superposition
+    of 2D logarithmic line-charge potentials placed strictly outside Omega_vac.
+    By the Maximum Principle for harmonic functions, the global L_infinity potential error throughout
+    Omega_vac is bounded by max_boundary_potential_error_v on the continuous conductor surfaces.
+    """
+    max_collocation_residual_v: float
+    max_independent_boundary_error_v: float
+    midpoint_potential_v: float
+    midpoint_ex_v_per_m: float
+    midpoint_ey_v_per_m: float
+    left_electrode_fx_n_per_m: float
+    left_electrode_fy_n_per_m: float
+    right_electrode_fx_n_per_m: float
+    right_electrode_fy_n_per_m: float
+    enclosure_reaction_fx_n_per_m: float
+    enclosure_reaction_fy_n_per_m: float
+    net_residual_magnitude_n_per_m: float
+
+
+def solve_electrostatics_mfs_boundary_collocation(
+    config: GroundedBoxConfig | None = None,
+    n_circle_sources: int = 44,
+    n_wall_sources_per_side: int = 44,
+) -> MFSContinuousLaplaceSolution:
+    """Independently implemented grid-free Method of Fundamental Solutions (MFS) 2D Laplace solver (P1-R4-F3).
+
+    Solves nabla^2 V = 0 in the continuous vacuum domain between exact circular cylindrical electrodes
+    and the grounded square enclosure without any finite-difference grid or staircase approximation.
+    """
+    cfg = config or GroundedBoxConfig()
+    L = float(cfg.box_width_m)
+    half = L / 2.0
+    le = cfg.left_electrode
+    re = cfg.right_electrode
+
+    # 1. Place fictitious line-charge sources strictly outside vacuum domain Omega_vac
+    theta_s = np.linspace(0.0, 2.0 * np.pi, n_circle_sources, endpoint=False)
+    r_src_l = 0.50 * le.radius_m
+    r_src_r = 0.50 * re.radius_m
+    src_l = np.column_stack([le.center_x_m + r_src_l * np.cos(theta_s), le.center_y_m + r_src_l * np.sin(theta_s)])
+    src_r = np.column_stack([re.center_x_m + r_src_r * np.cos(theta_s), re.center_y_m + r_src_r * np.sin(theta_s)])
+
+    d_wall = 1.25 * half
+    s_1d = np.linspace(-d_wall, d_wall, n_wall_sources_per_side)
+    src_w = np.vstack([
+        np.column_stack([s_1d, np.full_like(s_1d, -d_wall)]),
+        np.column_stack([s_1d, np.full_like(s_1d, d_wall)]),
+        np.column_stack([np.full_like(s_1d, -d_wall), s_1d]),
+        np.column_stack([np.full_like(s_1d, d_wall), s_1d]),
+    ])
+    sources = np.vstack([src_l, src_r, src_w])
+
+    # 2. Oversampled boundary collocation points on exact circles and square enclosure walls
+    theta_c = np.linspace(0.0, 2.0 * np.pi, 3 * n_circle_sources, endpoint=False)
+    col_l = np.column_stack([le.center_x_m + le.radius_m * np.cos(theta_c), le.center_y_m + le.radius_m * np.sin(theta_c)])
+    col_r = np.column_stack([re.center_x_m + re.radius_m * np.cos(theta_c), re.center_y_m + re.radius_m * np.sin(theta_c)])
+
+    w_1d = np.linspace(-half, half, 3 * n_wall_sources_per_side)
+    col_w = np.vstack([
+        np.column_stack([w_1d, np.full_like(w_1d, -half)]),
+        np.column_stack([w_1d, np.full_like(w_1d, half)]),
+        np.column_stack([np.full_like(w_1d, -half), w_1d]),
+        np.column_stack([np.full_like(w_1d, half), w_1d]),
+    ])
+    colloc = np.vstack([col_l, col_r, col_w])
+    rhs = np.concatenate([
+        np.full(len(col_l), le.voltage_v, dtype=float),
+        np.full(len(col_r), re.voltage_v, dtype=float),
+        np.zeros(len(col_w), dtype=float),
+    ])
+
+    dx = colloc[:, None, 0] - sources[None, :, 0]
+    dy = colloc[:, None, 1] - sources[None, :, 1]
+    G = np.hstack([np.log(np.hypot(dx, dy)), np.ones((len(colloc), 1), dtype=float)])
+    weights, *_ = np.linalg.lstsq(G, rhs, rcond=None)
+    max_colloc_res = float(np.max(np.abs(G @ weights - rhs)))
+
+    q = weights[:-1]
+    c_offset = float(weights[-1])
+
+    def _eval_v_and_e(pts: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        rx = pts[:, None, 0] - sources[None, :, 0]
+        ry = pts[:, None, 1] - sources[None, :, 1]
+        r2 = rx ** 2 + ry ** 2
+        v = 0.5 * np.log(r2) @ q + c_offset
+        ex = -(rx / r2) @ q
+        ey = -(ry / r2) @ q
+        return v, ex, ey
+
+    # 3. Independent dense boundary verification (Maximum Principle certificate)
+    theta_v = np.linspace(0.0, 2.0 * np.pi, 720, endpoint=False) + (np.pi / 720.0)
+    ver_l = np.column_stack([le.center_x_m + le.radius_m * np.cos(theta_v), le.center_y_m + le.radius_m * np.sin(theta_v)])
+    ver_r = np.column_stack([re.center_x_m + re.radius_m * np.cos(theta_v), re.center_y_m + re.radius_m * np.sin(theta_v)])
+    wv_1d = np.linspace(-half, half, 400)
+    ver_w = np.vstack([
+        np.column_stack([wv_1d, np.full_like(wv_1d, -half)]),
+        np.column_stack([wv_1d, np.full_like(wv_1d, half)]),
+        np.column_stack([np.full_like(wv_1d, -half), wv_1d]),
+        np.column_stack([np.full_like(wv_1d, half), wv_1d]),
+    ])
+    v_l, _, _ = _eval_v_and_e(ver_l)
+    v_r, _, _ = _eval_v_and_e(ver_r)
+    v_w, _, _ = _eval_v_and_e(ver_w)
+    max_ind_bc_err = float(max(
+        np.max(np.abs(v_l - le.voltage_v)),
+        np.max(np.abs(v_r - re.voltage_v)),
+        np.max(np.abs(v_w - 0.0)),
+    ))
+
+    # 4. Evaluate midpoint field E(0, 0)
+    v0, ex0, ey0 = _eval_v_and_e(np.array([[0.0, 0.0]], dtype=float))
+
+    # 5. Analytical contour integration of Maxwell stress tensor around each conductor and enclosure
+    n_quad = 720
+    ang = np.linspace(0.0, 2.0 * np.pi, n_quad, endpoint=False)
+    d_ang = 2.0 * np.pi / n_quad
+
+    def _circle_force(el: ElectrodeConfig) -> tuple[float, float]:
+        rc = 1.45 * el.radius_m
+        pts = np.column_stack([el.center_x_m + rc * np.cos(ang), el.center_y_m + rc * np.sin(ang)])
+        nx, ny = np.cos(ang), np.sin(ang)
+        _, ex, ey = _eval_v_and_e(pts)
+        e2 = ex ** 2 + ey ** 2
+        edotn = ex * nx + ey * ny
+        tx = EPSILON_0_F_PER_M * (ex * edotn - 0.5 * e2 * nx)
+        ty = EPSILON_0_F_PER_M * (ey * edotn - 0.5 * e2 * ny)
+        return float(np.sum(tx) * rc * d_ang), float(np.sum(ty) * rc * d_ang)
+
+    l_fx, l_fy = _circle_force(le)
+    r_fx, r_fy = _circle_force(re)
+
+    # Outer square contour at +/- 0.92 * half enclosing both electrodes (inward normal for box reaction)
+    b_half = 0.92 * half
+    n_side = 400
+    ds = (2.0 * b_half) / n_side
+    s_pts = np.linspace(-b_half + 0.5 * ds, b_half - 0.5 * ds, n_side)
+    # Right (+x), Left (-x), Top (+y), Bottom (-y)
+    pts_box = np.vstack([
+        np.column_stack([np.full_like(s_pts, b_half), s_pts]),
+        np.column_stack([np.full_like(s_pts, -b_half), s_pts]),
+        np.column_stack([s_pts, np.full_like(s_pts, b_half)]),
+        np.column_stack([s_pts, np.full_like(s_pts, -b_half)]),
+    ])
+    n_out = np.vstack([
+        np.column_stack([np.ones_like(s_pts), np.zeros_like(s_pts)]),
+        np.column_stack([-np.ones_like(s_pts), np.zeros_like(s_pts)]),
+        np.column_stack([np.zeros_like(s_pts), np.ones_like(s_pts)]),
+        np.column_stack([np.zeros_like(s_pts), -np.ones_like(s_pts)]),
+    ])
+    _, ex_b, ey_b = _eval_v_and_e(pts_box)
+    e2_b = ex_b ** 2 + ey_b ** 2
+    edotn_b = ex_b * n_out[:, 0] + ey_b * n_out[:, 1]
+    tx_b = EPSILON_0_F_PER_M * (ex_b * edotn_b - 0.5 * e2_b * n_out[:, 0])
+    ty_b = EPSILON_0_F_PER_M * (ey_b * edotn_b - 0.5 * e2_b * n_out[:, 1])
+    box_fx = float(-np.sum(tx_b) * ds)
+    box_fy = float(-np.sum(ty_b) * ds)
+
+    net_mag = float(np.hypot(l_fx + r_fx + box_fx, l_fy + r_fy + box_fy))
+
+    return MFSContinuousLaplaceSolution(
+        max_collocation_residual_v=max_colloc_res,
+        max_independent_boundary_error_v=max_ind_bc_err,
+        midpoint_potential_v=float(v0[0]),
+        midpoint_ex_v_per_m=float(ex0[0]),
+        midpoint_ey_v_per_m=float(ey0[0]),
+        left_electrode_fx_n_per_m=l_fx,
+        left_electrode_fy_n_per_m=l_fy,
+        right_electrode_fx_n_per_m=r_fx,
+        right_electrode_fy_n_per_m=r_fy,
+        enclosure_reaction_fx_n_per_m=box_fx,
+        enclosure_reaction_fy_n_per_m=box_fy,
+        net_residual_magnitude_n_per_m=net_mag,
+    )
+
+
+@dataclass(frozen=True)
+class IndependentSolverComparisonRow:
+    n: int
+    grid_spacing_m: float
+    midpoint_e_rel_error_vs_mfs: float
+    left_force_vec_rel_error_vs_mfs: float
+    right_force_vec_rel_error_vs_mfs: float
+    enclosure_force_vec_rel_error_vs_mfs: float
+
+
+@dataclass(frozen=True)
+class IndependentSolverVerificationStudy:
+    mfs_max_independent_boundary_error_v: float
+    mfs_net_force_residual_n_per_m: float
+    sor_vs_direct_lu_max_potential_diff_v: float
+    sor_vs_direct_lu_max_force_diff_n_per_m: float
+    fdm_vs_mfs_rows: list[IndependentSolverComparisonRow]
+    errors_decrease_toward_mfs_with_refinement: bool
+    is_verified_to_tolerance: bool
+    methodological_distinction_note: str
+    diagnostic_note: str
+
+
+def benchmark_independent_electrostatic_solver_verification(
+    config: GroundedBoxConfig | None = None,
+    n_list: Sequence[int] = (41, 81, 161, 321),
+    tolerance_mfs_boundary_v: float = 1e-3,
+    tolerance_sor_diff_v: float = 1e-8,
+    tolerance_finest_force_rel_vs_mfs: float = 0.05,
+) -> IndependentSolverVerificationStudy:
+    """Compare baseline 5-point FDM solver against two independent solver implementations (P1-R4-F3).
+
+    1. Matrix-free Red-Black SOR solver on the same discrete staircase grid (verifies discrete linear solver
+       independently of scipy.sparse.linalg.spsolve).
+    2. Grid-free continuous Method of Fundamental Solutions (MFS) boundary-collocation solver on the exact
+       continuous circular geometry (verifies convergence of the 5-point staircase FDM toward an independent
+       grid-free harmonic formulation).
+    """
+    cfg = config or GroundedBoxConfig(
+        left_electrode=ElectrodeConfig(center_x_m=-0.008, center_y_m=0.004, radius_m=0.003, voltage_v=600.0),
+        right_electrode=ElectrodeConfig(center_x_m=0.008, center_y_m=-0.002, radius_m=0.003, voltage_v=-400.0),
+    )
+
+    # 1. Continuous grid-free MFS reference
+    mfs = solve_electrostatics_mfs_boundary_collocation(cfg)
+
+    # 2. Discrete matrix-free SOR vs sparse direct LU at n=81
+    cfg_81 = GroundedBoxConfig(
+        n=81, box_width_m=cfg.box_width_m, left_electrode=cfg.left_electrode, right_electrode=cfg.right_electrode
+    )
+    sol_lu = electrode_pair_in_grounded_box(config=cfg_81)
+    sol_sor = solve_dirichlet_independent_matrix_free_sor(config=cfg_81)
+    sor_pot_diff = float(np.max(np.abs(sol_lu.potential_v - sol_sor.potential_v)))
+
+    b_lu = evaluate_whole_apparatus_force_budget(sol_lu)
+    b_sor = evaluate_whole_apparatus_force_budget(sol_sor)
+    sor_force_diff = float(max(
+        abs(b_lu.left_electrode_fx_n_per_m - b_sor.left_electrode_fx_n_per_m),
+        abs(b_lu.left_electrode_fy_n_per_m - b_sor.left_electrode_fy_n_per_m),
+        abs(b_lu.right_electrode_fx_n_per_m - b_sor.right_electrode_fx_n_per_m),
+        abs(b_lu.right_electrode_fy_n_per_m - b_sor.right_electrode_fy_n_per_m),
+        abs(b_lu.enclosure_reaction_fx_n_per_m - b_sor.enclosure_reaction_fx_n_per_m),
+        abs(b_lu.enclosure_reaction_fy_n_per_m - b_sor.enclosure_reaction_fy_n_per_m),
+    ))
+
+    # 3. Convergence of 5-point staircase FDM toward continuous grid-free MFS across n_list
+    mfs_e0_mag = float(np.hypot(mfs.midpoint_ex_v_per_m, mfs.midpoint_ey_v_per_m))
+    mfs_l_mag = float(np.hypot(mfs.left_electrode_fx_n_per_m, mfs.left_electrode_fy_n_per_m))
+    mfs_r_mag = float(np.hypot(mfs.right_electrode_fx_n_per_m, mfs.right_electrode_fy_n_per_m))
+    mfs_b_mag = float(np.hypot(mfs.enclosure_reaction_fx_n_per_m, mfs.enclosure_reaction_fy_n_per_m))
+
+    rows: list[IndependentSolverComparisonRow] = []
+    for n in n_list:
+        cfg_n = GroundedBoxConfig(
+            n=n, box_width_m=cfg.box_width_m, left_electrode=cfg.left_electrode, right_electrode=cfg.right_electrode
+        )
+        sol = electrode_pair_in_grounded_box(config=cfg_n)
+        b = evaluate_whole_apparatus_force_budget(sol)
+        mid = n // 2
+
+        if sol.vacuum_mask[mid, mid] and mfs_e0_mag > 0:
+            e0_err = float(
+                np.hypot(sol.ex_v_per_m[mid, mid] - mfs.midpoint_ex_v_per_m, sol.ey_v_per_m[mid, mid] - mfs.midpoint_ey_v_per_m)
+                / mfs_e0_mag
+            )
+        else:
+            e0_err = 0.0
+        l_err = float(
+            np.hypot(b.left_electrode_fx_n_per_m - mfs.left_electrode_fx_n_per_m, b.left_electrode_fy_n_per_m - mfs.left_electrode_fy_n_per_m)
+            / mfs_l_mag
+        ) if mfs_l_mag > 0 else 0.0
+        r_err = float(
+            np.hypot(b.right_electrode_fx_n_per_m - mfs.right_electrode_fx_n_per_m, b.right_electrode_fy_n_per_m - mfs.right_electrode_fy_n_per_m)
+            / mfs_r_mag
+        ) if mfs_r_mag > 0 else 0.0
+        b_err = float(
+            np.hypot(b.enclosure_reaction_fx_n_per_m - mfs.enclosure_reaction_fx_n_per_m, b.enclosure_reaction_fy_n_per_m - mfs.enclosure_reaction_fy_n_per_m)
+            / mfs_b_mag
+        ) if mfs_b_mag > 0 else 0.0
+
+        rows.append(IndependentSolverComparisonRow(
+            n=n,
+            grid_spacing_m=float(sol.grid_spacing_m),
+            midpoint_e_rel_error_vs_mfs=e0_err,
+            left_force_vec_rel_error_vs_mfs=l_err,
+            right_force_vec_rel_error_vs_mfs=r_err,
+            enclosure_force_vec_rel_error_vs_mfs=b_err,
+        ))
+
+    decreases = bool(
+        rows[-1].midpoint_e_rel_error_vs_mfs < rows[0].midpoint_e_rel_error_vs_mfs
+        and rows[-1].left_force_vec_rel_error_vs_mfs < rows[0].left_force_vec_rel_error_vs_mfs
+        and rows[-1].right_force_vec_rel_error_vs_mfs < rows[0].right_force_vec_rel_error_vs_mfs
+        and rows[-1].enclosure_force_vec_rel_error_vs_mfs < rows[0].enclosure_force_vec_rel_error_vs_mfs
+    ) if len(rows) >= 2 else False
+
+    finest = rows[-1]
+    is_ok = bool(
+        mfs.max_independent_boundary_error_v <= tolerance_mfs_boundary_v
+        and mfs.net_residual_magnitude_n_per_m < 1e-8
+        and sor_pot_diff <= tolerance_sor_diff_v
+        and decreases
+        and finest.left_force_vec_rel_error_vs_mfs <= tolerance_finest_force_rel_vs_mfs
+        and finest.right_force_vec_rel_error_vs_mfs <= tolerance_finest_force_rel_vs_mfs
+        and finest.enclosure_force_vec_rel_error_vs_mfs <= tolerance_finest_force_rel_vs_mfs
+    )
+
+    distinction = (
+        'Methodological distinction (P1-R4-F3): (1) Maxwell stress vs virtual work compares two force-extraction '
+        'methods on the same 5-point FDM solver; (2) sparse direct LU (spsolve) vs matrix-free Red-Black SOR '
+        'compares two independent discrete linear solvers on the same staircase grid; (3) 5-point staircase FDM '
+        'vs grid-free Method of Fundamental Solutions (MFS) boundary-collocation compares two genuinely '
+        'independent numerical formulations of the 2D Laplace boundary-value problem.'
+    )
+
+    note = (
+        f'Independent solver verification across n={[r.n for r in rows]}: '
+        f'Grid-free MFS harmonic certificate max boundary error={mfs.max_independent_boundary_error_v:.2e} V, '
+        f'MFS whole-apparatus net residual={mfs.net_residual_magnitude_n_per_m:.2e} N/m. '
+        f'Matrix-free SOR vs direct LU (n=81) max potential diff={sor_pot_diff:.2e} V, force diff={sor_force_diff:.2e} N/m. '
+        f'5-point FDM vs continuous MFS force errors at n={finest.n}: '
+        f'left={finest.left_force_vec_rel_error_vs_mfs:.2%}, right={finest.right_force_vec_rel_error_vs_mfs:.2%}, '
+        f'enclosure={finest.enclosure_force_vec_rel_error_vs_mfs:.2%}, E(0,0)={finest.midpoint_e_rel_error_vs_mfs:.2%}.'
+    )
+
+    return IndependentSolverVerificationStudy(
+        mfs_max_independent_boundary_error_v=mfs.max_independent_boundary_error_v,
+        mfs_net_force_residual_n_per_m=mfs.net_residual_magnitude_n_per_m,
+        sor_vs_direct_lu_max_potential_diff_v=sor_pot_diff,
+        sor_vs_direct_lu_max_force_diff_n_per_m=sor_force_diff,
+        fdm_vs_mfs_rows=rows,
+        errors_decrease_toward_mfs_with_refinement=decreases,
+        is_verified_to_tolerance=is_ok,
+        methodological_distinction_note=distinction,
+        diagnostic_note=note,
+    )
+
+

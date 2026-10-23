@@ -130,26 +130,34 @@ class BoundaryReflectionBenchmarkTests(unittest.TestCase):
         self.assertAlmostEqual(res.masked_proxy_ratio, 0.0251, delta=0.010)
 
     def test_sponge_boundary_reflection_reference_subtracted(self):
-        """P1-R2-F1 / P1-R3-F4 regression: Reference-subtracted reflection with geometric arrival gating and 3D energy."""
+        """P1-R2-F1 / P1-R3-F4 / P1-R4-F1 regression: Reference-subtracted reflection with closed discrete energy budget."""
         res = sw.benchmark_sponge_reflection_reference_subtracted(
             grid_size=40, sponge_width=8, max_sigma=3.0, n_steps=80, ref_grid_size=90, probe_offset=6
         )
-        self.assertTrue(res.is_absorbed_to_tolerance)
+        self.assertTrue(res.is_sponge_benchmark_valid)
         self.assertTrue(res.reference_domain_free_of_wall_return)
         self.assertGreater(res.reference_wall_return_step, res.n_steps)
         self.assertEqual(res.geometric_pre_arrival_step, 10)
+        self.assertLess(res.probe_local_peak_squared_proxy, 0.05)
         self.assertLess(res.probe_peak_squared_reflection_proxy, 0.05)
-        self.assertLess(res.integrated_reflected_energy_fraction, 0.015)
+        self.assertLess(res.terminal_interior_reflected_energy_snapshot_proxy, 0.015)
+        self.assertLess(res.peak_window_interior_reflected_energy_snapshot_proxy, 0.020)
         # Pre-arrival difference is bounded by Gaussian tail (< 1e-8) before reflected pulse returns
         self.assertLess(res.pre_arrival_difference_max, 1e-8)
+        # P1-R4-F1: Closed discrete energy budget and surface-integrated return flux
+        self.assertLess(res.discrete_energy_budget_closure_error, 1e-12)
+        self.assertGreater(res.sponge_dissipated_energy_fraction, 0.95)
+        self.assertLess(res.surface_integrated_return_flux_ratio, 0.05)
 
     def test_sponge_reflection_parameter_sweep_and_adversarial_ref_domain(self):
-        """P1-R3-F4 regression: Parameter sweep stability and adversarial rejection of contaminated reference domain."""
+        """P1-R3-F4 / P1-R4-F1 regression: Parameter sweep across ref domain, T_obs, spatial dx refinement, and dt."""
         sweep = sw.benchmark_sponge_reflection_parameter_sweep()
         self.assertTrue(sweep.is_sweep_stable)
         self.assertLess(sweep.reference_domain_invariance_diff, 1e-10)
         self.assertLess(sweep.dt_refinement_relative_diff, 0.15)
         self.assertTrue(sweep.monotonic_with_sponge_width)
+        self.assertTrue(sweep.dx_refinement_consistent)
+        self.assertTrue(sweep.observation_window_bounded)
 
         # Adversarial negative control: reference domain too small (ref_grid_size=50 for n_steps=80)
         # allows outer reference wall reflection to return before n_steps completes
@@ -157,27 +165,31 @@ class BoundaryReflectionBenchmarkTests(unittest.TestCase):
             grid_size=40, sponge_width=8, max_sigma=3.0, n_steps=80, ref_grid_size=50, probe_offset=6
         )
         self.assertFalse(contaminated.reference_domain_free_of_wall_return)
-        self.assertFalse(contaminated.is_absorbed_to_tolerance)
+        self.assertFalse(contaminated.is_sponge_benchmark_valid)
 
     def test_sponge_reflection_negative_and_positive_controls(self):
-        """P1-R2-F1 / P1-R3-F4 regression: Negative (sigma=0) and positive sponge controls on both probe and 3D energy."""
+        """P1-R2-F1 / P1-R3-F4 / P1-R4-F1 regression: Negative (sigma=0) and positive sponge controls with dissipation."""
         rows = sw.benchmark_sponge_reflection_controls(
             sigma_list=(0.0, 0.5, 3.0, 15.0), grid_size=40, sponge_width=8, n_steps=80, ref_grid_size=90
         )
         ctrl_map = {r.max_sigma: r for r in rows}
 
-        # 1. Negative control: undamped Dirichlet wall (sigma=0) produces strong reflection (> 10% proxy, > 15% interior energy)
-        self.assertGreater(ctrl_map[0.0].probe_peak_squared_reflection_proxy, 0.10)
-        self.assertGreater(ctrl_map[0.0].integrated_reflected_energy_fraction, 0.15)
+        # 1. Negative control: undamped Dirichlet wall (sigma=0) produces strong reflection and zero sponge dissipation
+        self.assertGreater(ctrl_map[0.0].probe_local_peak_squared_proxy, 0.10)
+        self.assertGreater(ctrl_map[0.0].terminal_interior_reflected_energy_snapshot_proxy, 0.15)
+        self.assertEqual(ctrl_map[0.0].sponge_dissipated_energy_fraction, 0.0)
+        self.assertLess(ctrl_map[0.0].discrete_energy_budget_closure_error, 1e-12)
 
-        # 2. Positive control: design sponge damping (sigma=3.0) suppresses reflection (> 20x energy reduction)
-        self.assertLess(ctrl_map[3.0].probe_peak_squared_reflection_proxy, 0.05)
-        self.assertLess(ctrl_map[3.0].integrated_reflected_energy_fraction, 0.015)
+        # 2. Positive control: design sponge damping (sigma=3.0) dissipates > 97% of total energy
+        self.assertLess(ctrl_map[3.0].probe_local_peak_squared_proxy, 0.05)
+        self.assertLess(ctrl_map[3.0].terminal_interior_reflected_energy_snapshot_proxy, 0.015)
+        self.assertGreater(ctrl_map[3.0].sponge_dissipated_energy_fraction, 0.95)
+        self.assertLess(ctrl_map[3.0].discrete_energy_budget_closure_error, 1e-12)
 
         # 3. High-sigma control: impedance mismatch at entrance increases reflection compared to optimal sponge
         self.assertGreater(
-            ctrl_map[15.0].integrated_reflected_energy_fraction,
-            ctrl_map[3.0].integrated_reflected_energy_fraction,
+            ctrl_map[15.0].terminal_interior_reflected_energy_snapshot_proxy,
+            ctrl_map[3.0].terminal_interior_reflected_energy_snapshot_proxy,
         )
 
 
@@ -225,7 +237,7 @@ class DiscreteEnergyConservationTests(unittest.TestCase):
         self.assertLess(max_drift, 1e-12)  # Exact conservation to machine precision
 
     def test_two_material_undamped_energy_conservation(self):
-        """P1-R1-F4 / P1-R2-F4 / P1-R3-F5 regression: Exact discrete Hamiltonian and actual terminal continuum energy."""
+        """P1-R1-F4 / P1-R2-F4 / P1-R3-F5 / P1-R4-F2 regression: Exact discrete Hamiltonian and terminal continuum energy."""
         res = sw.benchmark_two_material_energy_conservation(
             grid_size=36, n_steps=35, c1=1.0, c2=0.60
         )
@@ -233,21 +245,51 @@ class DiscreteEnergyConservationTests(unittest.TestCase):
         self.assertLess(res.max_discrete_hamiltonian_drift_ratio, 1e-10)
         self.assertLess(res.max_continuum_diagnostic_drift_ratio, 0.08)
 
-        # P1-R3-F5: final_energy must be the actual terminal trajectory value, not fabricated from max drift
+        # P1-R4-F2: continuum_energy_trajectory has n_steps + 1 entries (steps 0..n_steps)
+        self.assertEqual(len(res.continuum_energy_trajectory), 36)
+        self.assertEqual(len(res.exact_discrete_hamiltonian_trajectory), 35)
+
+        # P1-R3-F5 / P1-R4-F2: final_energy must be the actual terminal trajectory value, not one step behind
         self.assertAlmostEqual(res.final_energy, res.continuum_energy_trajectory[-1], places=12)
+        self.assertNotEqual(res.final_energy, res.continuum_energy_trajectory[-2])
         fabricated_max = res.initial_energy * (1.0 + res.max_continuum_diagnostic_drift_ratio)
         self.assertNotAlmostEqual(res.final_energy, fabricated_max, places=3)
         expected_signed_drift = (res.final_energy - res.initial_energy) / res.initial_energy
         self.assertAlmostEqual(res.terminal_continuum_signed_drift_ratio, expected_signed_drift, places=12)
+        self.assertGreater(res.terminal_continuum_signed_drift_ratio, 0.0)
 
-        # Adversarial negative-drift check: at n_steps=32, terminal continuum energy is strictly below initial_energy
+        # Adversarial negative-drift check: at n_steps=31, terminal continuum energy is strictly below initial_energy
         res_neg = sw.benchmark_two_material_energy_conservation(
-            grid_size=36, n_steps=32, c1=1.0, c2=0.60
+            grid_size=36, n_steps=31, c1=1.0, c2=0.60
         )
+        self.assertEqual(len(res_neg.continuum_energy_trajectory), 32)
+        self.assertEqual(len(res_neg.exact_discrete_hamiltonian_trajectory), 31)
         self.assertLess(res_neg.max_discrete_hamiltonian_drift_ratio, 1e-10)
         self.assertAlmostEqual(res_neg.final_energy, res_neg.continuum_energy_trajectory[-1], places=12)
+        self.assertNotEqual(res_neg.final_energy, res_neg.continuum_energy_trajectory[-2])
         self.assertLess(res_neg.final_energy, res_neg.initial_energy)
         self.assertLess(res_neg.terminal_continuum_signed_drift_ratio, 0.0)
+
+        # P1-R4-F2: Assert terminal reported energy against independently evaluated diagnostic on evolved fields
+        dt = 0.85 * 1.0 / (max(1.0, 0.60) * np.sqrt(3.0))
+        c_field = np.full((36, 36, 36), 1.0, dtype=float)
+        c_field[18:, :, :] = 0.60
+        sig_field = np.zeros_like(c_field)
+        coords = np.arange(36) * 1.0
+        X, Y, Z = np.meshgrid(coords, coords, coords, indexing='ij')
+        x0, y0, z0, sp = 9.0, 18.0, 18.0, 2.5
+        p0 = np.exp(-((X - x0)**2 + (Y - y0)**2 + (Z - z0)**2) / (2.0 * sp**2))
+        pm1 = np.exp(-((X - (x0 - 1.0 * dt))**2 + (Y - y0)**2 + (Z - z0)**2) / (2.0 * sp**2))
+        for arr in (p0, pm1):
+            arr[0, :, :] = arr[-1, :, :] = 0.0
+            arr[:, 0, :] = arr[:, -1, :] = 0.0
+            arr[:, :, 0] = arr[:, :, -1] = 0.0
+        p, pm = p0.copy(), pm1.copy()
+        for _ in range(35):
+            pn = sw.step_wave_fdtd(p, pm, c_field, sig_field, dt, 1.0)
+            pm, p = p, pn
+        h_indep = sw.compute_sampled_continuum_energy_diagnostic(p, pm, c_field, dt, 1.0)
+        self.assertAlmostEqual(res.final_energy, h_indep, places=12)
 
 
 class WaveMeshConvergenceAndSourceNormalizationTests(unittest.TestCase):

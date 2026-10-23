@@ -393,6 +393,9 @@ def _get_cached_force_sub_studies(active_config: GroundedBoxConfig) -> dict:
         tolerance_relative_change=0.05,
         tolerance_residual_n_per_m=1e-7,
     )
+    indep_study = en.benchmark_independent_electrostatic_solver_verification(
+        n_list=(41, 81, 161, 321),
+    )
     return {
         'force_mesh_convergence_study': {
             'description': 'Full-vector 6-component mesh convergence of Maxwell stress forces and 2D net balance residual across resolutions (P1-R3-F1)',
@@ -598,6 +601,28 @@ def _get_cached_force_sub_studies(active_config: GroundedBoxConfig) -> dict:
             'max_vector_last_step_diff_n_per_m': off_study.max_vector_last_step_diff_n_per_m,
             'is_converged_to_tolerance': off_study.is_converged_to_tolerance,
         },
+        'independent_electrostatic_solver_verification': {
+            'description': 'Independent electrostatic solver verification: matrix-free SOR and continuous grid-free Method of Fundamental Solutions (MFS) boundary collocation (P1-R4-F3)',
+            'mfs_max_independent_boundary_error_v': indep_study.mfs_max_independent_boundary_error_v,
+            'mfs_net_force_residual_n_per_m': indep_study.mfs_net_force_residual_n_per_m,
+            'sor_vs_direct_lu_max_potential_diff_v': indep_study.sor_vs_direct_lu_max_potential_diff_v,
+            'sor_vs_direct_lu_max_force_diff_n_per_m': indep_study.sor_vs_direct_lu_max_force_diff_n_per_m,
+            'fdm_vs_mfs_convergence': [
+                {
+                    'n': r.n,
+                    'grid_spacing_m': r.grid_spacing_m,
+                    'midpoint_e_rel_error_vs_mfs': r.midpoint_e_rel_error_vs_mfs,
+                    'left_force_vec_rel_error_vs_mfs': r.left_force_vec_rel_error_vs_mfs,
+                    'right_force_vec_rel_error_vs_mfs': r.right_force_vec_rel_error_vs_mfs,
+                    'enclosure_force_vec_rel_error_vs_mfs': r.enclosure_force_vec_rel_error_vs_mfs,
+                }
+                for r in indep_study.fdm_vs_mfs_rows
+            ],
+            'errors_decrease_toward_mfs_with_refinement': indep_study.errors_decrease_toward_mfs_with_refinement,
+            'is_verified_to_tolerance': indep_study.is_verified_to_tolerance,
+            'methodological_distinction_note': indep_study.methodological_distinction_note,
+            'diagnostic_note': indep_study.diagnostic_note,
+        },
     }
 
 
@@ -668,7 +693,7 @@ def _get_cached_wave_audit() -> dict:
             'is_accurate_to_tolerance': res_prop.is_accurate_to_tolerance,
         },
         'sponge_boundary_reflection_reference_subtracted_benchmark': {
-            'description': 'Reference-subtracted reflection measurement with geometric travel-time gating and 3D volume-integrated reflected energy fraction (P1-R2-F1, P1-R3-F4)',
+            'description': 'Reference-subtracted reflection measurement with closed discrete energy budget, surface-integrated return flux, and geometric travel-time gating (P1-R2-F1, P1-R3-F4, P1-R4-F1)',
             'parameters': {
                 'grid_size': res_sponge.grid_size,
                 'sponge_width': res_sponge.sponge_width,
@@ -677,21 +702,31 @@ def _get_cached_wave_audit() -> dict:
                 'ref_grid_size': res_sponge.ref_grid_size,
                 'probe_offset': 6,
                 'dt_factor': res_sponge.dt_factor,
-                'tolerance_power_reflection': 0.05,
+                'tolerance_proxy_max': 0.05,
             },
             'incident_peak_amplitude': res_sponge.incident_peak_amplitude,
             'reflected_peak_amplitude': res_sponge.reflected_peak_amplitude,
+            'probe_local_amplitude_ratio_proxy': res_sponge.probe_local_amplitude_ratio_proxy,
+            'probe_local_peak_squared_proxy': res_sponge.probe_local_peak_squared_proxy,
             'probe_amplitude_reflection_ratio': res_sponge.probe_amplitude_reflection_ratio,
             'probe_peak_squared_reflection_proxy': res_sponge.probe_peak_squared_reflection_proxy,
-            'integrated_reflected_energy_fraction': res_sponge.integrated_reflected_energy_fraction,
-            'amplitude_reflection_coefficient': res_sponge.amplitude_reflection_coefficient,
-            'power_reflection_coefficient': res_sponge.power_reflection_coefficient,
+            'terminal_interior_reflected_energy_snapshot_proxy': res_sponge.terminal_interior_reflected_energy_snapshot_proxy,
+            'peak_window_interior_reflected_energy_snapshot_proxy': res_sponge.peak_window_interior_reflected_energy_snapshot_proxy,
+            'initial_discrete_hamiltonian': res_sponge.initial_discrete_hamiltonian,
+            'final_total_discrete_hamiltonian': res_sponge.final_total_discrete_hamiltonian,
+            'cumulative_sponge_dissipated_energy': res_sponge.cumulative_sponge_dissipated_energy,
+            'sponge_dissipated_energy_fraction': res_sponge.sponge_dissipated_energy_fraction,
+            'remaining_total_energy_fraction': res_sponge.remaining_total_energy_fraction,
+            'discrete_energy_budget_closure_error': res_sponge.discrete_energy_budget_closure_error,
+            'cumulative_incident_outgoing_surface_flux': res_sponge.cumulative_incident_outgoing_surface_flux,
+            'cumulative_reflected_return_surface_flux': res_sponge.cumulative_reflected_return_surface_flux,
+            'surface_integrated_return_flux_ratio': res_sponge.surface_integrated_return_flux_ratio,
             'geometric_pre_arrival_step': res_sponge.geometric_pre_arrival_step,
             'geometric_peak_return_step': res_sponge.geometric_peak_return_step,
             'reference_wall_return_step': res_sponge.reference_wall_return_step,
             'reference_domain_free_of_wall_return': res_sponge.reference_domain_free_of_wall_return,
             'pre_arrival_difference_max': res_sponge.pre_arrival_difference_max,
-            'is_absorbed_to_tolerance': res_sponge.is_absorbed_to_tolerance,
+            'is_sponge_benchmark_valid': res_sponge.is_sponge_benchmark_valid,
             'metric_definition_note': res_sponge.metric_definition_note,
             'diagnostic_note': res_sponge.diagnostic_note,
         },
@@ -699,28 +734,41 @@ def _get_cached_wave_audit() -> dict:
             {
                 'max_sigma': r.max_sigma,
                 'reflected_peak': r.reflected_peak,
+                'probe_local_amplitude_ratio_proxy': r.probe_local_amplitude_ratio_proxy,
+                'probe_local_peak_squared_proxy': r.probe_local_peak_squared_proxy,
                 'probe_amplitude_reflection_ratio': r.probe_amplitude_reflection_ratio,
                 'probe_peak_squared_reflection_proxy': r.probe_peak_squared_reflection_proxy,
-                'integrated_reflected_energy_fraction': r.integrated_reflected_energy_fraction,
-                'amplitude_reflection_coefficient': r.amplitude_reflection_coefficient,
-                'power_reflection_coefficient': r.power_reflection_coefficient,
+                'terminal_interior_reflected_energy_snapshot_proxy': r.terminal_interior_reflected_energy_snapshot_proxy,
+                'peak_window_interior_reflected_energy_snapshot_proxy': r.peak_window_interior_reflected_energy_snapshot_proxy,
+                'sponge_dissipated_energy_fraction': r.sponge_dissipated_energy_fraction,
+                'remaining_total_energy_fraction': r.remaining_total_energy_fraction,
+                'discrete_energy_budget_closure_error': r.discrete_energy_budget_closure_error,
+                'surface_integrated_return_flux_ratio': r.surface_integrated_return_flux_ratio,
                 'description': r.description,
             }
             for r in ctrl_rows
         ],
         'sponge_reflection_parameter_sweep': {
-            'description': 'Parameter sweep verifying reference-domain size invariance, dt refinement stability, and monotonic sponge-width absorption (P1-R3-F4)',
+            'description': 'Parameter sweep verifying reference-domain size invariance, dt refinement stability, observation window bounds, spatial dx refinement, and monotonic sponge-width absorption (P1-R3-F4, P1-R4-F1)',
             'rows': [
                 {
                     'label': r.label,
+                    'sweep_category': r.sweep_category,
                     'grid_size': r.grid_size,
                     'sponge_width': r.sponge_width,
+                    'dx_m': r.dx_m,
                     'max_sigma': r.max_sigma,
                     'dt_factor': r.dt_factor,
                     'n_steps': r.n_steps,
+                    'physical_observation_time_s': r.physical_observation_time_s,
                     'ref_grid_size': r.ref_grid_size,
+                    'probe_local_peak_squared_proxy': r.probe_local_peak_squared_proxy,
                     'probe_peak_squared_reflection_proxy': r.probe_peak_squared_reflection_proxy,
-                    'integrated_reflected_energy_fraction': r.integrated_reflected_energy_fraction,
+                    'terminal_interior_reflected_energy_snapshot_proxy': r.terminal_interior_reflected_energy_snapshot_proxy,
+                    'peak_window_interior_reflected_energy_snapshot_proxy': r.peak_window_interior_reflected_energy_snapshot_proxy,
+                    'sponge_dissipated_energy_fraction': r.sponge_dissipated_energy_fraction,
+                    'discrete_energy_budget_closure_error': r.discrete_energy_budget_closure_error,
+                    'surface_integrated_return_flux_ratio': r.surface_integrated_return_flux_ratio,
                     'reference_wall_return_step': r.reference_wall_return_step,
                     'reference_domain_free_of_wall_return': r.reference_domain_free_of_wall_return,
                 }
@@ -729,6 +777,8 @@ def _get_cached_wave_audit() -> dict:
             'reference_domain_invariance_diff': sweep.reference_domain_invariance_diff,
             'dt_refinement_relative_diff': sweep.dt_refinement_relative_diff,
             'monotonic_with_sponge_width': sweep.monotonic_with_sponge_width,
+            'dx_refinement_consistent': sweep.dx_refinement_consistent,
+            'observation_window_bounded': sweep.observation_window_bounded,
             'is_sweep_stable': sweep.is_sweep_stable,
             'diagnostic_note': sweep.diagnostic_note,
         },

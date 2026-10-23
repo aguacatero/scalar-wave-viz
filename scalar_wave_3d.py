@@ -579,6 +579,67 @@ def fixed_window_late_early_probe_amplitude_proxy(
 benchmark_sponge_reflection_probe = fixed_window_late_early_probe_amplitude_proxy
 
 
+def compute_step_sponge_dissipation(
+    phi_next: np.ndarray,
+    phi_prev: np.ndarray,
+    c_field: np.ndarray,
+    sigma_field: np.ndarray,
+    dt: float,
+    dx: float,
+) -> float:
+    """Exact single-step sponge energy dissipation in the damped leapfrog identity (P1-R4-F1).
+
+    For the damped leapfrog update:
+      (phi^{n+1} - 2*phi^n + phi^{n-1})/dt^2 + sigma*(phi^{n+1} - phi^{n-1})/(2*dt) = c^2 * lap(phi^n),
+    multiplying by ((phi^{n+1} - phi^{n-1})/(2*c^2*dt)) * dx^3 yields the exact discrete balance:
+      H^{n+1/2} - H^{n-1/2} = -Delta D_sponge^n,
+    where:
+      Delta D_sponge^n = dt * sum_i (sigma_i / c_i^2) * ((phi_i^{n+1} - phi_i^{n-1}) / (2*dt))^2 * dx^3 >= 0.
+    """
+    v_centered = (phi_next - phi_prev) / (2.0 * dt)
+    dissipated_power = np.sum((sigma_field / (c_field ** 2)) * (v_centered ** 2)) * (dx ** 3)
+    return float(dt * dissipated_power)
+
+
+def compute_enclosing_surface_outward_flux(
+    phi_next: np.ndarray,
+    phi: np.ndarray,
+    phi_prev: np.ndarray,
+    dt: float,
+    dx: float,
+    sponge_width: int,
+) -> float:
+    """Discrete outward wave energy flux across the 6 faces of the interior/sponge boundary dOmega_int (P1-R4-F1).
+
+    Evaluates the discrete summation-by-parts boundary flux across the 6 planar faces separating
+    Omega_int = [sw, N-sw)^3 from the surrounding sponge region:
+      F_out^n(phi) = sum_{6 faces} ( - ((phi_in^{n+1} - phi_in^{n-1})/(2*dt)) * ((phi_out^n - phi_in^n)/dx) ) * dx^2.
+    Positive values indicate energy flowing outward from Omega_int into the sponge; negative values
+    indicate energy flowing inward from the sponge back into Omega_int.
+    """
+    sw = sponge_width
+    if sw <= 0 or 2 * sw >= phi.shape[0]:
+        return 0.0
+
+    v = (phi_next - phi_prev) / (2.0 * dt)
+    area_elem = dx * dx
+    inv_dx = 1.0 / dx
+
+    # Left/right x faces of Omega_int = [sw, N-sw)^3
+    f_x_low = -np.sum(v[sw, sw:-sw, sw:-sw] * (phi[sw - 1, sw:-sw, sw:-sw] - phi[sw, sw:-sw, sw:-sw]) * inv_dx) * area_elem
+    f_x_high = -np.sum(v[-sw - 1, sw:-sw, sw:-sw] * (phi[-sw, sw:-sw, sw:-sw] - phi[-sw - 1, sw:-sw, sw:-sw]) * inv_dx) * area_elem
+
+    # Front/back y faces
+    f_y_low = -np.sum(v[sw:-sw, sw, sw:-sw] * (phi[sw:-sw, sw - 1, sw:-sw] - phi[sw:-sw, sw, sw:-sw]) * inv_dx) * area_elem
+    f_y_high = -np.sum(v[sw:-sw, -sw - 1, sw:-sw] * (phi[sw:-sw, -sw, sw:-sw] - phi[sw:-sw, -sw - 1, sw:-sw]) * inv_dx) * area_elem
+
+    # Bottom/top z faces
+    f_z_low = -np.sum(v[sw:-sw, sw:-sw, sw] * (phi[sw:-sw, sw:-sw, sw - 1] - phi[sw:-sw, sw:-sw, sw]) * inv_dx) * area_elem
+    f_z_high = -np.sum(v[sw:-sw, sw:-sw, -sw - 1] * (phi[sw:-sw, sw:-sw, -sw] - phi[sw:-sw, sw:-sw, -sw - 1]) * inv_dx) * area_elem
+
+    return float(f_x_low + f_x_high + f_y_low + f_y_high + f_z_low + f_z_high)
+
+
 @dataclass(frozen=True)
 class SpongeReflectionReferenceSubtractedResult:
     grid_size: int
@@ -586,25 +647,53 @@ class SpongeReflectionReferenceSubtractedResult:
     max_sigma: float
     n_steps: int
     ref_grid_size: int
+    dx_m: float
+    dt_s: float
     dt_factor: float
+    physical_box_width_m: float
+    physical_sponge_width_m: float
+    physical_observation_time_s: float
     incident_peak_amplitude: float
     reflected_peak_amplitude: float
+    probe_local_amplitude_ratio_proxy: float
+    probe_local_peak_squared_proxy: float
     probe_amplitude_reflection_ratio: float
     probe_peak_squared_reflection_proxy: float
-    integrated_reflected_energy_fraction: float
-    amplitude_reflection_coefficient: float
-    power_reflection_coefficient: float
+    terminal_interior_reflected_energy_snapshot_proxy: float
+    peak_window_interior_reflected_energy_snapshot_proxy: float
+    initial_discrete_hamiltonian: float
+    final_total_discrete_hamiltonian: float
+    cumulative_sponge_dissipated_energy: float
+    sponge_dissipated_energy_fraction: float
+    remaining_total_energy_fraction: float
+    discrete_energy_budget_closure_error: float
+    cumulative_incident_outgoing_surface_flux: float
+    cumulative_reflected_return_surface_flux: float
+    surface_integrated_return_flux_ratio: float
     geometric_pre_arrival_step: int
     geometric_peak_return_step: int
     reference_wall_return_step: int
     reference_domain_free_of_wall_return: bool
     pre_arrival_difference_max: float
-    is_absorbed_to_tolerance: bool
+    is_sponge_benchmark_valid: bool
     metric_definition_note: str
     diagnostic_note: str
 
+    @property
+    def integrated_reflected_energy_fraction(self) -> float:
+        """Backward-compatible alias for terminal_interior_reflected_energy_snapshot_proxy."""
+        return self.terminal_interior_reflected_energy_snapshot_proxy
 
-_REF_PULSE_CACHE: dict[tuple[int, int, float, int, int], tuple[np.ndarray, np.ndarray, np.ndarray]] = {}
+    @property
+    def is_absorbed_to_tolerance(self) -> bool:
+        """Backward-compatible alias for is_sponge_benchmark_valid."""
+        return self.is_sponge_benchmark_valid
+
+
+_REF_PULSE_CACHE: dict[
+    tuple[int, int, float, int, int, float, float, int],
+    tuple[np.ndarray, np.ndarray, np.ndarray, float],
+] = {}
 
 
 def benchmark_sponge_reflection_reference_subtracted(
@@ -615,30 +704,32 @@ def benchmark_sponge_reflection_reference_subtracted(
     ref_grid_size: int = 90,
     probe_offset: int = 6,
     dt_factor: float = 0.85,
-    tolerance_power_reflection: float = 0.05,
+    dx_m: float = 1.0,
+    pulse_sigma_m: float = 2.0,
+    tolerance_proxy_max: float = 0.05,
 ) -> SpongeReflectionReferenceSubtractedResult:
-    """Benchmark sponge damping using matched reference subtraction and geometric arrival gating (P1-R2-F1, P1-R3-F4).
+    """Benchmark sponge damping with closed discrete energy budget, surface flux, and explicit proxy labels (P1-R4-F1).
 
-    Resolves P1-R2-F1 and P1-R3-F4:
-    - Runs a matched reference simulation on an enlarged domain (ref_grid_size) and verifies
-      geometrically (reference_wall_return_step > n_steps) that no reference-wall reflection
-      reaches the probe during the simulation window.
-    - Computes geometric_pre_arrival_step from wave speed, timestep, sponge entrance distance,
-      initial pulse core radius (4*sigma_pulse), and probe offset rather than a hard-coded index.
-    - Labels the single-probe ratio (max|phi_refl|/max|phi_ref|)^2 accurately as
-      probe_peak_squared_reflection_proxy (noting 1/r spherical spreading).
-    - Also computes the 3D volume-integrated reflected energy fraction
-      integrated_reflected_energy_fraction = E_interior(phi_test - phi_ref) / E_initial.
+    Resolves P1-R2-F1, P1-R3-F4, and P1-R4-F1:
+    1. Honest proxy labeling: Single-probe ratios and interior difference-energy snapshots are explicitly
+       labeled as local/snapshot proxies (`probe_local_amplitude_ratio_proxy`, `probe_local_peak_squared_proxy`,
+       `terminal_interior_reflected_energy_snapshot_proxy`, `peak_window_interior_reflected_energy_snapshot_proxy`),
+       not plane-wave power reflection coefficients.
+    2. Closed discrete energy budget: Tracks the exact staggered leapfrog Hamiltonian H^{n+1/2} and exact
+       step-by-step sponge dissipation Delta D_sponge^n across all n_steps, verifying the discrete identity
+       H^{N-1/2} + D_sponge,cum = H^{-1/2} to machine precision (< 1e-12).
+    3. Time-integrated enclosing-surface flux: Integrates the outward incident wave energy flux and inward
+       reflected return energy flux across the 6 faces of the interior/sponge boundary dOmega_int over time.
+    4. Supports true spatial dx_m refinement at fixed physical geometry (L_box, W_sponge, d_probe, pulse_sigma_m).
     """
-    dx = 1.0
+    dx = float(dx_m)
     c0 = 1.0
     dt = dt_factor * dx / (c0 * np.sqrt(3.0))
-    sigma_pulse = 2.0 * dx
+    sigma_pulse = float(pulse_sigma_m)
 
     # Geometric travel-time gating calculations
     d_sponge_cells = (grid_size // 2) - sponge_width
     pulse_4sigma_cells = int(np.ceil(4.0 * sigma_pulse / dx))
-    # Discrete causal stencil cone before 4-sigma pulse core can reach sponge entrance and return to probe
     geometric_pre_arrival_step = max(
         1,
         int((d_sponge_cells - pulse_4sigma_cells) + (d_sponge_cells - probe_offset)),
@@ -653,91 +744,156 @@ def benchmark_sponge_reflection_reference_subtracted(
     reference_wall_return_step = int(np.floor(d_ref_two_way_m / (c0 * dt)))
     ref_free_of_return = bool(reference_wall_return_step > n_steps)
 
-    def _run_pulse(g_size: int, s_width: int, s_sigma: float) -> tuple[np.ndarray, np.ndarray, np.ndarray, float]:
-        c_f = np.full((g_size, g_size, g_size), c0, dtype=float)
-        sig_f = create_sponge_conductivity_field((g_size, g_size, g_size), s_width, s_sigma)
+    def _init_pulse(g_size: int) -> tuple[np.ndarray, np.ndarray]:
         mid = g_size // 2
         x0 = float(mid * dx)
-
         coords = np.arange(g_size) * dx
         X, Y, Z = np.meshgrid(coords, coords, coords, indexing='ij')
         r_sq = (X - x0)**2 + (Y - x0)**2 + (Z - x0)**2
         phi_0 = np.exp(-r_sq / (2.0 * sigma_pulse ** 2))
+        phi_0[0, :, :] = phi_0[-1, :, :] = 0.0
+        phi_0[:, 0, :] = phi_0[:, -1, :] = 0.0
+        phi_0[:, :, 0] = phi_0[:, :, -1] = 0.0
         lap_0 = laplacian_3d_clamped(phi_0, dx)
         phi_m1 = phi_0 + 0.5 * (dt ** 2) * (c0 ** 2) * lap_0
+        phi_m1[0, :, :] = phi_m1[-1, :, :] = 0.0
+        phi_m1[:, 0, :] = phi_m1[:, -1, :] = 0.0
+        phi_m1[:, :, 0] = phi_m1[:, :, -1] = 0.0
+        return phi_0, phi_m1
 
-        e_init = compute_sampled_continuum_energy_diagnostic(phi_0, phi_m1, c_f, dt, dx)
+    # 1. Matched unreflected reference (or synchronized evolution when computing window trajectories)
+    off = (ref_grid_size // 2) - (grid_size // 2) if ref_grid_size >= grid_size else 0
+    c_test = np.full((grid_size, grid_size, grid_size), c0, dtype=float)
+    sig_test = create_sponge_conductivity_field((grid_size, grid_size, grid_size), sponge_width, max_sigma)
+    phi0_test, phim1_test = _init_pulse(grid_size)
+    e_init_cont = compute_sampled_continuum_energy_diagnostic(phi0_test, phim1_test, c_test, dt, dx)
+    h_init_disc = compute_exact_discrete_leapfrog_energy(phi0_test, phim1_test, c_test, dt, dx)
 
-        p_idx = (mid + probe_offset, mid, mid)
-        series = []
-        p = phi_0.copy()
-        pm = phi_m1.copy()
-        for _ in range(n_steps):
-            series.append(float(p[p_idx]))
-            pn = step_wave_fdtd(p, pm, c_f, sig_f, dt, dx)
-            pm, p = p, pn
-        return np.array(series), p, pm, e_init
+    c_ref = np.full((ref_grid_size, ref_grid_size, ref_grid_size), c0, dtype=float)
+    sig_ref = np.zeros_like(c_ref)
+    phi0_ref, phim1_ref = _init_pulse(ref_grid_size)
 
-    # 1. Matched unreflected reference (cached by parameters and extracted test sub-volume)
-    cache_key = (ref_grid_size, n_steps, round(dt_factor, 8), probe_offset, grid_size)
-    if cache_key in _REF_PULSE_CACHE:
-        ref_trace, p_ref_sub, pm_ref_sub = _REF_PULSE_CACHE[cache_key]
-    else:
-        ref_trace, p_ref, pm_ref, _ = _run_pulse(ref_grid_size, 0, 0.0)
+    p_test, pm_test = phi0_test.copy(), phim1_test.copy()
+    p_ref, pm_ref = phi0_ref.copy(), phim1_ref.copy()
+
+    mid_test = grid_size // 2
+    mid_ref = ref_grid_size // 2
+    p_idx_test = (mid_test + probe_offset, mid_test, mid_test)
+    p_idx_ref = (mid_ref + probe_offset, mid_ref, mid_ref)
+
+    test_trace_list: list[float] = []
+    ref_trace_list: list[float] = []
+    cum_sponge_dissipated = 0.0
+    cum_inc_out_flux = 0.0
+    cum_refl_in_flux = 0.0
+    peak_window_int_refl_fraction = 0.0
+    h_final_disc = h_init_disc
+
+    # Evaluate interior snapshot at cadence (every 2 steps after pre-arrival, plus final step) for fast 3D window tracking
+    for step_idx in range(n_steps):
+        test_trace_list.append(float(p_test[p_idx_test]))
+        ref_trace_list.append(float(p_ref[p_idx_ref]))
+
+        pn_test = step_wave_fdtd(p_test, pm_test, c_test, sig_test, dt, dx)
+        pn_ref = step_wave_fdtd(p_ref, pm_ref, c_ref, sig_ref, dt, dx)
+
+        # Exact step sponge dissipation and terminal half-step Hamiltonian
+        cum_sponge_dissipated += compute_step_sponge_dissipation(pn_test, pm_test, c_test, sig_test, dt, dx)
+        if step_idx == n_steps - 1:
+            h_final_disc = compute_exact_discrete_leapfrog_energy(pn_test, p_test, c_test, dt, dx)
+
         if ref_grid_size >= grid_size:
-            off = (ref_grid_size // 2) - (grid_size // 2)
-            p_ref_sub = p_ref[off:off + grid_size, off:off + grid_size, off:off + grid_size].copy()
-            pm_ref_sub = pm_ref[off:off + grid_size, off:off + grid_size, off:off + grid_size].copy()
-        else:
-            p_ref_sub = p_ref.copy()
-            pm_ref_sub = pm_ref.copy()
-        _REF_PULSE_CACHE[cache_key] = (ref_trace, p_ref_sub, pm_ref_sub)
+            pn_ref_sub = pn_ref[off:off + grid_size, off:off + grid_size, off:off + grid_size]
+            p_ref_sub = p_ref[off:off + grid_size, off:off + grid_size, off:off + grid_size]
+            pm_ref_sub = pm_ref[off:off + grid_size, off:off + grid_size, off:off + grid_size]
 
+            # Outward surface flux of incident reference wave across dOmega_int
+            f_out_ref = compute_enclosing_surface_outward_flux(pn_ref_sub, p_ref_sub, pm_ref_sub, dt, dx, sponge_width)
+            if f_out_ref > 0.0:
+                cum_inc_out_flux += f_out_ref * dt
+
+            # Inward return surface flux of reflected difference wave (delta_phi = phi_test - phi_ref) into Omega_int
+            d_pn = pn_test - pn_ref_sub
+            d_p = p_test - p_ref_sub
+            d_pm = pm_test - pm_ref_sub
+            f_out_diff = compute_enclosing_surface_outward_flux(d_pn, d_p, d_pm, dt, dx, sponge_width)
+            f_in_diff = -f_out_diff
+            if f_in_diff > 0.0:
+                cum_refl_in_flux += f_in_diff * dt
+
+            if (step_idx >= geometric_pre_arrival_step and step_idx % 4 == 0) or (step_idx == n_steps - 1):
+                e_int_step = compute_interior_energy(d_pn, d_p, c_test, dt, dx, sponge_width)
+                frac_step = float(e_int_step / e_init_cont) if e_init_cont > 0 else 0.0
+                if frac_step > peak_window_int_refl_fraction:
+                    peak_window_int_refl_fraction = frac_step
+
+        pm_test, p_test = p_test, pn_test
+        pm_ref, p_ref = p_ref, pn_ref
+
+    test_trace = np.array(test_trace_list)
+    ref_trace = np.array(ref_trace_list)
     inc_peak = float(np.max(np.abs(ref_trace)))
-
-    # 2. Test simulation with boundary sponge
-    test_trace, p_test, pm_test, e_init_test = _run_pulse(grid_size, sponge_width, max_sigma)
 
     diff = test_trace - ref_trace
     cutoff = min(geometric_pre_arrival_step, len(diff))
     pre_arrival_max = float(np.max(np.abs(diff[:cutoff])))
 
     refl_peak = float(np.max(np.abs(diff)))
-    r_amp = float(refl_peak / inc_peak) if inc_peak > 0 else 0.0
-    r_pwr_proxy = float(r_amp ** 2)
+    r_amp_proxy = float(refl_peak / inc_peak) if inc_peak > 0 else 0.0
+    r_pwr_proxy = float(r_amp_proxy ** 2)
 
-    # 3. True 3D volume-integrated reflected energy fraction in interior domain
-    if p_ref_sub.shape == p_test.shape:
-        d_p = p_test - p_ref_sub
-        d_pm = pm_test - pm_ref_sub
-        c_test = np.full((grid_size, grid_size, grid_size), c0, dtype=float)
-        e_refl_interior = compute_interior_energy(d_p, d_pm, c_test, dt, dx, sponge_width)
-        integrated_refl_energy_fraction = float(e_refl_interior / e_init_test) if e_init_test > 0 else 0.0
+    if ref_grid_size >= grid_size:
+        p_ref_sub_final = p_ref[off:off + grid_size, off:off + grid_size, off:off + grid_size]
+        pm_ref_sub_final = pm_ref[off:off + grid_size, off:off + grid_size, off:off + grid_size]
+        d_p_final = p_test - p_ref_sub_final
+        d_pm_final = pm_test - pm_ref_sub_final
+        e_refl_interior_final = compute_interior_energy(d_p_final, d_pm_final, c_test, dt, dx, sponge_width)
+        terminal_refl_snapshot_proxy = float(e_refl_interior_final / e_init_cont) if e_init_cont > 0 else 0.0
+        peak_window_int_refl_fraction = max(peak_window_int_refl_fraction, terminal_refl_snapshot_proxy)
     else:
-        integrated_refl_energy_fraction = 1.0
+        terminal_refl_snapshot_proxy = 1.0
+        peak_window_int_refl_fraction = 1.0
 
-    is_ok = bool(
+    sponge_dissipated_frac = float(cum_sponge_dissipated / h_init_disc) if h_init_disc > 0 else 0.0
+    remaining_total_frac = float(h_final_disc / h_init_disc) if h_init_disc > 0 else 0.0
+    closure_err = (
+        float(abs((h_final_disc + cum_sponge_dissipated) - h_init_disc) / h_init_disc)
+        if h_init_disc > 0
+        else 0.0
+    )
+    surface_return_ratio = (
+        float(cum_refl_in_flux / cum_inc_out_flux) if cum_inc_out_flux > 0 else 0.0
+    )
+
+    is_valid = bool(
         ref_free_of_return
         and pre_arrival_max < 1e-8
-        and r_pwr_proxy <= tolerance_power_reflection
-        and integrated_refl_energy_fraction <= tolerance_power_reflection
+        and closure_err < 1e-12
+        and r_pwr_proxy <= tolerance_proxy_max
+        and peak_window_int_refl_fraction <= tolerance_proxy_max
     )
 
     metric_note = (
-        'probe_peak_squared_reflection_proxy is a local single-probe peak-amplitude-squared ratio '
-        '(max|phi_test(x_probe,t) - phi_ref(x_probe,t)| / max|phi_ref(x_probe,t)|)^2, subject to 3D 1/r '
-        'geometric spreading. integrated_reflected_energy_fraction measures the 3D volume-integrated '
-        'interior continuum energy of the reference-subtracted reflected field (phi_test - phi_ref) '
-        'normalized by initial pulse energy.'
+        'PROXY & BUDGET DEFINITIONS (P1-R4-F1): '
+        '(1) probe_local_peak_squared_proxy = (max|phi_test(x_p,t) - phi_ref(x_p,t)| / max|phi_ref(x_p,t)|)^2 is a '
+        'single-point amplitude-squared ratio subject to 3D 1/r spreading, NOT a plane-wave power reflection coefficient. '
+        '(2) terminal_interior_reflected_energy_snapshot_proxy and peak_window_interior_reflected_energy_snapshot_proxy '
+        'measure the 3D interior continuum energy of (phi_test - phi_ref) normalized by initial energy at t=T_end and '
+        'at its return-window maximum, respectively. '
+        '(3) initial_discrete_hamiltonian, final_total_discrete_hamiltonian, and cumulative_sponge_dissipated_energy '
+        'satisfy the exact closed discrete leapfrog identity H^{N-1/2} + D_sponge = H^{-1/2} to machine precision. '
+        '(4) surface_integrated_return_flux_ratio measures the time-integrated inward return energy flux of '
+        '(phi_test - phi_ref) across the 6 faces of dOmega_int divided by the time-integrated outward incident energy flux.'
     )
 
     note = (
-        f'Reference-subtracted sponge benchmark (grid={grid_size}, sponge={sponge_width}, max_sigma={max_sigma}, ref_grid={ref_grid_size}): '
-        f'Incident peak: {inc_peak:.4f}, Reflected return peak: {refl_peak:.4e}, '
-        f'probe amplitude ratio = {r_amp:.2%}, probe peak-squared proxy = {r_pwr_proxy:.3%}, '
-        f'3D integrated reflected energy fraction = {integrated_refl_energy_fraction:.3%}. '
-        f'Geometric pre-arrival step: {geometric_pre_arrival_step} (pre-arrival max diff: {pre_arrival_max:.2e}), '
-        f'reference wall return step: {reference_wall_return_step} (> n_steps={n_steps}: {ref_free_of_return}).'
+        f'Reference-subtracted sponge benchmark (grid={grid_size}, dx={dx}m, sponge={sponge_width}, max_sigma={max_sigma}, ref_grid={ref_grid_size}): '
+        f'probe local peak-squared proxy={r_pwr_proxy:.3%}, '
+        f'terminal interior snapshot proxy={terminal_refl_snapshot_proxy:.3%}, '
+        f'peak-window interior snapshot proxy={peak_window_int_refl_fraction:.3%}, '
+        f'surface-integrated return flux ratio={surface_return_ratio:.3%}. '
+        f'Closed discrete energy budget: sponge dissipated={sponge_dissipated_frac:.2%}, '
+        f'remaining total={remaining_total_frac:.2%}, closure error={closure_err:.2e} (< 1e-12).'
     )
 
     return SpongeReflectionReferenceSubtractedResult(
@@ -746,20 +902,35 @@ def benchmark_sponge_reflection_reference_subtracted(
         max_sigma=max_sigma,
         n_steps=n_steps,
         ref_grid_size=ref_grid_size,
+        dx_m=dx,
+        dt_s=float(dt),
         dt_factor=dt_factor,
+        physical_box_width_m=float(grid_size * dx),
+        physical_sponge_width_m=float(sponge_width * dx),
+        physical_observation_time_s=float(n_steps * dt),
         incident_peak_amplitude=inc_peak,
         reflected_peak_amplitude=refl_peak,
-        probe_amplitude_reflection_ratio=r_amp,
+        probe_local_amplitude_ratio_proxy=r_amp_proxy,
+        probe_local_peak_squared_proxy=r_pwr_proxy,
+        probe_amplitude_reflection_ratio=r_amp_proxy,
         probe_peak_squared_reflection_proxy=r_pwr_proxy,
-        integrated_reflected_energy_fraction=integrated_refl_energy_fraction,
-        amplitude_reflection_coefficient=r_amp,
-        power_reflection_coefficient=r_pwr_proxy,
+        terminal_interior_reflected_energy_snapshot_proxy=terminal_refl_snapshot_proxy,
+        peak_window_interior_reflected_energy_snapshot_proxy=peak_window_int_refl_fraction,
+        initial_discrete_hamiltonian=h_init_disc,
+        final_total_discrete_hamiltonian=h_final_disc,
+        cumulative_sponge_dissipated_energy=cum_sponge_dissipated,
+        sponge_dissipated_energy_fraction=sponge_dissipated_frac,
+        remaining_total_energy_fraction=remaining_total_frac,
+        discrete_energy_budget_closure_error=closure_err,
+        cumulative_incident_outgoing_surface_flux=cum_inc_out_flux,
+        cumulative_reflected_return_surface_flux=cum_refl_in_flux,
+        surface_integrated_return_flux_ratio=surface_return_ratio,
         geometric_pre_arrival_step=geometric_pre_arrival_step,
         geometric_peak_return_step=geometric_peak_return_step,
         reference_wall_return_step=reference_wall_return_step,
         reference_domain_free_of_wall_return=ref_free_of_return,
         pre_arrival_difference_max=pre_arrival_max,
-        is_absorbed_to_tolerance=is_ok,
+        is_sponge_benchmark_valid=is_valid,
         metric_definition_note=metric_note,
         diagnostic_note=note,
     )
@@ -769,12 +940,22 @@ def benchmark_sponge_reflection_reference_subtracted(
 class SpongeControlRow:
     max_sigma: float
     reflected_peak: float
+    probe_local_amplitude_ratio_proxy: float
+    probe_local_peak_squared_proxy: float
     probe_amplitude_reflection_ratio: float
     probe_peak_squared_reflection_proxy: float
-    integrated_reflected_energy_fraction: float
-    amplitude_reflection_coefficient: float
-    power_reflection_coefficient: float
+    terminal_interior_reflected_energy_snapshot_proxy: float
+    peak_window_interior_reflected_energy_snapshot_proxy: float
+    sponge_dissipated_energy_fraction: float
+    remaining_total_energy_fraction: float
+    discrete_energy_budget_closure_error: float
+    surface_integrated_return_flux_ratio: float
     description: str
+
+    @property
+    def integrated_reflected_energy_fraction(self) -> float:
+        """Backward-compatible alias for terminal_interior_reflected_energy_snapshot_proxy."""
+        return self.terminal_interior_reflected_energy_snapshot_proxy
 
 
 def benchmark_sponge_reflection_controls(
@@ -784,16 +965,17 @@ def benchmark_sponge_reflection_controls(
     n_steps: int = 80,
     ref_grid_size: int = 90,
 ) -> list[SpongeControlRow]:
-    """Negative and positive controls for sponge absorption vs Dirichlet wall reflection (P1-R2-F1, P1-R3-F4).
+    """Negative and positive controls for sponge absorption vs Dirichlet wall reflection (P1-R2-F1, P1-R3-F4, P1-R4-F1).
 
     Demonstrates:
-    - sigma=0.0: Undamped Dirichlet wall gives strong physical reflection (negative control, proxy ~ 14.7%, interior energy ~ 16.9%).
-    - sigma in [0.5, 3.0]: Sponge absorption suppresses boundary reflection by an order of magnitude (interior energy ~ 0.73% at sigma=3.0).
-    - sigma=15.0: Excessive conductivity causes impedance mismatch at sponge interface, increasing reflection.
+    - sigma=0.0: Undamped Dirichlet wall gives strong physical reflection and zero sponge dissipation (D_sponge = 0).
+    - sigma in [0.5, 3.0]: Sponge absorption dissipates > 97% of total wave energy and suppresses interior
+      reflection snapshots and return surface flux by an order of magnitude relative to sigma=0.
+    - sigma=15.0: Excessive conductivity causes entrance impedance mismatch, increasing return reflection.
     """
     rows = []
     descriptions = {
-        0.0: 'Negative control: undamped Dirichlet wall (strong physical reflection)',
+        0.0: 'Negative control: undamped Dirichlet wall (strong physical reflection, zero dissipation)',
         0.5: 'Positive control: low sponge damping',
         1.5: 'Positive control: moderate sponge damping',
         3.0: 'Positive control: design sponge damping',
@@ -811,11 +993,16 @@ def benchmark_sponge_reflection_controls(
         rows.append(SpongeControlRow(
             max_sigma=sig,
             reflected_peak=res.reflected_peak_amplitude,
+            probe_local_amplitude_ratio_proxy=res.probe_local_amplitude_ratio_proxy,
+            probe_local_peak_squared_proxy=res.probe_local_peak_squared_proxy,
             probe_amplitude_reflection_ratio=res.probe_amplitude_reflection_ratio,
             probe_peak_squared_reflection_proxy=res.probe_peak_squared_reflection_proxy,
-            integrated_reflected_energy_fraction=res.integrated_reflected_energy_fraction,
-            amplitude_reflection_coefficient=res.amplitude_reflection_coefficient,
-            power_reflection_coefficient=res.power_reflection_coefficient,
+            terminal_interior_reflected_energy_snapshot_proxy=res.terminal_interior_reflected_energy_snapshot_proxy,
+            peak_window_interior_reflected_energy_snapshot_proxy=res.peak_window_interior_reflected_energy_snapshot_proxy,
+            sponge_dissipated_energy_fraction=res.sponge_dissipated_energy_fraction,
+            remaining_total_energy_fraction=res.remaining_total_energy_fraction,
+            discrete_energy_budget_closure_error=res.discrete_energy_budget_closure_error,
+            surface_integrated_return_flux_ratio=res.surface_integrated_return_flux_ratio,
             description=desc,
         ))
     return rows
@@ -824,16 +1011,29 @@ def benchmark_sponge_reflection_controls(
 @dataclass(frozen=True)
 class SpongeParameterSweepRow:
     label: str
+    sweep_category: str
     grid_size: int
     sponge_width: int
+    dx_m: float
     max_sigma: float
     dt_factor: float
     n_steps: int
+    physical_observation_time_s: float
     ref_grid_size: int
+    probe_local_peak_squared_proxy: float
     probe_peak_squared_reflection_proxy: float
-    integrated_reflected_energy_fraction: float
+    terminal_interior_reflected_energy_snapshot_proxy: float
+    peak_window_interior_reflected_energy_snapshot_proxy: float
+    sponge_dissipated_energy_fraction: float
+    discrete_energy_budget_closure_error: float
+    surface_integrated_return_flux_ratio: float
     reference_wall_return_step: int
     reference_domain_free_of_wall_return: bool
+
+    @property
+    def integrated_reflected_energy_fraction(self) -> float:
+        """Backward-compatible alias for terminal_interior_reflected_energy_snapshot_proxy."""
+        return self.terminal_interior_reflected_energy_snapshot_proxy
 
 
 @dataclass(frozen=True)
@@ -841,81 +1041,144 @@ class SpongeParameterSweepResult:
     rows: list[SpongeParameterSweepRow]
     reference_domain_invariance_diff: float
     dt_refinement_relative_diff: float
+    dx_refinement_rows: list[SpongeParameterSweepRow]
+    observation_window_rows: list[SpongeParameterSweepRow]
     monotonic_with_sponge_width: bool
+    dx_refinement_consistent: bool
+    observation_window_bounded: bool
     is_sweep_stable: bool
     diagnostic_note: str
 
 
 def benchmark_sponge_reflection_parameter_sweep() -> SpongeParameterSweepResult:
-    """Evaluate stability of reference-subtracted sponge reflection across reference size, dt, sponge width, and box size (P1-R3-F4)."""
+    """Evaluate stability of reference-subtracted sponge benchmark across reference domain, observation time T_obs, spatial dx refinement of fixed physical geometry, dt refinement, and sponge thickness (P1-R3-F4, P1-R4-F1)."""
+    # Format: (label, category, grid_size, sponge_width, probe_offset, dx_m, max_sigma, dt_factor, n_steps, ref_grid_size)
     configs = [
-        ('baseline_n40_w8_dt085_ref90', 40, 8, 3.0, 0.85, 80, 90),
-        ('enlarged_ref_n40_w8_dt085_ref106', 40, 8, 3.0, 0.85, 80, 106),
-        ('refined_dt_n40_w8_dt0425_ref90', 40, 8, 3.0, 0.425, 160, 90),
-        ('thin_sponge_n40_w6_dt085_ref90', 40, 6, 3.0, 0.85, 80, 90),
-        ('thick_sponge_n40_w10_dt085_ref90', 40, 10, 3.0, 0.85, 80, 90),
-        ('larger_box_n48_w8_dt085_ref98', 48, 8, 3.0, 0.85, 90, 98),
+        # 1. Baseline & reference-domain size invariance (L_box=40m, W_sponge=8m, d_probe=6m, dx=1.0m)
+        ('baseline_n40_w8_dx10_dt085_ref90', 'reference_size', 40, 8, 6, 1.0, 3.0, 0.85, 80, 90),
+        ('enlarged_ref_n40_w8_dx10_dt085_ref106', 'reference_size', 40, 8, 6, 1.0, 3.0, 0.85, 80, 106),
+        # 2. Courant dt refinement at fixed dx=1.0m
+        ('refined_dt_n40_w8_dx10_dt0425_ref90', 'dt_refinement', 40, 8, 6, 1.0, 3.0, 0.425, 160, 90),
+        # 3. Sponge thickness sweep at fixed dx=1.0m (W_sponge = 6m, 8m, 10m)
+        ('thin_sponge_n40_w6_dx10_dt085_ref90', 'sponge_width', 40, 6, 6, 1.0, 3.0, 0.85, 80, 90),
+        ('thick_sponge_n40_w10_dx10_dt085_ref90', 'sponge_width', 40, 10, 6, 1.0, 3.0, 0.85, 80, 90),
+        # 4. Observation-time / return-window sweep (steps=60, 70, 80, 90, 100 on ref=106 where wall return is step 181)
+        ('obs_window_steps60_ref106', 'observation_window', 40, 8, 6, 1.0, 3.0, 0.85, 60, 106),
+        ('obs_window_steps70_ref106', 'observation_window', 40, 8, 6, 1.0, 3.0, 0.85, 70, 106),
+        ('obs_window_steps80_ref106', 'observation_window', 40, 8, 6, 1.0, 3.0, 0.85, 80, 106),
+        ('obs_window_steps90_ref106', 'observation_window', 40, 8, 6, 1.0, 3.0, 0.85, 90, 106),
+        ('obs_window_steps100_ref106', 'observation_window', 40, 8, 6, 1.0, 3.0, 0.85, 100, 106),
+        # 5. True spatial dx refinement of fixed physical geometry (L_box=40m, W_sponge=8m, d_probe=6m, sigma_pulse=2m, L_ref=68m)
+        ('spatial_dx20_n20_w4_ref34', 'spatial_dx_refinement', 20, 4, 3, 2.0, 3.0, 0.85, 40, 34),
+        ('spatial_dx10_n40_w8_ref68', 'spatial_dx_refinement', 40, 8, 6, 1.0, 3.0, 0.85, 80, 68),
+        ('spatial_dx05_n80_w16_ref136', 'spatial_dx_refinement', 80, 16, 12, 0.5, 3.0, 0.85, 160, 136),
     ]
     rows: list[SpongeParameterSweepRow] = []
     by_label: dict[str, SpongeParameterSweepRow] = {}
 
-    for label, g_size, s_w, sig, dt_f, steps, ref_g in configs:
+    for label, category, g_size, s_w, p_off, dx_val, sig, dt_f, steps, ref_g in configs:
         res = benchmark_sponge_reflection_reference_subtracted(
             grid_size=g_size,
             sponge_width=s_w,
             max_sigma=sig,
             n_steps=steps,
             ref_grid_size=ref_g,
+            probe_offset=p_off,
             dt_factor=dt_f,
+            dx_m=dx_val,
+            pulse_sigma_m=2.0,
         )
         row = SpongeParameterSweepRow(
             label=label,
+            sweep_category=category,
             grid_size=g_size,
             sponge_width=s_w,
+            dx_m=dx_val,
             max_sigma=sig,
             dt_factor=dt_f,
             n_steps=steps,
+            physical_observation_time_s=res.physical_observation_time_s,
             ref_grid_size=ref_g,
+            probe_local_peak_squared_proxy=res.probe_local_peak_squared_proxy,
             probe_peak_squared_reflection_proxy=res.probe_peak_squared_reflection_proxy,
-            integrated_reflected_energy_fraction=res.integrated_reflected_energy_fraction,
+            terminal_interior_reflected_energy_snapshot_proxy=res.terminal_interior_reflected_energy_snapshot_proxy,
+            peak_window_interior_reflected_energy_snapshot_proxy=res.peak_window_interior_reflected_energy_snapshot_proxy,
+            sponge_dissipated_energy_fraction=res.sponge_dissipated_energy_fraction,
+            discrete_energy_budget_closure_error=res.discrete_energy_budget_closure_error,
+            surface_integrated_return_flux_ratio=res.surface_integrated_return_flux_ratio,
             reference_wall_return_step=res.reference_wall_return_step,
             reference_domain_free_of_wall_return=res.reference_domain_free_of_wall_return,
         )
         rows.append(row)
         by_label[label] = row
 
-    base = by_label['baseline_n40_w8_dt085_ref90']
-    enlarged = by_label['enlarged_ref_n40_w8_dt085_ref106']
-    dt_ref = by_label['refined_dt_n40_w8_dt0425_ref90']
-    w6 = by_label['thin_sponge_n40_w6_dt085_ref90']
-    w10 = by_label['thick_sponge_n40_w10_dt085_ref90']
+    base = by_label['baseline_n40_w8_dx10_dt085_ref90']
+    enlarged = by_label['enlarged_ref_n40_w8_dx10_dt085_ref106']
+    dt_ref = by_label['refined_dt_n40_w8_dx10_dt0425_ref90']
+    w6 = by_label['thin_sponge_n40_w6_dx10_dt085_ref90']
+    w10 = by_label['thick_sponge_n40_w10_dx10_dt085_ref90']
 
-    ref_diff = float(abs(base.probe_peak_squared_reflection_proxy - enlarged.probe_peak_squared_reflection_proxy))
+    dx_rows = [r for r in rows if r.sweep_category == 'spatial_dx_refinement']
+    obs_rows = [r for r in rows if r.sweep_category == 'observation_window']
+
+    ref_diff = float(abs(base.probe_local_peak_squared_proxy - enlarged.probe_local_peak_squared_proxy))
     dt_rel_diff = float(
-        abs(dt_ref.probe_peak_squared_reflection_proxy - base.probe_peak_squared_reflection_proxy)
-        / base.probe_peak_squared_reflection_proxy
+        abs(dt_ref.probe_local_peak_squared_proxy - base.probe_local_peak_squared_proxy)
+        / base.probe_local_peak_squared_proxy
     )
     monotonic_w = bool(
-        w6.integrated_reflected_energy_fraction
-        > base.integrated_reflected_energy_fraction
-        > w10.integrated_reflected_energy_fraction
+        w6.terminal_interior_reflected_energy_snapshot_proxy
+        > base.terminal_interior_reflected_energy_snapshot_proxy
+        > w10.terminal_interior_reflected_energy_snapshot_proxy
+    )
+    # Under spatial dx refinement (dx = 2.0 -> 1.0 -> 0.5m) of the same physical geometry,
+    # well-resolved grids (dx=1.0 and dx=0.5) agree closely and remain bounded well below tolerance
+    dx_10 = by_label['spatial_dx10_n40_w8_ref68']
+    dx_05 = by_label['spatial_dx05_n80_w16_ref136']
+    dx_consistent = bool(
+        all(r.discrete_energy_budget_closure_error < 1e-12 for r in dx_rows)
+        and dx_10.peak_window_interior_reflected_energy_snapshot_proxy < 0.02
+        and dx_05.peak_window_interior_reflected_energy_snapshot_proxy < 0.02
+        and abs(dx_05.sponge_dissipated_energy_fraction - dx_10.sponge_dissipated_energy_fraction) < 0.03
+    )
+    # Across observation window steps 60..100, sponge dissipation increases monotonically toward ~99%
+    # and peak-window interior reflected energy snapshot stays strictly bounded (< 2%)
+    obs_bounded = bool(
+        all(r.peak_window_interior_reflected_energy_snapshot_proxy < 0.02 for r in obs_rows)
+        and all(
+            obs_rows[i + 1].sponge_dissipated_energy_fraction >= obs_rows[i].sponge_dissipated_energy_fraction - 1e-12
+            for i in range(len(obs_rows) - 1)
+        )
     )
     all_free = all(r.reference_domain_free_of_wall_return for r in rows)
-    is_ok = bool(all_free and ref_diff < 1e-10 and dt_rel_diff < 0.15 and monotonic_w)
+    all_closed = all(r.discrete_energy_budget_closure_error < 1e-12 for r in rows)
+    is_ok = bool(
+        all_free and all_closed and ref_diff < 1e-10 and dt_rel_diff < 0.15
+        and monotonic_w and dx_consistent and obs_bounded
+    )
 
     note = (
-        f'Sponge reflection parameter sweep: reference-size invariance (ref=90 vs 106) diff={ref_diff:.2e} (< 1e-10), '
-        f'dt halving relative shift={dt_rel_diff:.2%}, '
-        f'sponge width sweep (w=6 -> 8 -> 10) integrated reflected energy: '
-        f'{w6.integrated_reflected_energy_fraction:.3%} -> {base.integrated_reflected_energy_fraction:.3%} -> {w10.integrated_reflected_energy_fraction:.3%} '
-        f'(monotonic={monotonic_w}).'
+        f'Sponge reflection parameter sweep (P1-R4-F1): '
+        f'(1) Reference-size invariance (ref=90 vs 106) diff={ref_diff:.2e} (< 1e-10); '
+        f'(2) dt halving relative shift={dt_rel_diff:.2%}; '
+        f'(3) Sponge width sweep (W=6m -> 8m -> 10m) terminal interior snapshot: '
+        f'{w6.terminal_interior_reflected_energy_snapshot_proxy:.3%} -> {base.terminal_interior_reflected_energy_snapshot_proxy:.3%} -> {w10.terminal_interior_reflected_energy_snapshot_proxy:.3%}; '
+        f'(4) Spatial dx refinement at fixed physical geometry (dx=2.0 -> 1.0 -> 0.5m): '
+        f'peak-window interior snapshot={[round(r.peak_window_interior_reflected_energy_snapshot_proxy, 5) for r in dx_rows]}, '
+        f'sponge dissipated fraction={[round(r.sponge_dissipated_energy_fraction, 4) for r in dx_rows]}; '
+        f'(5) Observation window sweep (steps 60..100): dissipated fraction rises monotonically from '
+        f'{obs_rows[0].sponge_dissipated_energy_fraction:.2%} to {obs_rows[-1].sponge_dissipated_energy_fraction:.2%}.'
     )
 
     return SpongeParameterSweepResult(
         rows=rows,
         reference_domain_invariance_diff=ref_diff,
         dt_refinement_relative_diff=dt_rel_diff,
+        dx_refinement_rows=dx_rows,
+        observation_window_rows=obs_rows,
         monotonic_with_sponge_width=monotonic_w,
+        dx_refinement_consistent=dx_consistent,
+        observation_window_bounded=obs_bounded,
         is_sweep_stable=is_ok,
         diagnostic_note=note,
     )
@@ -931,6 +1194,7 @@ class TwoMaterialEnergyConservationResult:
     max_continuum_diagnostic_drift_ratio: float
     initial_discrete_hamiltonian: float
     final_discrete_hamiltonian: float
+    exact_discrete_hamiltonian_trajectory: list[float]
     continuum_energy_trajectory: list[float]
     is_conserved_to_tolerance: bool
     diagnostic_note: str
@@ -945,12 +1209,14 @@ def benchmark_two_material_energy_conservation(
     courant_factor: float = 0.85,
     tolerance_drift: float = 0.08,
 ) -> TwoMaterialEnergyConservationResult:
-    """Benchmark discrete Hamiltonian conservation across a two-medium interface (P1-R1-F4, P1-R2-F4, P1-R3-F5).
+    """Benchmark discrete Hamiltonian conservation across a two-medium interface (P1-R1-F4, P1-R2-F4, P1-R3-F5, P1-R4-F2).
 
     Validates that:
     1. The exact discrete staggered leapfrog Hamiltonian H^{n+1/2} is conserved to machine precision (< 1e-10).
     2. The sampled continuum energy diagnostic H_cont has modest truncation drift (< 8%) across the interface.
-    3. Reports the actual terminal sampled continuum energy at the final step (not fabricated from max absolute drift).
+    3. Records the initial continuum state (step 0) and then records a continuum sample AFTER each step update
+       (steps 1..n_steps), so continuum_energy_trajectory has n_steps + 1 entries and final_energy is the
+       exact sampled continuum energy of the actual terminal state (phi^(n_steps), phi^(n_steps-1)) (P1-R4-F2).
     """
     dt = courant_factor * dx_m / (max(c1, c2) * np.sqrt(3.0))
 
@@ -979,27 +1245,24 @@ def benchmark_two_material_energy_conservation(
     phi = phi_0.copy()
     phi_prev = phi_minus_1.copy()
 
-    phi_first = step_wave_fdtd(phi, phi_prev, c_field, sigma_field, dt, dx_m)
-    h_exact_0 = float(compute_exact_discrete_leapfrog_energy(phi_first, phi, c_field, dt, dx_m))
+    # Step 0 initial sampled continuum energy: state (phi^0, phi^-1)
     h_cont_0 = float(compute_sampled_continuum_energy_diagnostic(phi, phi_prev, c_field, dt, dx_m))
+    cont_trajectory: list[float] = [h_cont_0]
+    exact_trajectory: list[float] = []
 
-    phi_prev, phi = phi, phi_first
-
-    exact_trajectory = [h_exact_0]
-    cont_trajectory = [h_cont_0]
-
-    for _ in range(n_steps - 1):
+    for _ in range(n_steps):
         phi_next = step_wave_fdtd(phi, phi_prev, c_field, sigma_field, dt, dx_m)
         h_exact = float(compute_exact_discrete_leapfrog_energy(phi_next, phi, c_field, dt, dx_m))
-        h_cont = float(compute_sampled_continuum_energy_diagnostic(phi, phi_prev, c_field, dt, dx_m))
-
         exact_trajectory.append(h_exact)
+
+        # Advance state to step k, then sample continuum energy of (phi^k, phi^{k-1}) (P1-R4-F2)
+        phi_prev, phi = phi, phi_next
+        h_cont = float(compute_sampled_continuum_energy_diagnostic(phi, phi_prev, c_field, dt, dx_m))
         cont_trajectory.append(h_cont)
 
-        phi_prev, phi = phi, phi_next
-
-    h_cont_final = float(cont_trajectory[-1])
+    h_exact_0 = float(exact_trajectory[0])
     h_exact_final = float(exact_trajectory[-1])
+    h_cont_final = float(cont_trajectory[-1])
 
     exact_drifts = [abs(e - h_exact_0) / h_exact_0 if h_exact_0 > 0 else 0.0 for e in exact_trajectory]
     cont_drifts = [abs(e - h_cont_0) / h_cont_0 if h_cont_0 > 0 else 0.0 for e in cont_trajectory]
@@ -1013,7 +1276,8 @@ def benchmark_two_material_energy_conservation(
     note = (
         f'Initial exact discrete Hamiltonian: {h_exact_0:.4e}, final: {h_exact_final:.4e}, '
         f'max discrete drift: {max_exact_drift:.2e} (< 1e-10). '
-        f'Initial sampled continuum diagnostic: {h_cont_0:.6f}, terminal sampled final_energy: {h_cont_final:.6f} '
+        f'Initial sampled continuum diagnostic (step 0): {h_cont_0:.6f}, '
+        f'terminal sampled final_energy (step {n_steps}): {h_cont_final:.6f} '
         f'(terminal signed drift: {terminal_signed_drift:+.2%}, max trajectory continuum drift: {max_cont_drift:.2%} <= {tolerance_drift:.0%}).'
     )
 
@@ -1026,6 +1290,7 @@ def benchmark_two_material_energy_conservation(
         max_continuum_diagnostic_drift_ratio=max_cont_drift,
         initial_discrete_hamiltonian=h_exact_0,
         final_discrete_hamiltonian=h_exact_final,
+        exact_discrete_hamiltonian_trajectory=exact_trajectory,
         continuum_energy_trajectory=cont_trajectory,
         is_conserved_to_tolerance=is_ok,
         diagnostic_note=note,
