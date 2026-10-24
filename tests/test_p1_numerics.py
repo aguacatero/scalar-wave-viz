@@ -392,7 +392,7 @@ class MaxwellStressContourTests(unittest.TestCase):
 
 class IndependentSolverVerificationTests(unittest.TestCase):
     def test_independent_matrix_free_sor_vs_direct_lu_solver(self):
-        """P1-R4-F3: Matrix-free Red-Black SOR Laplace solver matches scipy sparse direct LU solver to < 1e-8 V."""
+        """P1-R4-F3 / P1-R5-F4: Matrix-free Red-Black SOR Laplace solver matches direct LU solver and fails closed."""
         cfg = eb.GroundedBoxConfig(
             n=81,
             left_electrode=eb.ElectrodeConfig(center_x_m=-0.008, center_y_m=0.004, radius_m=0.003, voltage_v=600.0),
@@ -415,28 +415,43 @@ class IndependentSolverVerificationTests(unittest.TestCase):
         self.assertAlmostEqual(b_lu.enclosure_reaction_fx_n_per_m, b_sor.enclosure_reaction_fx_n_per_m, places=7)
         self.assertAlmostEqual(b_lu.enclosure_reaction_fy_n_per_m, b_sor.enclosure_reaction_fy_n_per_m, places=7)
 
+        # P1-R5-F4 adversarial failure modes: nonconverged state raises RuntimeError
+        with self.assertRaises(RuntimeError) as cm:
+            en.solve_dirichlet_independent_matrix_free_sor(config=cfg, tolerance_v=1e-11, max_iterations=1)
+        self.assertIn('SOR solver failed to converge', str(cm.exception))
+
+        # Invalid parameter gates raise ValueError
+        with self.assertRaises(ValueError):
+            en.solve_dirichlet_independent_matrix_free_sor(config=cfg, max_iterations=0)
+        with self.assertRaises(ValueError):
+            en.solve_dirichlet_independent_matrix_free_sor(config=cfg, tolerance_v=0.0)
+
     def test_independent_mfs_continuous_laplace_solver_and_harmonic_certificate(self):
-        """P1-R4-F3: Continuous grid-free Method of Fundamental Solutions satisfies Maximum Principle certificate."""
+        """P1-R4-F3 / P1-R5-F2: Continuous grid-free MFS satisfies sampled-boundary diagnostic."""
         cfg = eb.GroundedBoxConfig(
             left_electrode=eb.ElectrodeConfig(center_x_m=-0.008, center_y_m=0.004, radius_m=0.003, voltage_v=600.0),
             right_electrode=eb.ElectrodeConfig(center_x_m=0.008, center_y_m=-0.002, radius_m=0.003, voltage_v=-400.0),
         )
         mfs = en.solve_electrostatics_mfs_boundary_collocation(cfg)
 
-        # Harmonic Maximum Principle certificate: interior potential error is strictly bounded by max boundary error
-        self.assertLess(mfs.max_independent_boundary_error_v, 1e-3)
-        self.assertLess(mfs.max_independent_boundary_error_v, 1e-9)  # Observed ~8.06e-11 V
+        # P1-R5-F2: Dense sampled-boundary diagnostic on conductor surfaces (720 angles, 400 wall pts)
+        self.assertLess(mfs.max_sampled_boundary_error_v, 1e-6)
+        self.assertLess(mfs.max_sampled_boundary_error_v, 1e-9)  # Observed ~8.06e-11 V
+        # Backward-compatible property alias
+        self.assertEqual(mfs.max_independent_boundary_error_v, mfs.max_sampled_boundary_error_v)
         # Whole-apparatus closed contour Maxwell stress integrates to zero
         self.assertLess(mfs.net_residual_magnitude_n_per_m, 1e-8)
 
     def test_independent_electrostatic_solver_verification_study(self):
-        """P1-R4-F3: 5-point Cartesian FDM converges toward grid-free continuous MFS reference with mesh refinement."""
+        """P1-R4-F3 / P1-R5-F2 / P1-R5-F3: 5-point Cartesian FDM converges toward grid-free continuous MFS reference."""
         res = en.benchmark_independent_electrostatic_solver_verification(n_list=(41, 81, 161, 321))
         self.assertTrue(res.is_verified_to_tolerance)
+        self.assertTrue(res.endpoint_errors_improve)
         self.assertTrue(res.errors_decrease_toward_mfs_with_refinement)
+        self.assertLess(res.mfs_max_sampled_boundary_error_v, 1e-6)
         self.assertLess(res.sor_vs_direct_lu_max_potential_diff_v, 1e-8)
 
-        # Monotonic convergence of staircase FDM toward continuous MFS solution across resolutions
+        # P1-R5-F3: Endpoint errors improve coarsest-to-finest while intermediate staircase rasterization is non-monotonic
         finest = res.fdm_vs_mfs_rows[-1]
         coarsest = res.fdm_vs_mfs_rows[0]
         self.assertEqual(finest.n, 321)
@@ -444,6 +459,13 @@ class IndependentSolverVerificationTests(unittest.TestCase):
         self.assertLess(finest.right_force_vec_rel_error_vs_mfs, coarsest.right_force_vec_rel_error_vs_mfs)
         self.assertLess(finest.enclosure_force_vec_rel_error_vs_mfs, coarsest.enclosure_force_vec_rel_error_vs_mfs)
         self.assertLess(finest.midpoint_e_rel_error_vs_mfs, coarsest.midpoint_e_rel_error_vs_mfs)
+
+        # Intermediate non-monotonicity honestly reported and verified:
+        # Enclosure error at n=81 (4.91%) is slightly higher than n=41 (4.89%) due to staircase rasterization shifts
+        row_41 = res.fdm_vs_mfs_rows[0]
+        row_81 = res.fdm_vs_mfs_rows[1]
+        self.assertGreater(row_81.enclosure_force_vec_rel_error_vs_mfs, row_41.enclosure_force_vec_rel_error_vs_mfs)
+        self.assertFalse(res.strict_intermediate_monotonicity)
 
         # Finest resolution (n=321) agrees with continuous MFS to within 5%
         self.assertLess(finest.left_force_vec_rel_error_vs_mfs, 0.05)
@@ -456,6 +478,7 @@ class IndependentSolverVerificationTests(unittest.TestCase):
         self.assertIn('Maxwell stress vs virtual work', res.methodological_distinction_note)
         self.assertIn('sparse direct LU (spsolve) vs matrix-free Red-Black SOR', res.methodological_distinction_note)
         self.assertIn('5-point staircase FDM vs grid-free Method of Fundamental Solutions', res.methodological_distinction_note)
+        self.assertIn('Endpoint errors improve coarsest-to-finest', res.diagnostic_note)
 
 
 if __name__ == '__main__':

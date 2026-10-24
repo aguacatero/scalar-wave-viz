@@ -675,19 +675,25 @@ class SpongeReflectionReferenceSubtractedResult:
     reference_wall_return_step: int
     reference_domain_free_of_wall_return: bool
     pre_arrival_difference_max: float
-    is_sponge_benchmark_valid: bool
+    is_simulation_setup_valid: bool
+    is_sponge_absorbed_to_tolerance: bool
     metric_definition_note: str
     diagnostic_note: str
+
+    @property
+    def is_sponge_benchmark_valid(self) -> bool:
+        """Backward-compatible alias for is_sponge_absorbed_to_tolerance."""
+        return self.is_sponge_absorbed_to_tolerance
+
+    @property
+    def is_absorbed_to_tolerance(self) -> bool:
+        """Backward-compatible alias for is_sponge_absorbed_to_tolerance."""
+        return self.is_sponge_absorbed_to_tolerance
 
     @property
     def integrated_reflected_energy_fraction(self) -> float:
         """Backward-compatible alias for terminal_interior_reflected_energy_snapshot_proxy."""
         return self.terminal_interior_reflected_energy_snapshot_proxy
-
-    @property
-    def is_absorbed_to_tolerance(self) -> bool:
-        """Backward-compatible alias for is_sponge_benchmark_valid."""
-        return self.is_sponge_benchmark_valid
 
 
 _REF_PULSE_CACHE: dict[
@@ -861,20 +867,33 @@ def benchmark_sponge_reflection_reference_subtracted(
         if h_init_disc > 0
         else 0.0
     )
+    # Physical incident flux threshold: require meaningful incident energy to cross into the sponge
+    # before evaluating return flux ratio (prevents negligible Gaussian tail floating-point noise from masking zero absorption)
+    min_incident_flux = 1e-6 * h_init_disc if h_init_disc > 0 else 1e-6
     surface_return_ratio = (
-        float(cum_refl_in_flux / cum_inc_out_flux) if cum_inc_out_flux > 0 else 0.0
+        float(cum_refl_in_flux / cum_inc_out_flux)
+        if cum_inc_out_flux >= min_incident_flux
+        else float('nan')
     )
 
-    is_valid = bool(
+    is_setup_valid = bool(
         ref_free_of_return
         and pre_arrival_max < 1e-8
         and closure_err < 1e-12
+        and n_steps >= geometric_peak_return_step
+    )
+
+    is_absorbed = bool(
+        is_setup_valid
+        and cum_inc_out_flux >= min_incident_flux
+        and sponge_dissipated_frac >= 0.90
+        and (not np.isnan(surface_return_ratio) and surface_return_ratio <= 0.05)
         and r_pwr_proxy <= tolerance_proxy_max
         and peak_window_int_refl_fraction <= tolerance_proxy_max
     )
 
     metric_note = (
-        'PROXY & BUDGET DEFINITIONS (P1-R4-F1): '
+        'PROXY & BUDGET DEFINITIONS (P1-R4-F1, P1-R5-F1): '
         '(1) probe_local_peak_squared_proxy = (max|phi_test(x_p,t) - phi_ref(x_p,t)| / max|phi_ref(x_p,t)|)^2 is a '
         'single-point amplitude-squared ratio subject to 3D 1/r spreading, NOT a plane-wave power reflection coefficient. '
         '(2) terminal_interior_reflected_energy_snapshot_proxy and peak_window_interior_reflected_energy_snapshot_proxy '
@@ -883,11 +902,14 @@ def benchmark_sponge_reflection_reference_subtracted(
         '(3) initial_discrete_hamiltonian, final_total_discrete_hamiltonian, and cumulative_sponge_dissipated_energy '
         'satisfy the exact closed discrete leapfrog identity H^{N-1/2} + D_sponge = H^{-1/2} to machine precision. '
         '(4) surface_integrated_return_flux_ratio measures the time-integrated inward return energy flux of '
-        '(phi_test - phi_ref) across the 6 faces of dOmega_int divided by the time-integrated outward incident energy flux.'
+        '(phi_test - phi_ref) across the 6 faces of dOmega_int divided by the time-integrated outward incident energy flux. '
+        '(5) is_simulation_setup_valid certifies clean isolation, causal zero, energy closure, and sufficient return window; '
+        'is_sponge_absorbed_to_tolerance certifies demonstrated wave absorption (dissipation >= 90%, return flux <= 5%, proxies <= tol).'
     )
 
     note = (
         f'Reference-subtracted sponge benchmark (grid={grid_size}, dx={dx}m, sponge={sponge_width}, max_sigma={max_sigma}, ref_grid={ref_grid_size}): '
+        f'setup_valid={is_setup_valid}, absorbed_to_tolerance={is_absorbed}, '
         f'probe local peak-squared proxy={r_pwr_proxy:.3%}, '
         f'terminal interior snapshot proxy={terminal_refl_snapshot_proxy:.3%}, '
         f'peak-window interior snapshot proxy={peak_window_int_refl_fraction:.3%}, '
@@ -930,7 +952,8 @@ def benchmark_sponge_reflection_reference_subtracted(
         reference_wall_return_step=reference_wall_return_step,
         reference_domain_free_of_wall_return=ref_free_of_return,
         pre_arrival_difference_max=pre_arrival_max,
-        is_sponge_benchmark_valid=is_valid,
+        is_simulation_setup_valid=is_setup_valid,
+        is_sponge_absorbed_to_tolerance=is_absorbed,
         metric_definition_note=metric_note,
         diagnostic_note=note,
     )
@@ -1048,6 +1071,8 @@ class SpongeParameterSweepResult:
     observation_window_bounded: bool
     is_sweep_stable: bool
     diagnostic_note: str
+    dx_snapshot_relative_diff: float = 0.0
+    dx_flux_relative_diff: float = 0.0
 
 
 def benchmark_sponge_reflection_parameter_sweep() -> SpongeParameterSweepResult:
@@ -1132,14 +1157,27 @@ def benchmark_sponge_reflection_parameter_sweep() -> SpongeParameterSweepResult:
         > w10.terminal_interior_reflected_energy_snapshot_proxy
     )
     # Under spatial dx refinement (dx = 2.0 -> 1.0 -> 0.5m) of the same physical geometry,
-    # well-resolved grids (dx=1.0 and dx=0.5) agree closely and remain bounded well below tolerance
+    # evaluate both individual boundedness (< 2%) and inter-grid relative difference between well-resolved grids (dx=1.0 and dx=0.5m)
     dx_10 = by_label['spatial_dx10_n40_w8_ref68']
     dx_05 = by_label['spatial_dx05_n80_w16_ref136']
+    dx_dissipation_diff = float(abs(dx_05.sponge_dissipated_energy_fraction - dx_10.sponge_dissipated_energy_fraction))
+    dx_snapshot_rel_diff = float(
+        abs(dx_05.peak_window_interior_reflected_energy_snapshot_proxy - dx_10.peak_window_interior_reflected_energy_snapshot_proxy)
+        / dx_10.peak_window_interior_reflected_energy_snapshot_proxy
+    )
+    dx_flux_rel_diff = float(
+        abs(dx_05.surface_integrated_return_flux_ratio - dx_10.surface_integrated_return_flux_ratio)
+        / dx_10.surface_integrated_return_flux_ratio
+    )
     dx_consistent = bool(
         all(r.discrete_energy_budget_closure_error < 1e-12 for r in dx_rows)
         and dx_10.peak_window_interior_reflected_energy_snapshot_proxy < 0.02
         and dx_05.peak_window_interior_reflected_energy_snapshot_proxy < 0.02
-        and abs(dx_05.sponge_dissipated_energy_fraction - dx_10.sponge_dissipated_energy_fraction) < 0.03
+        and dx_10.surface_integrated_return_flux_ratio < 0.02
+        and dx_05.surface_integrated_return_flux_ratio < 0.02
+        and dx_dissipation_diff < 0.01
+        and dx_snapshot_rel_diff < 0.15
+        and dx_flux_rel_diff < 0.15
     )
     # Across observation window steps 60..100, sponge dissipation increases monotonically toward ~99%
     # and peak-window interior reflected energy snapshot stays strictly bounded (< 2%)
@@ -1158,14 +1196,17 @@ def benchmark_sponge_reflection_parameter_sweep() -> SpongeParameterSweepResult:
     )
 
     note = (
-        f'Sponge reflection parameter sweep (P1-R4-F1): '
+        f'Sponge reflection parameter sweep (P1-R4-F1, P1-R5-F1): '
         f'(1) Reference-size invariance (ref=90 vs 106) diff={ref_diff:.2e} (< 1e-10); '
         f'(2) dt halving relative shift={dt_rel_diff:.2%}; '
         f'(3) Sponge width sweep (W=6m -> 8m -> 10m) terminal interior snapshot: '
         f'{w6.terminal_interior_reflected_energy_snapshot_proxy:.3%} -> {base.terminal_interior_reflected_energy_snapshot_proxy:.3%} -> {w10.terminal_interior_reflected_energy_snapshot_proxy:.3%}; '
         f'(4) Spatial dx refinement at fixed physical geometry (dx=2.0 -> 1.0 -> 0.5m): '
-        f'peak-window interior snapshot={[round(r.peak_window_interior_reflected_energy_snapshot_proxy, 5) for r in dx_rows]}, '
-        f'sponge dissipated fraction={[round(r.sponge_dissipated_energy_fraction, 4) for r in dx_rows]}; '
+        f'inter-grid relative diffs between dx=1.0m and 0.5m: '
+        f'dissipation abs diff={dx_dissipation_diff:.2e} (< 0.01), '
+        f'peak-window snapshot rel diff={dx_snapshot_rel_diff:.2%} (< 15%), '
+        f'surface return flux rel diff={dx_flux_rel_diff:.2%} (< 15%), '
+        f'bounded snapshot levels={[round(r.peak_window_interior_reflected_energy_snapshot_proxy, 5) for r in dx_rows]} (< 2%); '
         f'(5) Observation window sweep (steps 60..100): dissipated fraction rises monotonically from '
         f'{obs_rows[0].sponge_dissipated_energy_fraction:.2%} to {obs_rows[-1].sponge_dissipated_energy_fraction:.2%}.'
     )
@@ -1181,6 +1222,8 @@ def benchmark_sponge_reflection_parameter_sweep() -> SpongeParameterSweepResult:
         observation_window_bounded=obs_bounded,
         is_sweep_stable=is_ok,
         diagnostic_note=note,
+        dx_snapshot_relative_diff=dx_snapshot_rel_diff,
+        dx_flux_relative_diff=dx_flux_rel_diff,
     )
 
 

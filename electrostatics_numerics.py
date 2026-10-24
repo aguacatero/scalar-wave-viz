@@ -1215,12 +1215,22 @@ def solve_dirichlet_independent_matrix_free_sor(
     tolerance_v: float = 1e-11,
     max_iterations: int = 20000,
 ) -> FieldSolution:
-    """Independently implemented matrix-free Red-Black SOR 5-point Laplace solver (P1-R4-F3).
+    """Independently implemented matrix-free Red-Black SOR 5-point Laplace solver (P1-R4-F3, P1-R5-F4).
 
     Solves the discrete 5-point Dirichlet Laplace BVP on the staircase grid using vectorized
     Red-Black Successive Over-Relaxation (SOR) without calling electrostatics_baseline.solve_dirichlet
     or scipy.sparse.linalg.spsolve.
+
+    Fails closed:
+      - Validates max_iterations >= 1 and tolerance_v > 0.
+      - Tracks discrete residual convergence; raises RuntimeError if residual exceeds tolerance_v
+        upon completing max_iterations.
     """
+    if max_iterations < 1:
+        raise ValueError(f"max_iterations must be >= 1, got {max_iterations}")
+    if tolerance_v <= 0.0:
+        raise ValueError(f"tolerance_v must be > 0, got {tolerance_v}")
+
     cfg = config or GroundedBoxConfig()
     n = cfg.n
     h = cfg.box_width_m / (n - 1)
@@ -1251,6 +1261,8 @@ def solve_dirichlet_independent_matrix_free_sor(
     red_free = free_mask & ((idx_sum % 2) == 0)
     black_free = free_mask & ((idx_sum % 2) == 1)
 
+    converged = False
+    max_res = float("inf")
     for _ in range(max_iterations):
         # Update Red nodes
         avg_r = 0.25 * (
@@ -1268,13 +1280,20 @@ def solve_dirichlet_independent_matrix_free_sor(
         diff_b = avg_b - pot
         pot[black_free] += omega * diff_b[black_free]
 
-        # Check discrete residual every 25 iterations
+        # Check discrete residual
         res_interior = np.abs(
             0.25 * (pot[2:, 1:-1] + pot[:-2, 1:-1] + pot[1:-1, 2:] + pot[1:-1, :-2]) - pot[1:-1, 1:-1]
         )
         max_res = float(np.max(res_interior[free_mask[1:-1, 1:-1]]))
         if max_res <= tolerance_v:
+            converged = True
             break
+
+    if not converged:
+        raise RuntimeError(
+            f"SOR solver failed to converge within {max_iterations} iterations: "
+            f"max residual {max_res:.3e} V > tolerance {tolerance_v:.3e} V"
+        )
 
     raw_ex = -np.gradient(pot, h, axis=0, edge_order=2)
     raw_ey = -np.gradient(pot, h, axis=1, edge_order=2)
@@ -1309,15 +1328,18 @@ def solve_dirichlet_independent_matrix_free_sor(
 
 @dataclass(frozen=True)
 class MFSContinuousLaplaceSolution:
-    """Grid-free continuous Method of Fundamental Solutions (MFS) Laplace solution (P1-R4-F3).
+    """Grid-free continuous Method of Fundamental Solutions (MFS) Laplace solution (P1-R4-F3, P1-R5-F2).
 
     Represents V(x,y) in the continuous vacuum domain Omega_vac as an analytical harmonic superposition
     of 2D logarithmic line-charge potentials placed strictly outside Omega_vac.
-    By the Maximum Principle for harmonic functions, the global L_infinity potential error throughout
-    Omega_vac is bounded by max_boundary_potential_error_v on the continuous conductor surfaces.
+    Boundary accuracy is evaluated via an independent dense discrete sampling diagnostic on conductor
+    surfaces (720 angles/electrode, 400 points/wall). While the harmonic potential satisfies the Laplace
+    equation exactly in Omega_vac and the continuous Maximum Principle guarantees that interior harmonic
+    error cannot exceed its boundary maximum, discrete point evaluation provides a dense sampled-boundary
+    diagnostic rather than a certified continuous supremum over all boundary points.
     """
     max_collocation_residual_v: float
-    max_independent_boundary_error_v: float
+    max_sampled_boundary_error_v: float
     midpoint_potential_v: float
     midpoint_ex_v_per_m: float
     midpoint_ey_v_per_m: float
@@ -1328,6 +1350,11 @@ class MFSContinuousLaplaceSolution:
     enclosure_reaction_fx_n_per_m: float
     enclosure_reaction_fy_n_per_m: float
     net_residual_magnitude_n_per_m: float
+
+    @property
+    def max_independent_boundary_error_v(self) -> float:
+        """Backward-compatible alias for max_sampled_boundary_error_v."""
+        return self.max_sampled_boundary_error_v
 
 
 def solve_electrostatics_mfs_boundary_collocation(
@@ -1472,7 +1499,7 @@ def solve_electrostatics_mfs_boundary_collocation(
 
     return MFSContinuousLaplaceSolution(
         max_collocation_residual_v=max_colloc_res,
-        max_independent_boundary_error_v=max_ind_bc_err,
+        max_sampled_boundary_error_v=max_ind_bc_err,
         midpoint_potential_v=float(v0[0]),
         midpoint_ex_v_per_m=float(ex0[0]),
         midpoint_ey_v_per_m=float(ey0[0]),
@@ -1498,25 +1525,37 @@ class IndependentSolverComparisonRow:
 
 @dataclass(frozen=True)
 class IndependentSolverVerificationStudy:
-    mfs_max_independent_boundary_error_v: float
+    mfs_max_sampled_boundary_error_v: float
     mfs_net_force_residual_n_per_m: float
     sor_vs_direct_lu_max_potential_diff_v: float
     sor_vs_direct_lu_max_force_diff_n_per_m: float
     fdm_vs_mfs_rows: list[IndependentSolverComparisonRow]
-    errors_decrease_toward_mfs_with_refinement: bool
+    endpoint_errors_improve: bool
     is_verified_to_tolerance: bool
     methodological_distinction_note: str
     diagnostic_note: str
+    strict_intermediate_monotonicity: bool = False
+
+    @property
+    def mfs_max_independent_boundary_error_v(self) -> float:
+        """Backward-compatible alias for mfs_max_sampled_boundary_error_v."""
+        return self.mfs_max_sampled_boundary_error_v
+
+    @property
+    def errors_decrease_toward_mfs_with_refinement(self) -> bool:
+        """Backward-compatible alias for endpoint_errors_improve."""
+        return self.endpoint_errors_improve
 
 
 def benchmark_independent_electrostatic_solver_verification(
     config: GroundedBoxConfig | None = None,
     n_list: Sequence[int] = (41, 81, 161, 321),
-    tolerance_mfs_boundary_v: float = 1e-3,
+    tolerance_mfs_sampled_boundary_v: float = 1e-6,
     tolerance_sor_diff_v: float = 1e-8,
     tolerance_finest_force_rel_vs_mfs: float = 0.05,
+    tolerance_mfs_boundary_v: float | None = None,
 ) -> IndependentSolverVerificationStudy:
-    """Compare baseline 5-point FDM solver against two independent solver implementations (P1-R4-F3).
+    """Compare baseline 5-point FDM solver against two independent solver implementations (P1-R4-F3, P1-R5-F2, P1-R5-F3).
 
     1. Matrix-free Red-Black SOR solver on the same discrete staircase grid (verifies discrete linear solver
        independently of scipy.sparse.linalg.spsolve).
@@ -1524,6 +1563,7 @@ def benchmark_independent_electrostatic_solver_verification(
        continuous circular geometry (verifies convergence of the 5-point staircase FDM toward an independent
        grid-free harmonic formulation).
     """
+    tol_mfs = tolerance_mfs_boundary_v if tolerance_mfs_boundary_v is not None else tolerance_mfs_sampled_boundary_v
     cfg = config or GroundedBoxConfig(
         left_electrode=ElectrodeConfig(center_x_m=-0.008, center_y_m=0.004, radius_m=0.003, voltage_v=600.0),
         right_electrode=ElectrodeConfig(center_x_m=0.008, center_y_m=-0.002, radius_m=0.003, voltage_v=-400.0),
@@ -1595,26 +1635,36 @@ def benchmark_independent_electrostatic_solver_verification(
             enclosure_force_vec_rel_error_vs_mfs=b_err,
         ))
 
-    decreases = bool(
+    endpoint_errors_improve = bool(
         rows[-1].midpoint_e_rel_error_vs_mfs < rows[0].midpoint_e_rel_error_vs_mfs
         and rows[-1].left_force_vec_rel_error_vs_mfs < rows[0].left_force_vec_rel_error_vs_mfs
         and rows[-1].right_force_vec_rel_error_vs_mfs < rows[0].right_force_vec_rel_error_vs_mfs
         and rows[-1].enclosure_force_vec_rel_error_vs_mfs < rows[0].enclosure_force_vec_rel_error_vs_mfs
     ) if len(rows) >= 2 else False
 
+    def _is_strictly_decreasing(series: list[float]) -> bool:
+        return all(series[i + 1] < series[i] for i in range(len(series) - 1))
+
+    strict_monotonic = bool(
+        _is_strictly_decreasing([r.midpoint_e_rel_error_vs_mfs for r in rows])
+        and _is_strictly_decreasing([r.left_force_vec_rel_error_vs_mfs for r in rows])
+        and _is_strictly_decreasing([r.right_force_vec_rel_error_vs_mfs for r in rows])
+        and _is_strictly_decreasing([r.enclosure_force_vec_rel_error_vs_mfs for r in rows])
+    ) if len(rows) >= 2 else False
+
     finest = rows[-1]
     is_ok = bool(
-        mfs.max_independent_boundary_error_v <= tolerance_mfs_boundary_v
+        mfs.max_sampled_boundary_error_v <= tol_mfs
         and mfs.net_residual_magnitude_n_per_m < 1e-8
         and sor_pot_diff <= tolerance_sor_diff_v
-        and decreases
+        and endpoint_errors_improve
         and finest.left_force_vec_rel_error_vs_mfs <= tolerance_finest_force_rel_vs_mfs
         and finest.right_force_vec_rel_error_vs_mfs <= tolerance_finest_force_rel_vs_mfs
         and finest.enclosure_force_vec_rel_error_vs_mfs <= tolerance_finest_force_rel_vs_mfs
     )
 
     distinction = (
-        'Methodological distinction (P1-R4-F3): (1) Maxwell stress vs virtual work compares two force-extraction '
+        'Methodological distinction (P1-R4-F3, P1-R5-F2, P1-R5-F3): (1) Maxwell stress vs virtual work compares two force-extraction '
         'methods on the same 5-point FDM solver; (2) sparse direct LU (spsolve) vs matrix-free Red-Black SOR '
         'compares two independent discrete linear solvers on the same staircase grid; (3) 5-point staircase FDM '
         'vs grid-free Method of Fundamental Solutions (MFS) boundary-collocation compares two genuinely '
@@ -1623,24 +1673,29 @@ def benchmark_independent_electrostatic_solver_verification(
 
     note = (
         f'Independent solver verification across n={[r.n for r in rows]}: '
-        f'Grid-free MFS harmonic certificate max boundary error={mfs.max_independent_boundary_error_v:.2e} V, '
+        f'Grid-free MFS sampled-boundary diagnostic max error={mfs.max_sampled_boundary_error_v:.2e} V '
+        f'(diagnostic on dense boundary sample, not continuous supremum guarantee), '
         f'MFS whole-apparatus net residual={mfs.net_residual_magnitude_n_per_m:.2e} N/m. '
         f'Matrix-free SOR vs direct LU (n=81) max potential diff={sor_pot_diff:.2e} V, force diff={sor_force_diff:.2e} N/m. '
         f'5-point FDM vs continuous MFS force errors at n={finest.n}: '
         f'left={finest.left_force_vec_rel_error_vs_mfs:.2%}, right={finest.right_force_vec_rel_error_vs_mfs:.2%}, '
-        f'enclosure={finest.enclosure_force_vec_rel_error_vs_mfs:.2%}, E(0,0)={finest.midpoint_e_rel_error_vs_mfs:.2%}.'
+        f'enclosure={finest.enclosure_force_vec_rel_error_vs_mfs:.2%}, E(0,0)={finest.midpoint_e_rel_error_vs_mfs:.2%}. '
+        f'Endpoint errors improve coarsest-to-finest (endpoint_errors_improve={endpoint_errors_improve}), '
+        f'while intermediate staircase errors are non-monotonic due to grid rasterization shifts '
+        f'(strict_intermediate_monotonicity={strict_monotonic}).'
     )
 
     return IndependentSolverVerificationStudy(
-        mfs_max_independent_boundary_error_v=mfs.max_independent_boundary_error_v,
+        mfs_max_sampled_boundary_error_v=mfs.max_sampled_boundary_error_v,
         mfs_net_force_residual_n_per_m=mfs.net_residual_magnitude_n_per_m,
         sor_vs_direct_lu_max_potential_diff_v=sor_pot_diff,
         sor_vs_direct_lu_max_force_diff_n_per_m=sor_force_diff,
         fdm_vs_mfs_rows=rows,
-        errors_decrease_toward_mfs_with_refinement=decreases,
+        endpoint_errors_improve=endpoint_errors_improve,
         is_verified_to_tolerance=is_ok,
         methodological_distinction_note=distinction,
         diagnostic_note=note,
+        strict_intermediate_monotonicity=strict_monotonic,
     )
 
 

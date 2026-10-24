@@ -130,13 +130,19 @@ class BoundaryReflectionBenchmarkTests(unittest.TestCase):
         self.assertAlmostEqual(res.masked_proxy_ratio, 0.0251, delta=0.010)
 
     def test_sponge_boundary_reflection_reference_subtracted(self):
-        """P1-R2-F1 / P1-R3-F4 / P1-R4-F1 regression: Reference-subtracted reflection with closed discrete energy budget."""
+        """P1-R2-F1 / P1-R3-F4 / P1-R4-F1 / P1-R5-F1 regression: Reference-subtracted reflection with closed discrete energy budget."""
         res = sw.benchmark_sponge_reflection_reference_subtracted(
             grid_size=40, sponge_width=8, max_sigma=3.0, n_steps=80, ref_grid_size=90, probe_offset=6
         )
+        # P1-R5-F1: Explicit separation of simulation setup validity and demonstrated absorption
+        self.assertTrue(res.is_simulation_setup_valid)
+        self.assertTrue(res.is_sponge_absorbed_to_tolerance)
         self.assertTrue(res.is_sponge_benchmark_valid)
+        self.assertTrue(res.is_absorbed_to_tolerance)
         self.assertTrue(res.reference_domain_free_of_wall_return)
         self.assertGreater(res.reference_wall_return_step, res.n_steps)
+        self.assertGreaterEqual(res.n_steps, res.geometric_peak_return_step)
+        self.assertGreater(res.cumulative_incident_outgoing_surface_flux, 0.0)
         self.assertEqual(res.geometric_pre_arrival_step, 10)
         self.assertLess(res.probe_local_peak_squared_proxy, 0.05)
         self.assertLess(res.probe_peak_squared_reflection_proxy, 0.05)
@@ -150,7 +156,7 @@ class BoundaryReflectionBenchmarkTests(unittest.TestCase):
         self.assertLess(res.surface_integrated_return_flux_ratio, 0.05)
 
     def test_sponge_reflection_parameter_sweep_and_adversarial_ref_domain(self):
-        """P1-R3-F4 / P1-R4-F1 regression: Parameter sweep across ref domain, T_obs, spatial dx refinement, and dt."""
+        """P1-R3-F4 / P1-R4-F1 / P1-R5-F1 regression: Parameter sweep across ref domain, T_obs, spatial dx refinement, and dt."""
         sweep = sw.benchmark_sponge_reflection_parameter_sweep()
         self.assertTrue(sweep.is_sweep_stable)
         self.assertLess(sweep.reference_domain_invariance_diff, 1e-10)
@@ -158,6 +164,9 @@ class BoundaryReflectionBenchmarkTests(unittest.TestCase):
         self.assertTrue(sweep.monotonic_with_sponge_width)
         self.assertTrue(sweep.dx_refinement_consistent)
         self.assertTrue(sweep.observation_window_bounded)
+        # P1-R5-F1: Inter-grid convergence between well-resolved grids (dx=1.0m vs 0.5m)
+        self.assertLess(sweep.dx_snapshot_relative_diff, 0.15)
+        self.assertLess(sweep.dx_flux_relative_diff, 0.15)
 
         # Adversarial negative control: reference domain too small (ref_grid_size=50 for n_steps=80)
         # allows outer reference wall reflection to return before n_steps completes
@@ -165,7 +174,44 @@ class BoundaryReflectionBenchmarkTests(unittest.TestCase):
             grid_size=40, sponge_width=8, max_sigma=3.0, n_steps=80, ref_grid_size=50, probe_offset=6
         )
         self.assertFalse(contaminated.reference_domain_free_of_wall_return)
+        self.assertFalse(contaminated.is_simulation_setup_valid)
+        self.assertFalse(contaminated.is_sponge_absorbed_to_tolerance)
         self.assertFalse(contaminated.is_sponge_benchmark_valid)
+
+    def test_sponge_adversarial_zero_absorption_and_short_window_counterexamples(self):
+        """P1-R5-F1 regression: Adversarial zero-absorption and short observation window counterexamples."""
+        import math
+
+        # 1. Undamped wall (sigma=0) with full observation window:
+        # Simulation setup and discrete energy closure are valid, but sponge absorption is demonstrably FALSE
+        undamped = sw.benchmark_sponge_reflection_reference_subtracted(
+            grid_size=40, sponge_width=8, max_sigma=0.0, n_steps=80, ref_grid_size=90, probe_offset=6
+        )
+        self.assertTrue(undamped.is_simulation_setup_valid)
+        self.assertFalse(undamped.is_sponge_absorbed_to_tolerance)
+        self.assertFalse(undamped.is_sponge_benchmark_valid)
+        self.assertEqual(undamped.sponge_dissipated_energy_fraction, 0.0)
+
+        # 2. Short observation window (n_steps=1 < geometric_peak_return_step=37):
+        # Simulation window is too short to observe any return or incident wave crossing, so setup is invalid
+        short_window = sw.benchmark_sponge_reflection_reference_subtracted(
+            grid_size=40, sponge_width=8, max_sigma=3.0, n_steps=1, ref_grid_size=90, probe_offset=6
+        )
+        self.assertFalse(short_window.is_simulation_setup_valid)
+        self.assertFalse(short_window.is_sponge_absorbed_to_tolerance)
+        self.assertFalse(short_window.is_sponge_benchmark_valid)
+        self.assertLess(short_window.n_steps, short_window.geometric_peak_return_step)
+        # Denominator is zero -> surface_integrated_return_flux_ratio must be NaN, not 0.0
+        self.assertTrue(math.isnan(short_window.surface_integrated_return_flux_ratio))
+
+        # 3. Adversarial zero-absorption with n_steps=1 (P1-R5-F1 adversarial counterexample):
+        # Must fail closed: neither setup valid nor absorbed to tolerance
+        adv_zero = sw.benchmark_sponge_reflection_reference_subtracted(
+            grid_size=40, sponge_width=8, max_sigma=0.0, n_steps=1, ref_grid_size=90, probe_offset=6
+        )
+        self.assertFalse(adv_zero.is_simulation_setup_valid)
+        self.assertFalse(adv_zero.is_sponge_absorbed_to_tolerance)
+        self.assertFalse(adv_zero.is_sponge_benchmark_valid)
 
     def test_sponge_reflection_negative_and_positive_controls(self):
         """P1-R2-F1 / P1-R3-F4 / P1-R4-F1 regression: Negative (sigma=0) and positive sponge controls with dissipation."""

@@ -602,7 +602,8 @@ def _get_cached_force_sub_studies(active_config: GroundedBoxConfig) -> dict:
             'is_converged_to_tolerance': off_study.is_converged_to_tolerance,
         },
         'independent_electrostatic_solver_verification': {
-            'description': 'Independent electrostatic solver verification: matrix-free SOR and continuous grid-free Method of Fundamental Solutions (MFS) boundary collocation (P1-R4-F3)',
+            'description': 'Independent electrostatic solver verification: matrix-free SOR and continuous grid-free Method of Fundamental Solutions (MFS) boundary collocation (P1-R4-F3, P1-R5-F2, P1-R5-F3)',
+            'mfs_max_sampled_boundary_error_v': indep_study.mfs_max_sampled_boundary_error_v,
             'mfs_max_independent_boundary_error_v': indep_study.mfs_max_independent_boundary_error_v,
             'mfs_net_force_residual_n_per_m': indep_study.mfs_net_force_residual_n_per_m,
             'sor_vs_direct_lu_max_potential_diff_v': indep_study.sor_vs_direct_lu_max_potential_diff_v,
@@ -618,6 +619,8 @@ def _get_cached_force_sub_studies(active_config: GroundedBoxConfig) -> dict:
                 }
                 for r in indep_study.fdm_vs_mfs_rows
             ],
+            'endpoint_errors_improve': indep_study.endpoint_errors_improve,
+            'strict_intermediate_monotonicity': indep_study.strict_intermediate_monotonicity,
             'errors_decrease_toward_mfs_with_refinement': indep_study.errors_decrease_toward_mfs_with_refinement,
             'is_verified_to_tolerance': indep_study.is_verified_to_tolerance,
             'methodological_distinction_note': indep_study.methodological_distinction_note,
@@ -726,6 +729,8 @@ def _get_cached_wave_audit() -> dict:
             'reference_wall_return_step': res_sponge.reference_wall_return_step,
             'reference_domain_free_of_wall_return': res_sponge.reference_domain_free_of_wall_return,
             'pre_arrival_difference_max': res_sponge.pre_arrival_difference_max,
+            'is_simulation_setup_valid': res_sponge.is_simulation_setup_valid,
+            'is_sponge_absorbed_to_tolerance': res_sponge.is_sponge_absorbed_to_tolerance,
             'is_sponge_benchmark_valid': res_sponge.is_sponge_benchmark_valid,
             'metric_definition_note': res_sponge.metric_definition_note,
             'diagnostic_note': res_sponge.diagnostic_note,
