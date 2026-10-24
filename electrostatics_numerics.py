@@ -1226,7 +1226,7 @@ def solve_dirichlet_independent_matrix_free_sor(
       - Tracks discrete residual convergence; raises RuntimeError if residual exceeds tolerance_v
         upon completing max_iterations.
     """
-    if not isinstance(max_iterations, (int, np.integer)) or max_iterations < 1:
+    if isinstance(max_iterations, bool) or not isinstance(max_iterations, (int, np.integer)) or max_iterations < 1:
         raise ValueError(f"max_iterations must be a positive integer >= 1, got {max_iterations}")
     if not np.isfinite(tolerance_v) or tolerance_v <= 0.0:
         raise ValueError(f"tolerance_v must be a finite positive float > 0, got {tolerance_v}")

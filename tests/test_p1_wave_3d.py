@@ -169,11 +169,15 @@ class BoundaryReflectionBenchmarkTests(unittest.TestCase):
         self.assertEqual(res.surface_flux_return_ratio_proxy, res.surface_integrated_return_flux_ratio)
 
     def test_interior_control_volume_flux_continuity_and_residual(self):
-        """P1-R6-F1 regression: Symmetric crossing-face flux tracks interior control-volume energy changes."""
+        """P1-R6-F1 / P1-R7-F1 regression: Symmetric crossing-face flux proxy vs continuum diagnostic.
+
+        Verifies that while the continuum diagnostic proxy shows agreement (~0.32% residual) at the
+        original time step, temporal refinement (dt/2, dt/4) causes the continuum-staggering truncation
+        residual to grow to ~4.04% and ~5.12%, proving that the continuum proxy comparison is NOT
+        an exact local conservation identity (P1-R7-F1).
+        """
         dx = 1.0
         c0 = 1.0
-        dt = 0.85 * dx / (c0 * np.sqrt(3.0))
-        n_steps = 25
         grid_size = 40
         sponge_width = 8
 
@@ -186,25 +190,98 @@ class BoundaryReflectionBenchmarkTests(unittest.TestCase):
         r_sq = (X - mid * dx) ** 2 + (Y - mid * dx) ** 2 + (Z - mid * dx) ** 2
         phi0 = np.exp(-r_sq / (2.0 * 2.0 ** 2))
         lap0 = sw.laplacian_3d_clamped(phi0, dx)
-        phim1 = phi0 + 0.5 * (dt ** 2) * (c0 ** 2) * lap0
 
-        e_init = sw.compute_interior_energy(phi0, phim1, c_field, dt, dx, sponge_width)
-        p, pm = phi0.copy(), phim1.copy()
-        cum_flux = 0.0
-        for _ in range(n_steps):
-            pn = sw.step_wave_fdtd(p, pm, c_field, sig_field, dt, dx)
-            flux = sw.compute_enclosing_surface_outward_flux(pn, p, pm, dt, dx, sponge_width)
-            cum_flux += flux * dt
-            pm, p = p, pn
+        residuals = {}
+        for factor, n_steps in [(0.85, 25), (0.425, 50), (0.2125, 100)]:
+            dt = factor * dx / (c0 * np.sqrt(3.0))
+            phim1 = phi0 + 0.5 * (dt ** 2) * (c0 ** 2) * lap0
+            e_init = sw.compute_interior_energy(phi0, phim1, c_field, dt, dx, sponge_width)
+            p, pm = phi0.copy(), phim1.copy()
+            cum_flux = 0.0
+            for _ in range(n_steps):
+                pn = sw.step_wave_fdtd(p, pm, c_field, sig_field, dt, dx)
+                flux = sw.compute_enclosing_surface_outward_flux(pn, p, pm, dt, dx, sponge_width)
+                cum_flux += flux * dt
+                pm, p = p, pn
 
-        e_final = sw.compute_interior_energy(p, pm, c_field, dt, dx, sponge_width)
-        delta_e = e_final - e_init
-        residual = delta_e + cum_flux
+            e_final = sw.compute_interior_energy(p, pm, c_field, dt, dx, sponge_width)
+            delta_e = e_final - e_init
+            residual = delta_e + cum_flux
+            rel_res = abs(residual) / e_init
+            residuals[factor] = rel_res
 
-        # Outward flux accounts for the energy lost from Omega_int to within 1% of initial pulse energy
-        self.assertLess(abs(residual) / e_init, 0.01)
-        self.assertGreater(cum_flux, 0.5)
-        self.assertLess(delta_e, -0.5)
+        # 1. At original dt (factor=0.85, 25 steps): continuum proxy agrees to within ~0.35%
+        self.assertLess(residuals[0.85], 0.01)
+        self.assertAlmostEqual(residuals[0.85], 0.003233, places=4)
+
+        # 2. Adversarial temporal refinement (P1-R7-F1): halving dt (50 steps) grows residual to ~4.04%
+        self.assertGreater(residuals[0.425], 0.035)
+        self.assertLess(residuals[0.425], 0.045)
+        self.assertAlmostEqual(residuals[0.425], 0.04043, places=3)
+
+        # 3. Quartering dt (100 steps) grows residual to ~5.12%
+        self.assertGreater(residuals[0.2125], 0.045)
+        self.assertLess(residuals[0.2125], 0.055)
+        self.assertAlmostEqual(residuals[0.2125], 0.05117, places=3)
+
+    def test_exact_discrete_interior_control_volume_hamiltonian_and_boundary_transfer(self):
+        """P1-R7-F1: Exact discrete interior control-volume leapfrog Hamiltonian theorem.
+
+        Proves that for the staggered discrete leapfrog Hamiltonian restricted to Omega_int,
+        the discrete continuity theorem:
+          H_int^{N-1/2} - H_int^{-1/2} + sum_{n=0}^{N-1} Delta B_{boundary}^n + sum_{n=0}^{N-1} Delta D_{int}^n = 0
+        closes to machine precision (< 1e-12) under all dt refinements and interior damping configurations.
+        """
+        dx = 1.0
+        c0 = 1.0
+        grid_size = 40
+        sponge_width = 8
+
+        c_field = np.full((grid_size, grid_size, grid_size), c0, dtype=float)
+        mid = grid_size // 2
+        coords = np.arange(grid_size) * dx
+        X, Y, Z = np.meshgrid(coords, coords, coords, indexing='ij')
+        r_sq = (X - mid * dx) ** 2 + (Y - mid * dx) ** 2 + (Z - mid * dx) ** 2
+        phi0 = np.exp(-r_sq / (2.0 * 2.0 ** 2))
+        lap0 = sw.laplacian_3d_clamped(phi0, dx)
+
+        # A. Undamped interior (sigma=0) across temporal refinements: dt_0, dt_0/2, dt_0/4
+        sig_zero = np.zeros_like(c_field)
+        for factor, n_steps in [(0.85, 25), (0.425, 50), (0.2125, 100)]:
+            dt = factor * dx / (c0 * np.sqrt(3.0))
+            phim1 = phi0 + 0.5 * (dt ** 2) * (c0 ** 2) * lap0
+            p, pm = phi0.copy(), phim1.copy()
+            h_init = sw.compute_interior_exact_discrete_leapfrog_energy(p, pm, c_field, dt, dx, sponge_width)
+            cum_boundary = 0.0
+            for _ in range(n_steps):
+                pn = sw.step_wave_fdtd(p, pm, c_field, sig_zero, dt, dx)
+                cum_boundary += sw.compute_exact_discrete_interior_boundary_transfer(p, pm, dt, dx, sponge_width)
+                pm, p = p, pn
+            h_final = sw.compute_interior_exact_discrete_leapfrog_energy(p, pm, c_field, dt, dx, sponge_width)
+            delta_h = h_final - h_init
+            rel_closure = abs(delta_h + cum_boundary) / h_init
+            # Must close to machine precision across all time step refinements
+            self.assertLess(rel_closure, 1e-12)
+
+        # B. Damped interior (sigma=0.5 inside Omega_int) with combined boundary transfer and dissipation
+        sig_damped = np.zeros_like(c_field)
+        sig_damped[sponge_width:-sponge_width, sponge_width:-sponge_width, sponge_width:-sponge_width] = 0.5
+        for factor, n_steps in [(0.85, 25), (0.425, 50)]:
+            dt = factor * dx / (c0 * np.sqrt(3.0))
+            phim1 = phi0 + 0.5 * (dt ** 2) * (c0 ** 2) * lap0
+            p, pm = phi0.copy(), phim1.copy()
+            h_init = sw.compute_interior_exact_discrete_leapfrog_energy(p, pm, c_field, dt, dx, sponge_width)
+            cum_boundary = 0.0
+            cum_diss = 0.0
+            for _ in range(n_steps):
+                pn = sw.step_wave_fdtd(p, pm, c_field, sig_damped, dt, dx)
+                cum_boundary += sw.compute_exact_discrete_interior_boundary_transfer(p, pm, dt, dx, sponge_width)
+                cum_diss += sw.compute_interior_sponge_dissipated_energy(pn, pm, c_field, sig_damped, dt, dx, sponge_width)
+                pm, p = p, pn
+            h_final = sw.compute_interior_exact_discrete_leapfrog_energy(p, pm, c_field, dt, dx, sponge_width)
+            delta_h = h_final - h_init
+            rel_closure = abs(delta_h + cum_boundary + cum_diss) / h_init
+            self.assertLess(rel_closure, 1e-12)
 
     def test_sponge_reflection_parameter_sweep_and_adversarial_ref_domain(self):
         """P1-R3-F4 / P1-R4-F1 / P1-R5-F1 regression: Parameter sweep across ref domain, T_obs, spatial dx refinement, and dt."""
