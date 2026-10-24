@@ -723,6 +723,7 @@ def _get_cached_wave_audit() -> dict:
             'discrete_energy_budget_closure_error': res_sponge.discrete_energy_budget_closure_error,
             'cumulative_incident_outgoing_surface_flux': res_sponge.cumulative_incident_outgoing_surface_flux,
             'cumulative_reflected_return_surface_flux': res_sponge.cumulative_reflected_return_surface_flux,
+            'surface_flux_return_ratio_proxy': res_sponge.surface_flux_return_ratio_proxy,
             'surface_integrated_return_flux_ratio': res_sponge.surface_integrated_return_flux_ratio,
             'geometric_pre_arrival_step': res_sponge.geometric_pre_arrival_step,
             'geometric_peak_return_step': res_sponge.geometric_peak_return_step,
@@ -748,6 +749,7 @@ def _get_cached_wave_audit() -> dict:
                 'sponge_dissipated_energy_fraction': r.sponge_dissipated_energy_fraction,
                 'remaining_total_energy_fraction': r.remaining_total_energy_fraction,
                 'discrete_energy_budget_closure_error': r.discrete_energy_budget_closure_error,
+                'surface_flux_return_ratio_proxy': r.surface_flux_return_ratio_proxy,
                 'surface_integrated_return_flux_ratio': r.surface_integrated_return_flux_ratio,
                 'description': r.description,
             }
@@ -773,6 +775,7 @@ def _get_cached_wave_audit() -> dict:
                     'peak_window_interior_reflected_energy_snapshot_proxy': r.peak_window_interior_reflected_energy_snapshot_proxy,
                     'sponge_dissipated_energy_fraction': r.sponge_dissipated_energy_fraction,
                     'discrete_energy_budget_closure_error': r.discrete_energy_budget_closure_error,
+                    'surface_flux_return_ratio_proxy': r.surface_flux_return_ratio_proxy,
                     'surface_integrated_return_flux_ratio': r.surface_integrated_return_flux_ratio,
                     'reference_wall_return_step': r.reference_wall_return_step,
                     'reference_domain_free_of_wall_return': r.reference_domain_free_of_wall_return,
@@ -788,7 +791,7 @@ def _get_cached_wave_audit() -> dict:
             'diagnostic_note': sweep.diagnostic_note,
         },
         'fixed_window_late_early_probe_amplitude_proxy': {
-            'description': 'Fixed-window late/early probe amplitude proxy (legacy metric, retained for audit comparison)',
+            'description': 'Fixed-window late/early probe amplitude proxy (legacy metric, retained purely for historical audit comparison, P1-R2-F1, P1-R6-F2)',
             'parameters': {'grid_size': 48, 'sponge_width': 10, 'max_sigma': 3.0, 'n_steps': 70, 'arrival_window': 25},
             'incident_peak_amplitude': res_legacy.incident_peak_amplitude,
             'reflected_peak_amplitude': res_legacy.reflected_peak_amplitude,
@@ -799,7 +802,8 @@ def _get_cached_wave_audit() -> dict:
             'interior_energy_retention_ratio': res_legacy.interior_energy_retention_ratio,
             'legacy_masked_proxy_ratio': res_legacy.masked_proxy_ratio,
             'is_absorbed_to_tolerance': res_legacy.is_absorbed_to_tolerance,
-            'epistemic_note': 'Measures outgoing pulse tail at step 25 without reference subtraction (~3.2% power ratio for all sigma).',
+            'legacy_metric_invalid_for_absorption': res_legacy.legacy_metric_invalid_for_absorption,
+            'epistemic_note': 'Measures outgoing pulse tail at step 25 without reference subtraction (~3.2% power ratio for all sigma including sigma=0); demonstrably invalid for certifying absorption.',
         },
         'two_material_energy_conservation_benchmark': {
             'description': 'Long-time discrete Hamiltonian conservation and actual terminal continuum energy across c1=1.0 -> c2=0.6 step interface (P1-R2-F4, P1-R3-F5)',

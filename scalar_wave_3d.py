@@ -484,6 +484,7 @@ class SpongeReflectionProbeResult:
     masked_proxy_ratio: float
     is_absorbed_to_tolerance: bool
     diagnostic_note: str
+    legacy_metric_invalid_for_absorption: bool = True
 
 
 def fixed_window_late_early_probe_amplitude_proxy(
@@ -493,13 +494,15 @@ def fixed_window_late_early_probe_amplitude_proxy(
     n_steps: int = 70,
     tolerance_power_reflection: float = 0.05,
 ) -> SpongeReflectionProbeResult:
-    """Fixed-window late/early probe amplitude proxy (legacy metric, P1-R2-F1).
+    """Fixed-window late/early probe amplitude proxy (legacy metric, P1-R2-F1, P1-R6-F2).
 
-    NOTE (P1-R2-F1): This legacy proxy split one probe trace at fixed step 25 without an
+    NOTE (P1-R2-F1, P1-R6-F2): This legacy proxy split one probe trace at fixed step 25 without an
     unreflected reference. The peak after step 25 captures the outgoing pulse tail, yielding
-    ~3.2% power ratio regardless of sponge conductivity sigma_max.
-    Retained for audit and regression comparison. For true reflection measurement, see
-    benchmark_sponge_reflection_reference_subtracted().
+    ~3.2% power ratio regardless of sponge conductivity sigma_max (including sigma=0).
+    It is demonstrably invalid for certifying absorption (legacy_metric_invalid_for_absorption=True,
+    is_absorbed_to_tolerance=False).
+    Retained purely for audit and historical regression comparison. For validated absorption measurement,
+    see benchmark_sponge_reflection_reference_subtracted().
     """
     dx = 1.0
     c0 = 1.0
@@ -550,14 +553,16 @@ def fixed_window_late_early_probe_amplitude_proxy(
     proxy_val = compute_masked_interior_energy_proxy(phi, phi_prev, c_field, dt, dx, sponge_width)
     proxy_ratio = float(proxy_val / e_initial)
 
-    is_ok = bool(r_pwr <= tolerance_power_reflection and e_interior_final <= e_total_final)
+    # P1-R6-F2: Legacy fixed-window metric is demonstrably invalid for certifying absorption
+    is_ok = False
 
     note = (
-        f'Fixed-window late/early probe amplitude proxy (legacy): '
+        f'Fixed-window late/early probe amplitude proxy (LEGACY / INVALID FOR ABSORPTION CERTIFICATION, P1-R2-F1, P1-R6-F2): '
         f'Early peak: {inc_peak:.4f}, late peak at step 25: {refl_peak:.4f} '
         f'(Proxy ratio = {r_amp:.2%}, Proxy power = {r_pwr:.3%}). '
-        f'P1-R2-F1 verified this reflects outgoing pulse tail. For true absorption measurement, '
-        f'use benchmark_sponge_reflection_reference_subtracted().'
+        f'This legacy fixed-window metric measures outgoing pulse tail and gives ~3.2% even for undamped sigma=0; '
+        f'it is demonstrably invalid for certifying absorption (legacy_metric_invalid_for_absorption=True, is_absorbed_to_tolerance=False). '
+        f'For validated absorption measurement, see benchmark_sponge_reflection_reference_subtracted().'
     )
 
     return SpongeReflectionProbeResult(
@@ -572,6 +577,7 @@ def fixed_window_late_early_probe_amplitude_proxy(
         masked_proxy_ratio=proxy_ratio,
         is_absorbed_to_tolerance=is_ok,
         diagnostic_note=note,
+        legacy_metric_invalid_for_absorption=True,
     )
 
 
@@ -609,13 +615,21 @@ def compute_enclosing_surface_outward_flux(
     dx: float,
     sponge_width: int,
 ) -> float:
-    """Discrete outward wave energy flux across the 6 faces of the interior/sponge boundary dOmega_int (P1-R4-F1).
+    """Symmetric discrete outward wave energy flux proxy across the 6 faces of dOmega_int (P1-R4-F1, P1-R6-F1).
 
-    Evaluates the discrete summation-by-parts boundary flux across the 6 planar faces separating
-    Omega_int = [sw, N-sw)^3 from the surrounding sponge region:
-      F_out^n(phi) = sum_{6 faces} ( - ((phi_in^{n+1} - phi_in^{n-1})/(2*dt)) * ((phi_out^n - phi_in^n)/dx) ) * dx^2.
-    Positive values indicate energy flowing outward from Omega_int into the sponge; negative values
-    indicate energy flowing inward from the sponge back into Omega_int.
+    Evaluates the discrete boundary flux proxy across the 6 planar interface faces separating
+    Omega_int = [sw, N-sw)^3 from the surrounding sponge using the space-symmetric bond velocity
+    v_bond = (v_in + v_out) / 2:
+      F_out^n(phi) = sum_{6 faces} ( - ((v_in^n + v_out^n)/2) * ((phi_out^n - phi_in^n)/dx) ) * dx^2.
+
+    Positive values indicate wave energy flowing outward from Omega_int into the sponge; negative
+    values indicate energy flowing inward from the sponge back into Omega_int.
+
+    NOTE (P1-R6-F1): This quantity is explicitly defined and scoped as an enclosing-surface flux
+    PROXY across the 6 crossing boundary faces. It is not an exact closed control-volume identity
+    (fully discrete staggered leapfrog Hamiltonians have O(dt^2) time-staggering contributions).
+    Exact global conservative energy closure is certified separately by the discrete whole-domain
+    leapfrog identity H^{N-1/2} + D_sponge = H^{-1/2} (< 1e-12) and whole-domain dissipation >= 90%.
     """
     sw = sponge_width
     if sw <= 0 or 2 * sw >= phi.shape[0]:
@@ -625,17 +639,26 @@ def compute_enclosing_surface_outward_flux(
     area_elem = dx * dx
     inv_dx = 1.0 / dx
 
-    # Left/right x faces of Omega_int = [sw, N-sw)^3
-    f_x_low = -np.sum(v[sw, sw:-sw, sw:-sw] * (phi[sw - 1, sw:-sw, sw:-sw] - phi[sw, sw:-sw, sw:-sw]) * inv_dx) * area_elem
-    f_x_high = -np.sum(v[-sw - 1, sw:-sw, sw:-sw] * (phi[-sw, sw:-sw, sw:-sw] - phi[-sw - 1, sw:-sw, sw:-sw]) * inv_dx) * area_elem
+    # Left/right x faces of Omega_int = [sw, N-sw)^3 with symmetric interface velocity
+    v_x_l = 0.5 * (v[sw, sw:-sw, sw:-sw] + v[sw - 1, sw:-sw, sw:-sw])
+    f_x_low = -np.sum(v_x_l * (phi[sw - 1, sw:-sw, sw:-sw] - phi[sw, sw:-sw, sw:-sw]) * inv_dx) * area_elem
+
+    v_x_h = 0.5 * (v[-sw - 1, sw:-sw, sw:-sw] + v[-sw, sw:-sw, sw:-sw])
+    f_x_high = -np.sum(v_x_h * (phi[-sw, sw:-sw, sw:-sw] - phi[-sw - 1, sw:-sw, sw:-sw]) * inv_dx) * area_elem
 
     # Front/back y faces
-    f_y_low = -np.sum(v[sw:-sw, sw, sw:-sw] * (phi[sw:-sw, sw - 1, sw:-sw] - phi[sw:-sw, sw, sw:-sw]) * inv_dx) * area_elem
-    f_y_high = -np.sum(v[sw:-sw, -sw - 1, sw:-sw] * (phi[sw:-sw, -sw, sw:-sw] - phi[sw:-sw, -sw - 1, sw:-sw]) * inv_dx) * area_elem
+    v_y_l = 0.5 * (v[sw:-sw, sw, sw:-sw] + v[sw:-sw, sw - 1, sw:-sw])
+    f_y_low = -np.sum(v_y_l * (phi[sw:-sw, sw - 1, sw:-sw] - phi[sw:-sw, sw, sw:-sw]) * inv_dx) * area_elem
+
+    v_y_h = 0.5 * (v[sw:-sw, -sw - 1, sw:-sw] + v[sw:-sw, -sw, sw:-sw])
+    f_y_high = -np.sum(v_y_h * (phi[sw:-sw, -sw, sw:-sw] - phi[sw:-sw, -sw - 1, sw:-sw]) * inv_dx) * area_elem
 
     # Bottom/top z faces
-    f_z_low = -np.sum(v[sw:-sw, sw:-sw, sw] * (phi[sw:-sw, sw:-sw, sw - 1] - phi[sw:-sw, sw:-sw, sw]) * inv_dx) * area_elem
-    f_z_high = -np.sum(v[sw:-sw, sw:-sw, -sw - 1] * (phi[sw:-sw, sw:-sw, -sw] - phi[sw:-sw, sw:-sw, -sw - 1]) * inv_dx) * area_elem
+    v_z_l = 0.5 * (v[sw:-sw, sw:-sw, sw] + v[sw:-sw, sw:-sw, sw - 1])
+    f_z_low = -np.sum(v_z_l * (phi[sw:-sw, sw:-sw, sw - 1] - phi[sw:-sw, sw:-sw, sw]) * inv_dx) * area_elem
+
+    v_z_h = 0.5 * (v[sw:-sw, sw:-sw, -sw - 1] + v[sw:-sw, sw:-sw, -sw])
+    f_z_high = -np.sum(v_z_h * (phi[sw:-sw, sw:-sw, -sw] - phi[sw:-sw, sw:-sw, -sw - 1]) * inv_dx) * area_elem
 
     return float(f_x_low + f_x_high + f_y_low + f_y_high + f_z_low + f_z_high)
 
@@ -669,7 +692,21 @@ class SpongeReflectionReferenceSubtractedResult:
     discrete_energy_budget_closure_error: float
     cumulative_incident_outgoing_surface_flux: float
     cumulative_reflected_return_surface_flux: float
-    surface_integrated_return_flux_ratio: float
+    surface_flux_return_ratio_proxy: float
+    geometric_pre_arrival_step: int
+    geometric_peak_return_step: int
+    reference_wall_return_step: int
+    reference_domain_free_of_wall_return: bool
+    pre_arrival_difference_max: float
+    is_simulation_setup_valid: bool
+    is_sponge_absorbed_to_tolerance: bool
+    metric_definition_note: str
+    diagnostic_note: str
+
+    @property
+    def surface_integrated_return_flux_ratio(self) -> float:
+        """Backward-compatible alias for surface_flux_return_ratio_proxy."""
+        return self.surface_flux_return_ratio_proxy
     geometric_pre_arrival_step: int
     geometric_peak_return_step: int
     reference_wall_return_step: int
@@ -893,18 +930,22 @@ def benchmark_sponge_reflection_reference_subtracted(
     )
 
     metric_note = (
-        'PROXY & BUDGET DEFINITIONS (P1-R4-F1, P1-R5-F1): '
+        'PROXY & BUDGET DEFINITIONS (P1-R4-F1, P1-R5-F1, P1-R6-F1): '
         '(1) probe_local_peak_squared_proxy = (max|phi_test(x_p,t) - phi_ref(x_p,t)| / max|phi_ref(x_p,t)|)^2 is a '
         'single-point amplitude-squared ratio subject to 3D 1/r spreading, NOT a plane-wave power reflection coefficient. '
         '(2) terminal_interior_reflected_energy_snapshot_proxy and peak_window_interior_reflected_energy_snapshot_proxy '
         'measure the 3D interior continuum energy of (phi_test - phi_ref) normalized by initial energy at t=T_end and '
         'at its return-window maximum, respectively. '
         '(3) initial_discrete_hamiltonian, final_total_discrete_hamiltonian, and cumulative_sponge_dissipated_energy '
-        'satisfy the exact closed discrete leapfrog identity H^{N-1/2} + D_sponge = H^{-1/2} to machine precision. '
-        '(4) surface_integrated_return_flux_ratio measures the time-integrated inward return energy flux of '
-        '(phi_test - phi_ref) across the 6 faces of dOmega_int divided by the time-integrated outward incident energy flux. '
+        'satisfy the exact closed discrete leapfrog identity H^{N-1/2} + D_sponge = H^{-1/2} to machine precision (< 1e-12). '
+        '(4) surface_flux_return_ratio_proxy (alias surface_integrated_return_flux_ratio) measures the time-integrated '
+        'inward return energy flux proxy of (phi_test - phi_ref) across the 6 faces of dOmega_int divided by the outward '
+        'incident energy flux, evaluated with space-symmetric bond velocities (v_in + v_out)/2. It is an approximate '
+        'surface-flux proxy across the 6 boundary faces, NOT an established conservative control-volume identity '
+        '(conservative global energy closure is certified separately by the exact discrete whole-domain identity). '
         '(5) is_simulation_setup_valid certifies clean isolation, causal zero, energy closure, and sufficient return window; '
-        'is_sponge_absorbed_to_tolerance certifies demonstrated wave absorption (dissipation >= 90%, return flux <= 5%, proxies <= tol).'
+        'is_sponge_absorbed_to_tolerance certifies demonstrated wave absorption (whole-domain dissipation >= 90%, '
+        'surface flux return proxy <= 5%, difference reflection proxies <= 5%).'
     )
 
     note = (
@@ -913,7 +954,7 @@ def benchmark_sponge_reflection_reference_subtracted(
         f'probe local peak-squared proxy={r_pwr_proxy:.3%}, '
         f'terminal interior snapshot proxy={terminal_refl_snapshot_proxy:.3%}, '
         f'peak-window interior snapshot proxy={peak_window_int_refl_fraction:.3%}, '
-        f'surface-integrated return flux ratio={surface_return_ratio:.3%}. '
+        f'surface flux return proxy={surface_return_ratio:.3%}. '
         f'Closed discrete energy budget: sponge dissipated={sponge_dissipated_frac:.2%}, '
         f'remaining total={remaining_total_frac:.2%}, closure error={closure_err:.2e} (< 1e-12).'
     )
@@ -946,7 +987,7 @@ def benchmark_sponge_reflection_reference_subtracted(
         discrete_energy_budget_closure_error=closure_err,
         cumulative_incident_outgoing_surface_flux=cum_inc_out_flux,
         cumulative_reflected_return_surface_flux=cum_refl_in_flux,
-        surface_integrated_return_flux_ratio=surface_return_ratio,
+        surface_flux_return_ratio_proxy=surface_return_ratio,
         geometric_pre_arrival_step=geometric_pre_arrival_step,
         geometric_peak_return_step=geometric_peak_return_step,
         reference_wall_return_step=reference_wall_return_step,
@@ -972,8 +1013,13 @@ class SpongeControlRow:
     sponge_dissipated_energy_fraction: float
     remaining_total_energy_fraction: float
     discrete_energy_budget_closure_error: float
-    surface_integrated_return_flux_ratio: float
+    surface_flux_return_ratio_proxy: float
     description: str
+
+    @property
+    def surface_integrated_return_flux_ratio(self) -> float:
+        """Backward-compatible alias for surface_flux_return_ratio_proxy."""
+        return self.surface_flux_return_ratio_proxy
 
     @property
     def integrated_reflected_energy_fraction(self) -> float:
@@ -1025,7 +1071,7 @@ def benchmark_sponge_reflection_controls(
             sponge_dissipated_energy_fraction=res.sponge_dissipated_energy_fraction,
             remaining_total_energy_fraction=res.remaining_total_energy_fraction,
             discrete_energy_budget_closure_error=res.discrete_energy_budget_closure_error,
-            surface_integrated_return_flux_ratio=res.surface_integrated_return_flux_ratio,
+            surface_flux_return_ratio_proxy=res.surface_flux_return_ratio_proxy,
             description=desc,
         ))
     return rows
@@ -1049,9 +1095,14 @@ class SpongeParameterSweepRow:
     peak_window_interior_reflected_energy_snapshot_proxy: float
     sponge_dissipated_energy_fraction: float
     discrete_energy_budget_closure_error: float
-    surface_integrated_return_flux_ratio: float
+    surface_flux_return_ratio_proxy: float
     reference_wall_return_step: int
     reference_domain_free_of_wall_return: bool
+
+    @property
+    def surface_integrated_return_flux_ratio(self) -> float:
+        """Backward-compatible alias for surface_flux_return_ratio_proxy."""
+        return self.surface_flux_return_ratio_proxy
 
     @property
     def integrated_reflected_energy_fraction(self) -> float:
@@ -1130,7 +1181,7 @@ def benchmark_sponge_reflection_parameter_sweep() -> SpongeParameterSweepResult:
             peak_window_interior_reflected_energy_snapshot_proxy=res.peak_window_interior_reflected_energy_snapshot_proxy,
             sponge_dissipated_energy_fraction=res.sponge_dissipated_energy_fraction,
             discrete_energy_budget_closure_error=res.discrete_energy_budget_closure_error,
-            surface_integrated_return_flux_ratio=res.surface_integrated_return_flux_ratio,
+            surface_flux_return_ratio_proxy=res.surface_flux_return_ratio_proxy,
             reference_wall_return_step=res.reference_wall_return_step,
             reference_domain_free_of_wall_return=res.reference_domain_free_of_wall_return,
         )

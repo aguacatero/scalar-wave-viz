@@ -1226,10 +1226,10 @@ def solve_dirichlet_independent_matrix_free_sor(
       - Tracks discrete residual convergence; raises RuntimeError if residual exceeds tolerance_v
         upon completing max_iterations.
     """
-    if max_iterations < 1:
-        raise ValueError(f"max_iterations must be >= 1, got {max_iterations}")
-    if tolerance_v <= 0.0:
-        raise ValueError(f"tolerance_v must be > 0, got {tolerance_v}")
+    if not isinstance(max_iterations, (int, np.integer)) or max_iterations < 1:
+        raise ValueError(f"max_iterations must be a positive integer >= 1, got {max_iterations}")
+    if not np.isfinite(tolerance_v) or tolerance_v <= 0.0:
+        raise ValueError(f"tolerance_v must be a finite positive float > 0, got {tolerance_v}")
 
     cfg = config or GroundedBoxConfig()
     n = cfg.n
@@ -1427,7 +1427,7 @@ def solve_electrostatics_mfs_boundary_collocation(
         ey = -(ry / r2) @ q
         return v, ex, ey
 
-    # 3. Independent dense boundary verification (Maximum Principle certificate)
+    # 3. Independent dense boundary verification (sampled boundary diagnostic)
     theta_v = np.linspace(0.0, 2.0 * np.pi, 720, endpoint=False) + (np.pi / 720.0)
     ver_l = np.column_stack([le.center_x_m + le.radius_m * np.cos(theta_v), le.center_y_m + le.radius_m * np.sin(theta_v)])
     ver_r = np.column_stack([re.center_x_m + re.radius_m * np.cos(theta_v), re.center_y_m + re.radius_m * np.sin(theta_v)])

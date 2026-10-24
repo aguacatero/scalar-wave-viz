@@ -119,18 +119,29 @@ class PulsePropagationBenchmarkTests(unittest.TestCase):
 
 class BoundaryReflectionBenchmarkTests(unittest.TestCase):
     def test_sponge_boundary_reflection_probe_legacy_proxy(self):
-        """P1-R1-F2 / P1-R2-F1 regression: Legacy fixed-window proxy reproduces historical values for audit."""
+        """P1-R1-F2 / P1-R2-F1 / P1-R6-F2 regression: Legacy fixed-window proxy is demonstrably invalid for absorption."""
         res = sw.fixed_window_late_early_probe_amplitude_proxy(
             grid_size=48, sponge_width=10, max_sigma=3.0, n_steps=70
         )
-        self.assertTrue(res.is_absorbed_to_tolerance)
+        # P1-R6-F2: Legacy fixed-window proxy must fail closed and flag invalidity
+        self.assertTrue(res.legacy_metric_invalid_for_absorption)
+        self.assertFalse(res.is_absorbed_to_tolerance)
         self.assertLess(res.power_reflection_coefficient, 0.05)
         self.assertLessEqual(res.final_interior_energy, res.final_total_energy + 1e-12)
         # Legacy masked proxy reproduces the reviewer-identified ~2.51% value
         self.assertAlmostEqual(res.masked_proxy_ratio, 0.0251, delta=0.010)
 
+        # Adversarial negative control: undamped Dirichlet wall (sigma=0) yields the same ~3.2% ratio,
+        # confirming that the legacy calculation captures outgoing pulse tail rather than absorption
+        res_zero = sw.fixed_window_late_early_probe_amplitude_proxy(
+            grid_size=48, sponge_width=10, max_sigma=0.0, n_steps=70
+        )
+        self.assertTrue(res_zero.legacy_metric_invalid_for_absorption)
+        self.assertFalse(res_zero.is_absorbed_to_tolerance)
+        self.assertAlmostEqual(res_zero.power_reflection_coefficient, res.power_reflection_coefficient, places=2)
+
     def test_sponge_boundary_reflection_reference_subtracted(self):
-        """P1-R2-F1 / P1-R3-F4 / P1-R4-F1 / P1-R5-F1 regression: Reference-subtracted reflection with closed discrete energy budget."""
+        """P1-R2-F1 / P1-R3-F4 / P1-R4-F1 / P1-R5-F1 / P1-R6-F1 regression: Reference-subtracted reflection with closed discrete energy budget."""
         res = sw.benchmark_sponge_reflection_reference_subtracted(
             grid_size=40, sponge_width=8, max_sigma=3.0, n_steps=80, ref_grid_size=90, probe_offset=6
         )
@@ -150,10 +161,50 @@ class BoundaryReflectionBenchmarkTests(unittest.TestCase):
         self.assertLess(res.peak_window_interior_reflected_energy_snapshot_proxy, 0.020)
         # Pre-arrival difference is bounded by Gaussian tail (< 1e-8) before reflected pulse returns
         self.assertLess(res.pre_arrival_difference_max, 1e-8)
-        # P1-R4-F1: Closed discrete energy budget and surface-integrated return flux
+        # P1-R4-F1 / P1-R6-F1: Closed discrete energy budget and symmetric surface flux proxy
         self.assertLess(res.discrete_energy_budget_closure_error, 1e-12)
         self.assertGreater(res.sponge_dissipated_energy_fraction, 0.95)
+        self.assertLess(res.surface_flux_return_ratio_proxy, 0.05)
         self.assertLess(res.surface_integrated_return_flux_ratio, 0.05)
+        self.assertEqual(res.surface_flux_return_ratio_proxy, res.surface_integrated_return_flux_ratio)
+
+    def test_interior_control_volume_flux_continuity_and_residual(self):
+        """P1-R6-F1 regression: Symmetric crossing-face flux tracks interior control-volume energy changes."""
+        dx = 1.0
+        c0 = 1.0
+        dt = 0.85 * dx / (c0 * np.sqrt(3.0))
+        n_steps = 25
+        grid_size = 40
+        sponge_width = 8
+
+        c_field = np.full((grid_size, grid_size, grid_size), c0, dtype=float)
+        sig_field = np.zeros_like(c_field)
+
+        mid = grid_size // 2
+        coords = np.arange(grid_size) * dx
+        X, Y, Z = np.meshgrid(coords, coords, coords, indexing='ij')
+        r_sq = (X - mid * dx) ** 2 + (Y - mid * dx) ** 2 + (Z - mid * dx) ** 2
+        phi0 = np.exp(-r_sq / (2.0 * 2.0 ** 2))
+        lap0 = sw.laplacian_3d_clamped(phi0, dx)
+        phim1 = phi0 + 0.5 * (dt ** 2) * (c0 ** 2) * lap0
+
+        e_init = sw.compute_interior_energy(phi0, phim1, c_field, dt, dx, sponge_width)
+        p, pm = phi0.copy(), phim1.copy()
+        cum_flux = 0.0
+        for _ in range(n_steps):
+            pn = sw.step_wave_fdtd(p, pm, c_field, sig_field, dt, dx)
+            flux = sw.compute_enclosing_surface_outward_flux(pn, p, pm, dt, dx, sponge_width)
+            cum_flux += flux * dt
+            pm, p = p, pn
+
+        e_final = sw.compute_interior_energy(p, pm, c_field, dt, dx, sponge_width)
+        delta_e = e_final - e_init
+        residual = delta_e + cum_flux
+
+        # Outward flux accounts for the energy lost from Omega_int to within 1% of initial pulse energy
+        self.assertLess(abs(residual) / e_init, 0.01)
+        self.assertGreater(cum_flux, 0.5)
+        self.assertLess(delta_e, -0.5)
 
     def test_sponge_reflection_parameter_sweep_and_adversarial_ref_domain(self):
         """P1-R3-F4 / P1-R4-F1 / P1-R5-F1 regression: Parameter sweep across ref domain, T_obs, spatial dx refinement, and dt."""

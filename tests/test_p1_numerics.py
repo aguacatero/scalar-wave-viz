@@ -420,11 +420,19 @@ class IndependentSolverVerificationTests(unittest.TestCase):
             en.solve_dirichlet_independent_matrix_free_sor(config=cfg, tolerance_v=1e-11, max_iterations=1)
         self.assertIn('SOR solver failed to converge', str(cm.exception))
 
-        # Invalid parameter gates raise ValueError
+        # Invalid parameter gates raise ValueError (P1-R5-F4, P1-R6-F3)
         with self.assertRaises(ValueError):
             en.solve_dirichlet_independent_matrix_free_sor(config=cfg, max_iterations=0)
         with self.assertRaises(ValueError):
+            en.solve_dirichlet_independent_matrix_free_sor(config=cfg, max_iterations=1.5)
+        with self.assertRaises(ValueError):
             en.solve_dirichlet_independent_matrix_free_sor(config=cfg, tolerance_v=0.0)
+        with self.assertRaises(ValueError):
+            en.solve_dirichlet_independent_matrix_free_sor(config=cfg, tolerance_v=-1e-5)
+        with self.assertRaises(ValueError):
+            en.solve_dirichlet_independent_matrix_free_sor(config=cfg, tolerance_v=float('inf'))
+        with self.assertRaises(ValueError):
+            en.solve_dirichlet_independent_matrix_free_sor(config=cfg, tolerance_v=float('nan'))
 
     def test_independent_mfs_continuous_laplace_solver_and_harmonic_certificate(self):
         """P1-R4-F3 / P1-R5-F2: Continuous grid-free MFS satisfies sampled-boundary diagnostic."""
