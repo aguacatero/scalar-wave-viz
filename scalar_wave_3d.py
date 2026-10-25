@@ -1467,17 +1467,57 @@ def benchmark_interior_control_volume_budget(
     interior_sigma: float = 0.0,
     source_amplitude: float = 0.0,
 ) -> InteriorControlVolumeBudgetResult:
-    """Benchmark exact discrete local control-volume Hamiltonian continuity theorem (P1-R7-F1, P1-R8-F1, P1-R8-F3, P1-R9-F1).
+    """Benchmark exact discrete local control-volume Hamiltonian continuity theorem (P1-R7-F1, P1-R8-F1, P1-R8-F3, P1-R9-F1, P1-R10-F1).
 
     Verifies the discrete local continuity balance:
       H_int^{N-1/2} - H_int^{-1/2} + sum_{n=0}^{N-1} Delta B_{boundary}^n + sum_{n=0}^{N-1} Delta D_{int}^n = sum_{n=0}^{N-1} Delta W_{source, int}^n
     to machine precision (< 1e-12) under undriven/undamped as well as driven/damped conditions.
+    Fails closed: strictly validates physical parameters, dimensions, and execution step count.
     """
+    # 1. Parameter and shape sanity validation (P1-R10-F1)
+    if isinstance(grid_size, bool) or not isinstance(grid_size, (int, np.integer)):
+        raise ValueError(f"grid_size must be an integer, got {grid_size!r}")
+    if int(grid_size) < 3:
+        raise ValueError(f"grid_size must be >= 3, got {grid_size!r}")
+    grid_size = int(grid_size)
+
+    sw = validate_interior_sponge_width(sponge_width, grid_size)
+
+    if isinstance(dx_m, bool) or not isinstance(dx_m, (int, float, np.floating, np.integer)) or not np.isfinite(dx_m) or float(dx_m) <= 0.0:
+        raise ValueError(f"dx_m must be a finite positive number > 0, got {dx_m!r}")
+    dx_m = float(dx_m)
+
+    if isinstance(c_m_per_s, bool) or not isinstance(c_m_per_s, (int, float, np.floating, np.integer)) or not np.isfinite(c_m_per_s) or float(c_m_per_s) <= 0.0:
+        raise ValueError(f"c_m_per_s must be a finite positive number > 0, got {c_m_per_s!r}")
+    c_m_per_s = float(c_m_per_s)
+
+    if isinstance(courant_factor, bool) or not isinstance(courant_factor, (int, float, np.floating, np.integer)) or not np.isfinite(courant_factor) or float(courant_factor) <= 0.0:
+        raise ValueError(f"courant_factor must be a finite positive number > 0, got {courant_factor!r}")
+    courant_factor = float(courant_factor)
+    if courant_factor > 1.0 + 1e-6:
+        raise ValueError(f"courant_factor {courant_factor} violates stability limit (must be <= 1.0, yielding c*dt/dx <= 1/sqrt(3))")
+
+    if isinstance(n_steps, bool) or not isinstance(n_steps, (int, np.integer)):
+        raise ValueError(f"n_steps must be an integer, got {n_steps!r}")
+    if int(n_steps) < 1:
+        raise ValueError(f"n_steps must be a positive integer >= 1, got {n_steps!r}")
+    n_steps = int(n_steps)
+
+    if isinstance(interior_sigma, bool) or not isinstance(interior_sigma, (int, float, np.floating, np.integer)) or not np.isfinite(interior_sigma):
+        raise ValueError(f"interior_sigma must be a finite numerical value, got {interior_sigma!r}")
+    if float(interior_sigma) < 0.0:
+        raise ValueError(f"interior_sigma must be non-negative, got {interior_sigma!r}")
+    interior_sigma = float(interior_sigma)
+
+    if isinstance(source_amplitude, bool) or not isinstance(source_amplitude, (int, float, np.floating, np.integer)) or not np.isfinite(source_amplitude):
+        raise ValueError(f"source_amplitude must be a finite numerical value, got {source_amplitude!r}")
+    source_amplitude = float(source_amplitude)
+
     dt = courant_factor * dx_m / (c_m_per_s * np.sqrt(3.0))
     c_field = np.full((grid_size, grid_size, grid_size), c_m_per_s, dtype=float)
     sig_field = np.zeros_like(c_field)
     if interior_sigma > 0.0:
-        sig_field[sponge_width:-sponge_width, sponge_width:-sponge_width, sponge_width:-sponge_width] = float(interior_sigma)
+        sig_field[sw:-sw, sw:-sw, sw:-sw] = interior_sigma
 
     mid = grid_size // 2
     coords = np.arange(grid_size) * dx_m
@@ -1488,14 +1528,14 @@ def benchmark_interior_control_volume_budget(
     phim1 = phi0 + 0.5 * (dt ** 2) * (c_m_per_s ** 2) * lap0
 
     source_field = None
-    if source_amplitude > 0.0:
+    if source_amplitude != 0.0:
         source_field = np.zeros_like(c_field)
-        source_field[sponge_width:-sponge_width, sponge_width:-sponge_width, sponge_width:-sponge_width] = (
-            float(source_amplitude) * np.sin(X[sponge_width:-sponge_width, sponge_width:-sponge_width, sponge_width:-sponge_width])
+        source_field[sw:-sw, sw:-sw, sw:-sw] = (
+            source_amplitude * np.sin(X[sw:-sw, sw:-sw, sw:-sw])
         )
 
     p, pm = phi0.copy(), phim1.copy()
-    h_init = compute_interior_exact_discrete_leapfrog_energy(p, pm, c_field, dt, dx_m, sponge_width)
+    h_init = compute_interior_exact_discrete_leapfrog_energy(p, pm, c_field, dt, dx_m, sw)
 
     cum_boundary = 0.0
     cum_diss = 0.0
@@ -1503,19 +1543,19 @@ def benchmark_interior_control_volume_budget(
 
     for _ in range(n_steps):
         pn = step_wave_fdtd(p, pm, c_field, sig_field, dt, dx_m, source_field=source_field)
-        cum_boundary += compute_exact_discrete_interior_boundary_transfer(p, pm, dt, dx_m, sponge_width)
-        cum_diss += compute_interior_sponge_dissipated_energy(pn, pm, c_field, sig_field, dt, dx_m, sponge_width)
-        cum_work += compute_interior_source_work_step(pn, pm, source_field, c_field, dt, dx_m, sponge_width)
+        cum_boundary += compute_exact_discrete_interior_boundary_transfer(p, pm, dt, dx_m, sw)
+        cum_diss += compute_interior_sponge_dissipated_energy(pn, pm, c_field, sig_field, dt, dx_m, sw)
+        cum_work += compute_interior_source_work_step(pn, pm, source_field, c_field, dt, dx_m, sw)
         pm, p = p, pn
 
-    h_final = compute_interior_exact_discrete_leapfrog_energy(p, pm, c_field, dt, dx_m, sponge_width)
+    h_final = compute_interior_exact_discrete_leapfrog_energy(p, pm, c_field, dt, dx_m, sw)
     delta_h = h_final - h_init
     closure_err = abs(delta_h + cum_boundary + cum_diss - cum_work)
     rel_closure = float(closure_err / h_init) if h_init > 0 else 0.0
     is_exact = bool(rel_closure < 1e-12)
 
     note = (
-        f"Discrete interior control-volume budget (grid={grid_size}, sw={sponge_width}, dx={dx_m}m, dt_factor={courant_factor}, steps={n_steps}, "
+        f"Discrete interior control-volume budget (grid={grid_size}, sw={sw}, dx={dx_m}m, dt_factor={courant_factor}, steps={n_steps}, "
         f"interior_sigma={interior_sigma:.2f}, source_amplitude={source_amplitude:.2f}): "
         f"H_init={h_init:.6f} E_arb, H_final={h_final:.6f} E_arb, delta_H={delta_h:.6f} E_arb, "
         f"cum_B={cum_boundary:.6f} E_arb, cum_D={cum_diss:.6f} E_arb, cum_W={cum_work:.6f} E_arb, "
@@ -1524,7 +1564,7 @@ def benchmark_interior_control_volume_budget(
 
     return InteriorControlVolumeBudgetResult(
         grid_size=grid_size,
-        sponge_width=sponge_width,
+        sponge_width=sw,
         dx_m=dx_m,
         dt_s=float(dt),
         dt_factor=courant_factor,
@@ -1539,8 +1579,8 @@ def benchmark_interior_control_volume_budget(
         relative_local_closure_error=float(rel_closure),
         is_exact_to_machine_precision=is_exact,
         diagnostic_note=note,
-        interior_sigma=float(interior_sigma),
-        source_amplitude=float(source_amplitude),
+        interior_sigma=interior_sigma,
+        source_amplitude=source_amplitude,
     )
 
 

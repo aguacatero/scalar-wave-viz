@@ -510,6 +510,66 @@ class BoundaryReflectionBenchmarkTests(unittest.TestCase):
         self.assertGreater(abs(res_driven.cumulative_interior_dissipation), 1e-4)
         self.assertGreater(abs(res_driven.cumulative_interior_source_work), 1e-4)
 
+        # 3. Driven + damped case with signed negative source amplitude (P1-R10-F1)
+        res_neg = sw.benchmark_interior_control_volume_budget(
+            grid_size=40, sponge_width=8, dx_m=1.0, courant_factor=0.85, n_steps=25,
+            interior_sigma=0.5, source_amplitude=-0.1,
+        )
+        self.assertTrue(res_neg.is_exact_to_machine_precision)
+        self.assertLess(res_neg.relative_local_closure_error, 1e-12)
+        self.assertGreater(abs(res_neg.cumulative_interior_source_work), 1e-4)
+        self.assertEqual(res_neg.source_amplitude, -0.1)
+        self.assertNotEqual(res_neg.cumulative_interior_source_work, res_driven.cumulative_interior_source_work)
+
+        # 4. Fail-closed parameter validation (P1-R10-F1)
+        # interior_sigma must be finite, non-negative, and not bool
+        with self.assertRaises(ValueError):
+            sw.benchmark_interior_control_volume_budget(interior_sigma=-0.5)
+        with self.assertRaises(ValueError):
+            sw.benchmark_interior_control_volume_budget(interior_sigma=float('nan'))
+        with self.assertRaises(ValueError):
+            sw.benchmark_interior_control_volume_budget(interior_sigma=float('inf'))
+        with self.assertRaises(ValueError):
+            sw.benchmark_interior_control_volume_budget(interior_sigma=True)
+
+        # source_amplitude must be finite and not bool
+        with self.assertRaises(ValueError):
+            sw.benchmark_interior_control_volume_budget(source_amplitude=float('nan'))
+        with self.assertRaises(ValueError):
+            sw.benchmark_interior_control_volume_budget(source_amplitude=float('inf'))
+        with self.assertRaises(ValueError):
+            sw.benchmark_interior_control_volume_budget(source_amplitude=True)
+
+        # n_steps must be a strict positive integer >= 1
+        with self.assertRaises(ValueError):
+            sw.benchmark_interior_control_volume_budget(n_steps=0)
+        with self.assertRaises(ValueError):
+            sw.benchmark_interior_control_volume_budget(n_steps=-1)
+        with self.assertRaises(ValueError):
+            sw.benchmark_interior_control_volume_budget(n_steps=True)
+        with self.assertRaises(ValueError):
+            sw.benchmark_interior_control_volume_budget(n_steps=2.5)
+
+        # grid_size, sponge_width, and physical parameters
+        with self.assertRaises(ValueError):
+            sw.benchmark_interior_control_volume_budget(grid_size=2)
+        with self.assertRaises(ValueError):
+            sw.benchmark_interior_control_volume_budget(grid_size=True)
+        with self.assertRaises(ValueError):
+            sw.benchmark_interior_control_volume_budget(sponge_width=0)
+        with self.assertRaises(ValueError):
+            sw.benchmark_interior_control_volume_budget(sponge_width=20)
+        with self.assertRaises(ValueError):
+            sw.benchmark_interior_control_volume_budget(dx_m=0.0)
+        with self.assertRaises(ValueError):
+            sw.benchmark_interior_control_volume_budget(dx_m=-1.0)
+        with self.assertRaises(ValueError):
+            sw.benchmark_interior_control_volume_budget(c_m_per_s=0.0)
+        with self.assertRaises(ValueError):
+            sw.benchmark_interior_control_volume_budget(courant_factor=0.0)
+        with self.assertRaises(ValueError):
+            sw.benchmark_interior_control_volume_budget(courant_factor=1.2)
+
     def test_sponge_reflection_parameter_sweep_and_adversarial_ref_domain(self):
         """P1-R3-F4 / P1-R4-F1 / P1-R5-F1 regression: Parameter sweep across ref domain, T_obs, spatial dx refinement, and dt."""
         sweep = sw.benchmark_sponge_reflection_parameter_sweep()

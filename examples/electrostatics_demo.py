@@ -808,7 +808,13 @@ def _get_cached_wave_audit() -> dict:
             'epistemic_note': 'Measures outgoing pulse tail at step 25 without reference subtraction (~3.2% power ratio for all sigma including sigma=0); demonstrably invalid for certifying absorption.',
         },
         'exact_discrete_interior_control_volume_budget': {
-            'description': 'Exact discrete local control-volume leapfrog Hamiltonian continuity theorem (P1-R7-F1, P1-R8-F1, P1-R8-F3, P1-R9-F1)',
+            'description': 'Exact discrete local control-volume leapfrog Hamiltonian continuity theorem (P1-R7-F1, P1-R8-F1, P1-R8-F3, P1-R9-F1, P1-R10-F1)',
+            'simulation_protocol': {
+                'initial_field_form': 'Gaussian pulse centered at domain midpoint: phi^0 = exp(-r^2 / (2 * (2 * dx)^2))',
+                'staggered_previous_step_prescription': 'phi^{-1} = phi^0 + 0.5 * dt^2 * c^2 * lap(phi^0)',
+                'source_spatial_protocol': 'Time-independent spatial waveform restricted to Cartesian interior Omega_int: S(x, y, z) = source_amplitude * sin(x)',
+                'interior_conductivity_form': 'Uniform damping conductivity restricted to Cartesian interior Omega_int: sigma(x, y, z) = interior_sigma',
+            },
             'undriven_undamped_case': {
                 'parameters': {
                     'grid_size': res_cv_undriven.grid_size,
