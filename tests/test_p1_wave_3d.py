@@ -391,7 +391,7 @@ class BoundaryReflectionBenchmarkTests(unittest.TestCase):
         b_sum_func = sw.compute_exact_discrete_interior_boundary_transfer(pa, pma, dt, dx, sponge_width)
         self.assertAlmostEqual(b_sum_func, b_sum_indep, places=14)
 
-        # H. Fail-Closed Validation for sponge_width (P1-R8-F3)
+        # H. Fail-Closed Validation for sponge_width (P1-R8-F3, P1-R9-F1)
         with self.assertRaises(ValueError):
             sw.compute_interior_exact_discrete_leapfrog_energy(p, pm, c_field, dt, dx, 0)
         with self.assertRaises(ValueError):
@@ -409,13 +409,106 @@ class BoundaryReflectionBenchmarkTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             sw.compute_enclosing_surface_outward_flux(p, p, pm, dt, dx, 0)
 
+        # Fail-closed check when source_field is None (P1-R9-F1): must not bypass validation
+        with self.assertRaises(ValueError):
+            sw.compute_interior_source_work_step(p, pm, None, c_field, dt, dx, 0)
+        with self.assertRaises(ValueError):
+            sw.compute_interior_source_work_step(p, pm, None, c_field, dt, dx, True)
+        with self.assertRaises(ValueError):
+            sw.compute_interior_source_work_step(p, pm, None, c_field, dt, dx, -2)
+        with self.assertRaises(ValueError):
+            sw.compute_interior_source_work_step(p, pm, None, c_field, dt, dx, 20)
+
+        # Direct validator tests with scalar and tuple shapes
+        with self.assertRaises(ValueError):
+            sw.validate_interior_sponge_width(0, 10)
+        with self.assertRaises(ValueError):
+            sw.validate_interior_sponge_width(5, 10)
+        with self.assertRaises(ValueError):
+            sw.validate_interior_sponge_width(6, 10)
+        with self.assertRaises(ValueError):
+            sw.validate_interior_sponge_width(True, 10)
+        self.assertEqual(sw.validate_interior_sponge_width(4, 10), 4)
+
+        # I. Rectangular Grid Interior Validation and Continuity (P1-R9-F1)
+        rect_shape_invalid = (12, 6, 12)
+        p_inv = np.zeros(rect_shape_invalid)
+        c_inv = np.ones(rect_shape_invalid)
+        sig_inv = np.zeros(rect_shape_invalid)
+        with self.assertRaises(ValueError):
+            sw.validate_interior_sponge_width(3, rect_shape_invalid)
+        with self.assertRaises(ValueError):
+            sw.compute_interior_exact_discrete_leapfrog_energy(p_inv, p_inv, c_inv, dt, dx, 3)
+        with self.assertRaises(ValueError):
+            sw.compute_exact_discrete_interior_boundary_transfer(p_inv, p_inv, dt, dx, 3)
+        with self.assertRaises(ValueError):
+            sw.compute_interior_sponge_dissipated_energy(p_inv, p_inv, c_inv, sig_inv, dt, dx, 3)
+        with self.assertRaises(ValueError):
+            sw.compute_interior_source_work_step(p_inv, p_inv, None, c_inv, dt, dx, 3)
+        with self.assertRaises(ValueError):
+            sw.compute_enclosing_surface_outward_flux(p_inv, p_inv, p_inv, dt, dx, 3)
+
+        # Valid non-cubic rectangular grid: shape (16, 10, 14), sw=3 (interior shape is (10, 4, 8))
+        rect_shape_valid = (16, 10, 14)
+        sw_rect = 3
+        self.assertEqual(sw.validate_interior_sponge_width(sw_rect, rect_shape_valid), sw_rect)
+
+        c_rect = np.ones(rect_shape_valid)
+        sig_rect = np.zeros(rect_shape_valid)
+        sig_rect[sw_rect:-sw_rect, sw_rect:-sw_rect, sw_rect:-sw_rect] = 0.2
+        coords_x = np.arange(rect_shape_valid[0]) * dx
+        coords_y = np.arange(rect_shape_valid[1]) * dx
+        coords_z = np.arange(rect_shape_valid[2]) * dx
+        Xr, Yr, Zr = np.meshgrid(coords_x, coords_y, coords_z, indexing='ij')
+        mid_x, mid_y, mid_z = rect_shape_valid[0] // 2, rect_shape_valid[1] // 2, rect_shape_valid[2] // 2
+        r_sq_rect = (Xr - mid_x * dx) ** 2 + (Yr - mid_y * dx) ** 2 + (Zr - mid_z * dx) ** 2
+        phi0_rect = np.exp(-r_sq_rect / (2.0 * (2.0 * dx) ** 2))
+        lap0_rect = sw.laplacian_3d_clamped(phi0_rect, dx)
+        dt_rect = 0.85 * dx / (1.0 * np.sqrt(3.0))
+        phim1_rect = phi0_rect + 0.5 * (dt_rect ** 2) * lap0_rect
+
+        src_rect = np.zeros(rect_shape_valid)
+        src_rect[sw_rect:-sw_rect, sw_rect:-sw_rect, sw_rect:-sw_rect] = 0.05 * np.sin(Xr[sw_rect:-sw_rect, sw_rect:-sw_rect, sw_rect:-sw_rect])
+
+        pr, pmr = phi0_rect.copy(), phim1_rect.copy()
+        h_init_rect = sw.compute_interior_exact_discrete_leapfrog_energy(pr, pmr, c_rect, dt_rect, dx, sw_rect)
+        cum_b_rect = 0.0
+        cum_d_rect = 0.0
+        cum_w_rect = 0.0
+        for _ in range(15):
+            pnr = sw.step_wave_fdtd(pr, pmr, c_rect, sig_rect, dt_rect, dx, source_field=src_rect)
+            cum_b_rect += sw.compute_exact_discrete_interior_boundary_transfer(pr, pmr, dt_rect, dx, sw_rect)
+            cum_d_rect += sw.compute_interior_sponge_dissipated_energy(pnr, pmr, c_rect, sig_rect, dt_rect, dx, sw_rect)
+            cum_w_rect += sw.compute_interior_source_work_step(pnr, pmr, src_rect, c_rect, dt_rect, dx, sw_rect)
+            pmr, pr = pr, pnr
+        h_final_rect = sw.compute_interior_exact_discrete_leapfrog_energy(pr, pmr, c_rect, dt_rect, dx, sw_rect)
+        delta_h_rect = h_final_rect - h_init_rect
+        rel_closure_rect = abs(delta_h_rect + cum_b_rect + cum_d_rect - cum_w_rect) / h_init_rect
+        self.assertLess(rel_closure_rect, 1e-12)
+
     def test_benchmark_interior_control_volume_budget(self):
-        """P1-R8-F3: benchmark_interior_control_volume_budget executes and satisfies machine precision closure."""
-        res = sw.benchmark_interior_control_volume_budget(grid_size=40, sponge_width=8, dx_m=1.0, courant_factor=0.85, n_steps=25)
-        self.assertTrue(res.is_exact_to_machine_precision)
-        self.assertLess(res.relative_local_closure_error, 1e-12)
-        self.assertGreater(res.cumulative_boundary_transfer, 0.5)
-        self.assertLess(res.interior_hamiltonian_change, -0.5)
+        """P1-R8-F3, P1-R9: benchmark_interior_control_volume_budget executes and satisfies machine precision closure."""
+        # 1. Undriven / undamped baseline
+        res_undriven = sw.benchmark_interior_control_volume_budget(
+            grid_size=40, sponge_width=8, dx_m=1.0, courant_factor=0.85, n_steps=25,
+            interior_sigma=0.0, source_amplitude=0.0,
+        )
+        self.assertTrue(res_undriven.is_exact_to_machine_precision)
+        self.assertLess(res_undriven.relative_local_closure_error, 1e-12)
+        self.assertGreater(res_undriven.cumulative_boundary_transfer, 0.5)
+        self.assertLess(res_undriven.interior_hamiltonian_change, -0.5)
+        self.assertEqual(res_undriven.cumulative_interior_dissipation, 0.0)
+        self.assertEqual(res_undriven.cumulative_interior_source_work, 0.0)
+
+        # 2. Driven + damped case (P1-R9 nonblocking enhancement)
+        res_driven = sw.benchmark_interior_control_volume_budget(
+            grid_size=40, sponge_width=8, dx_m=1.0, courant_factor=0.85, n_steps=25,
+            interior_sigma=0.5, source_amplitude=0.1,
+        )
+        self.assertTrue(res_driven.is_exact_to_machine_precision)
+        self.assertLess(res_driven.relative_local_closure_error, 1e-12)
+        self.assertGreater(abs(res_driven.cumulative_interior_dissipation), 1e-4)
+        self.assertGreater(abs(res_driven.cumulative_interior_source_work), 1e-4)
 
     def test_sponge_reflection_parameter_sweep_and_adversarial_ref_domain(self):
         """P1-R3-F4 / P1-R4-F1 / P1-R5-F1 regression: Parameter sweep across ref domain, T_obs, spatial dx refinement, and dt."""

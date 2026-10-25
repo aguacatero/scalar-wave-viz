@@ -676,7 +676,8 @@ def _get_cached_wave_audit() -> dict:
     ctrl_rows = sw.benchmark_sponge_reflection_controls((0.0, 0.5, 1.5, 3.0, 15.0), grid_size=40, sponge_width=8, n_steps=80)
     sweep = sw.benchmark_sponge_reflection_parameter_sweep()
     res_legacy = sw.fixed_window_late_early_probe_amplitude_proxy(48, 10, max_sigma=3.0, n_steps=70)
-    res_cv = sw.benchmark_interior_control_volume_budget(grid_size=40, sponge_width=8, dx_m=1.0, courant_factor=0.85, n_steps=25)
+    res_cv_undriven = sw.benchmark_interior_control_volume_budget(grid_size=40, sponge_width=8, dx_m=1.0, courant_factor=0.85, n_steps=25, interior_sigma=0.0, source_amplitude=0.0)
+    res_cv_driven = sw.benchmark_interior_control_volume_budget(grid_size=40, sponge_width=8, dx_m=1.0, courant_factor=0.85, n_steps=25, interior_sigma=0.5, source_amplitude=0.1)
     res_energy = sw.benchmark_two_material_energy_conservation(36, 35)
     slow = sw.benchmark_two_material_interface_transmission(c1=1.0, c2=0.6, dx_list=(1.0, 0.5, 0.25))
     fast = sw.benchmark_two_material_interface_transmission(c1=0.6, c2=1.0, dx_list=(1.0, 0.5, 0.25))
@@ -807,27 +808,53 @@ def _get_cached_wave_audit() -> dict:
             'epistemic_note': 'Measures outgoing pulse tail at step 25 without reference subtraction (~3.2% power ratio for all sigma including sigma=0); demonstrably invalid for certifying absorption.',
         },
         'exact_discrete_interior_control_volume_budget': {
-            'description': 'Exact discrete local control-volume leapfrog Hamiltonian continuity theorem (P1-R7-F1, P1-R8-F1, P1-R8-F3)',
-            'parameters': {
-                'grid_size': res_cv.grid_size,
-                'sponge_width': res_cv.sponge_width,
-                'dx_m': res_cv.dx_m,
-                'dt_s': res_cv.dt_s,
-                'dt_factor': res_cv.dt_factor,
-                'n_steps': res_cv.n_steps,
-                'material_c_m_per_s': 1.0,
-                'interior_sigma': 0.0,
+            'description': 'Exact discrete local control-volume leapfrog Hamiltonian continuity theorem (P1-R7-F1, P1-R8-F1, P1-R8-F3, P1-R9-F1)',
+            'undriven_undamped_case': {
+                'parameters': {
+                    'grid_size': res_cv_undriven.grid_size,
+                    'sponge_width': res_cv_undriven.sponge_width,
+                    'dx_m': res_cv_undriven.dx_m,
+                    'dt_s': res_cv_undriven.dt_s,
+                    'dt_factor': res_cv_undriven.dt_factor,
+                    'n_steps': res_cv_undriven.n_steps,
+                    'material_c_m_per_s': 1.0,
+                    'interior_sigma': res_cv_undriven.interior_sigma,
+                    'source_amplitude': res_cv_undriven.source_amplitude,
+                },
+                'initial_interior_hamiltonian': res_cv_undriven.initial_interior_hamiltonian,
+                'final_interior_hamiltonian': res_cv_undriven.final_interior_hamiltonian,
+                'interior_hamiltonian_change': res_cv_undriven.interior_hamiltonian_change,
+                'cumulative_boundary_transfer': res_cv_undriven.cumulative_boundary_transfer,
+                'cumulative_interior_dissipation': res_cv_undriven.cumulative_interior_dissipation,
+                'cumulative_interior_source_work': res_cv_undriven.cumulative_interior_source_work,
+                'discrete_local_closure_error': res_cv_undriven.discrete_local_closure_error,
+                'relative_local_closure_error': res_cv_undriven.relative_local_closure_error,
+                'is_exact_to_machine_precision': res_cv_undriven.is_exact_to_machine_precision,
+                'diagnostic_note': res_cv_undriven.diagnostic_note,
             },
-            'initial_interior_hamiltonian': res_cv.initial_interior_hamiltonian,
-            'final_interior_hamiltonian': res_cv.final_interior_hamiltonian,
-            'interior_hamiltonian_change': res_cv.interior_hamiltonian_change,
-            'cumulative_boundary_transfer': res_cv.cumulative_boundary_transfer,
-            'cumulative_interior_dissipation': res_cv.cumulative_interior_dissipation,
-            'cumulative_interior_source_work': res_cv.cumulative_interior_source_work,
-            'discrete_local_closure_error': res_cv.discrete_local_closure_error,
-            'relative_local_closure_error': res_cv.relative_local_closure_error,
-            'is_exact_to_machine_precision': res_cv.is_exact_to_machine_precision,
-            'diagnostic_note': res_cv.diagnostic_note,
+            'driven_damped_case': {
+                'parameters': {
+                    'grid_size': res_cv_driven.grid_size,
+                    'sponge_width': res_cv_driven.sponge_width,
+                    'dx_m': res_cv_driven.dx_m,
+                    'dt_s': res_cv_driven.dt_s,
+                    'dt_factor': res_cv_driven.dt_factor,
+                    'n_steps': res_cv_driven.n_steps,
+                    'material_c_m_per_s': 1.0,
+                    'interior_sigma': res_cv_driven.interior_sigma,
+                    'source_amplitude': res_cv_driven.source_amplitude,
+                },
+                'initial_interior_hamiltonian': res_cv_driven.initial_interior_hamiltonian,
+                'final_interior_hamiltonian': res_cv_driven.final_interior_hamiltonian,
+                'interior_hamiltonian_change': res_cv_driven.interior_hamiltonian_change,
+                'cumulative_boundary_transfer': res_cv_driven.cumulative_boundary_transfer,
+                'cumulative_interior_dissipation': res_cv_driven.cumulative_interior_dissipation,
+                'cumulative_interior_source_work': res_cv_driven.cumulative_interior_source_work,
+                'discrete_local_closure_error': res_cv_driven.discrete_local_closure_error,
+                'relative_local_closure_error': res_cv_driven.relative_local_closure_error,
+                'is_exact_to_machine_precision': res_cv_driven.is_exact_to_machine_precision,
+                'diagnostic_note': res_cv_driven.diagnostic_note,
+            },
         },
         'two_material_energy_conservation_benchmark': {
             'description': 'Long-time discrete Hamiltonian conservation and actual terminal continuum energy across c1=1.0 -> c2=0.6 step interface (P1-R2-F4, P1-R3-F5)',

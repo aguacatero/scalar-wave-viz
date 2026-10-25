@@ -328,17 +328,29 @@ def compute_exact_discrete_leapfrog_energy(
     return float(kin + pot)
 
 
-def validate_interior_sponge_width(sponge_width: int, grid_dim: int) -> int:
-    """Validate that sponge_width specifies a valid non-empty interior subvolume (P1-R8-F3).
+def validate_interior_sponge_width(
+    sponge_width: int,
+    grid_dim: int | tuple[int, ...] | list[int] | np.ndarray,
+) -> int:
+    """Validate that sponge_width specifies a valid non-empty interior subvolume (P1-R8-F3, P1-R9-F1).
 
-    Fails closed: sponge_width must be a strict integer satisfying 1 <= sponge_width < grid_dim // 2.
+    Fails closed: sponge_width must be a strict integer satisfying 1 <= 2 * sponge_width < min(grid_shape)
+    so that every Cartesian dimension d has a strictly positive interior length (d - 2 * sw >= 1).
     """
     if isinstance(sponge_width, bool) or not isinstance(sponge_width, (int, np.integer)):
         raise ValueError(f"sponge_width must be an integer, got {sponge_width!r}")
     sw = int(sponge_width)
-    if sw < 1 or 2 * sw >= grid_dim:
+    if isinstance(grid_dim, (tuple, list, np.ndarray)):
+        min_dim = min(int(d) for d in grid_dim)
+        dims_desc = f"min dimension {min_dim} (shape {tuple(int(d) for d in grid_dim)})"
+    else:
+        min_dim = int(grid_dim)
+        dims_desc = f"dimension {min_dim}"
+
+    if sw < 1 or 2 * sw >= min_dim:
         raise ValueError(
-            f"sponge_width must satisfy 1 <= sponge_width < {grid_dim // 2} to define a non-empty Cartesian interior, got {sponge_width}"
+            f"sponge_width must satisfy 1 <= 2 * sponge_width < {min_dim} ({dims_desc}) "
+            f"to define a non-empty Cartesian interior, got sponge_width={sw}"
         )
     return sw
 
@@ -351,7 +363,7 @@ def compute_interior_exact_discrete_leapfrog_energy(
     dx: float,
     sponge_width: int,
 ) -> float:
-    """Exact discrete staggered leapfrog Hamiltonian restricted to Cartesian interior Omega_int (P1-R7-F1, P1-R8-F1, P1-R8-F3).
+    """Exact discrete staggered leapfrog Hamiltonian restricted to Cartesian interior Omega_int (P1-R7-F1, P1-R8-F1, P1-R8-F3, P1-R9-F1).
 
     Evaluates the localized leapfrog Hamiltonian at staggered half-time step t^{n+1/2}:
       H_int^{n+1/2} = 0.5 * sum_{i in Omega_int} ( (phi^{n+1} - phi^n)/(c_i dt) )^2 dx^3
@@ -363,7 +375,7 @@ def compute_interior_exact_discrete_leapfrog_energy(
     to machine precision (< 1e-12) under all dt, dx, material c(x), damping, and source terms.
     Units: arbitrary energy units [E_arb] (not Joules).
     """
-    sw = validate_interior_sponge_width(sponge_width, phi.shape[0])
+    sw = validate_interior_sponge_width(sponge_width, phi.shape)
     v_half = (phi_next - phi) / dt
     kin = 0.5 * np.sum((v_half[sw:-sw, sw:-sw, sw:-sw] / c_field[sw:-sw, sw:-sw, sw:-sw]) ** 2) * (dx ** 3)
     lap = laplacian_3d_clamped(phi, dx)
@@ -378,7 +390,7 @@ def compute_exact_discrete_interior_boundary_transfer(
     dx: float,
     sponge_width: int,
 ) -> float:
-    """Exact discrete boundary bond energy transfer across the 6 faces of dOmega_int (P1-R7-F1, P1-R8-F3).
+    """Exact discrete boundary bond energy transfer across the 6 faces of dOmega_int (P1-R7-F1, P1-R8-F3, P1-R9-F1).
 
     From the summation-by-parts identity for the 7-point Laplacian on Cartesian grid,
     internal bonds cancel identically, leaving only crossing bonds between i in Omega_int
@@ -390,7 +402,7 @@ def compute_exact_discrete_interior_boundary_transfer(
     to machine precision (< 1e-12) under all dt, dx, and damping configurations.
     Units: arbitrary energy units [E_arb] (not Joules).
     """
-    sw = validate_interior_sponge_width(sponge_width, phi_cur.shape[0])
+    sw = validate_interior_sponge_width(sponge_width, phi_cur.shape)
 
     f_total = 0.0
     for face_dim in (0, 1, 2):
@@ -424,11 +436,11 @@ def compute_interior_sponge_dissipated_energy(
     dx: float,
     sponge_width: int,
 ) -> float:
-    """Exact discrete dissipation inside Cartesian interior Omega_int (P1-R7-F1, P1-R8-F3).
+    """Exact discrete dissipation inside Cartesian interior Omega_int (P1-R7-F1, P1-R8-F3, P1-R9-F1).
 
     Units: arbitrary energy units [E_arb] (not Joules).
     """
-    sw = validate_interior_sponge_width(sponge_width, phi_next.shape[0])
+    sw = validate_interior_sponge_width(sponge_width, phi_next.shape)
     v_centered = (phi_next - phi_prev) / (2.0 * dt)
     sig_int = sigma_field[sw:-sw, sw:-sw, sw:-sw]
     c_int = c_field[sw:-sw, sw:-sw, sw:-sw]
@@ -446,7 +458,7 @@ def compute_interior_source_work_step(
     dx: float,
     sponge_width: int,
 ) -> float:
-    """Exact discrete source work done on Cartesian interior Omega_int during step n (P1-R8-F1, P1-R8-F3).
+    """Exact discrete source work done on Cartesian interior Omega_int during step n (P1-R8-F1, P1-R8-F3, P1-R9-F1).
 
     From the leapfrog discrete equation with normalized source:
       (phi^{n+1} - 2 phi^n + phi^{n-1}) / (c^2 dt^2) + (sigma / c^2) v_centered = lap(phi) + S / c^2.
@@ -455,9 +467,9 @@ def compute_interior_source_work_step(
 
     Units: arbitrary energy units [E_arb] (not Joules).
     """
+    sw = validate_interior_sponge_width(sponge_width, phi_next.shape)
     if source_field is None:
         return 0.0
-    sw = validate_interior_sponge_width(sponge_width, phi_next.shape[0])
     v_centered = (phi_next - phi_prev) / (2.0 * dt)
     s_int = source_field[sw:-sw, sw:-sw, sw:-sw]
     c_int = c_field[sw:-sw, sw:-sw, sw:-sw]
@@ -499,10 +511,12 @@ def compute_sampled_continuum_energy_diagnostic(
     dt: float,
     dx: float,
 ) -> float:
-    """Compute sampled continuum energy functional as a numerical diagnostic (P1-R2-F4).
+    """Compute sampled continuum energy functional as a numerical diagnostic (P1-R2-F4, P1-R9-F2).
 
+    Evaluated via backward differences in time for velocity and central spatial differences
+    for spatial gradients. Acts as a continuum-inspired diagnostic proxy with finite-grid discretization
+    drift, rather than an exact discrete invariant for the staggered leapfrog equation.
     Units: arbitrary energy units [E_arb] (dimensionless toy field model, not Joules).
-    Exhibits O(dt^2 + dx^2) truncation drift on finite grids.
     """
     density = compute_discrete_energy_density(phi, phi_prev, c_field, dt, dx)
     return float(np.sum(density) * (dx ** 3))
@@ -781,7 +795,7 @@ def compute_enclosing_surface_outward_flux(
     Exact global conservative energy closure is certified separately by the discrete whole-domain
     leapfrog identity H^{N-1/2} + D_sponge = H^{-1/2} (< 1e-12) and whole-domain dissipation >= 90%.
     """
-    sw = validate_interior_sponge_width(sponge_width, phi.shape[0])
+    sw = validate_interior_sponge_width(sponge_width, phi.shape)
 
     v = (phi_next - phi_prev) / (2.0 * dt)
     area_elem = dx * dx
@@ -1439,6 +1453,8 @@ class InteriorControlVolumeBudgetResult:
     relative_local_closure_error: float
     is_exact_to_machine_precision: bool
     diagnostic_note: str
+    interior_sigma: float = 0.0
+    source_amplitude: float = 0.0
 
 
 def benchmark_interior_control_volume_budget(
@@ -1448,16 +1464,20 @@ def benchmark_interior_control_volume_budget(
     c_m_per_s: float = 1.0,
     courant_factor: float = 0.85,
     n_steps: int = 25,
+    interior_sigma: float = 0.0,
+    source_amplitude: float = 0.0,
 ) -> InteriorControlVolumeBudgetResult:
-    """Benchmark exact discrete local control-volume Hamiltonian continuity theorem (P1-R7-F1, P1-R8-F1, P1-R8-F3).
+    """Benchmark exact discrete local control-volume Hamiltonian continuity theorem (P1-R7-F1, P1-R8-F1, P1-R8-F3, P1-R9-F1).
 
     Verifies the discrete local continuity balance:
       H_int^{N-1/2} - H_int^{-1/2} + sum_{n=0}^{N-1} Delta B_{boundary}^n + sum_{n=0}^{N-1} Delta D_{int}^n = sum_{n=0}^{N-1} Delta W_{source, int}^n
-    to machine precision (< 1e-12).
+    to machine precision (< 1e-12) under undriven/undamped as well as driven/damped conditions.
     """
     dt = courant_factor * dx_m / (c_m_per_s * np.sqrt(3.0))
     c_field = np.full((grid_size, grid_size, grid_size), c_m_per_s, dtype=float)
     sig_field = np.zeros_like(c_field)
+    if interior_sigma > 0.0:
+        sig_field[sponge_width:-sponge_width, sponge_width:-sponge_width, sponge_width:-sponge_width] = float(interior_sigma)
 
     mid = grid_size // 2
     coords = np.arange(grid_size) * dx_m
@@ -1467,6 +1487,13 @@ def benchmark_interior_control_volume_budget(
     lap0 = laplacian_3d_clamped(phi0, dx_m)
     phim1 = phi0 + 0.5 * (dt ** 2) * (c_m_per_s ** 2) * lap0
 
+    source_field = None
+    if source_amplitude > 0.0:
+        source_field = np.zeros_like(c_field)
+        source_field[sponge_width:-sponge_width, sponge_width:-sponge_width, sponge_width:-sponge_width] = (
+            float(source_amplitude) * np.sin(X[sponge_width:-sponge_width, sponge_width:-sponge_width, sponge_width:-sponge_width])
+        )
+
     p, pm = phi0.copy(), phim1.copy()
     h_init = compute_interior_exact_discrete_leapfrog_energy(p, pm, c_field, dt, dx_m, sponge_width)
 
@@ -1475,10 +1502,10 @@ def benchmark_interior_control_volume_budget(
     cum_work = 0.0
 
     for _ in range(n_steps):
-        pn = step_wave_fdtd(p, pm, c_field, sig_field, dt, dx_m)
+        pn = step_wave_fdtd(p, pm, c_field, sig_field, dt, dx_m, source_field=source_field)
         cum_boundary += compute_exact_discrete_interior_boundary_transfer(p, pm, dt, dx_m, sponge_width)
         cum_diss += compute_interior_sponge_dissipated_energy(pn, pm, c_field, sig_field, dt, dx_m, sponge_width)
-        cum_work += compute_interior_source_work_step(pn, pm, None, c_field, dt, dx_m, sponge_width)
+        cum_work += compute_interior_source_work_step(pn, pm, source_field, c_field, dt, dx_m, sponge_width)
         pm, p = p, pn
 
     h_final = compute_interior_exact_discrete_leapfrog_energy(p, pm, c_field, dt, dx_m, sponge_width)
@@ -1488,7 +1515,8 @@ def benchmark_interior_control_volume_budget(
     is_exact = bool(rel_closure < 1e-12)
 
     note = (
-        f"Discrete interior control-volume budget (grid={grid_size}, sw={sponge_width}, dx={dx_m}m, dt_factor={courant_factor}, steps={n_steps}): "
+        f"Discrete interior control-volume budget (grid={grid_size}, sw={sponge_width}, dx={dx_m}m, dt_factor={courant_factor}, steps={n_steps}, "
+        f"interior_sigma={interior_sigma:.2f}, source_amplitude={source_amplitude:.2f}): "
         f"H_init={h_init:.6f} E_arb, H_final={h_final:.6f} E_arb, delta_H={delta_h:.6f} E_arb, "
         f"cum_B={cum_boundary:.6f} E_arb, cum_D={cum_diss:.6f} E_arb, cum_W={cum_work:.6f} E_arb, "
         f"closure_error={closure_err:.2e} E_arb, rel_closure={rel_closure:.2e} (< 1e-12)."
@@ -1511,6 +1539,8 @@ def benchmark_interior_control_volume_budget(
         relative_local_closure_error=float(rel_closure),
         is_exact_to_machine_precision=is_exact,
         diagnostic_note=note,
+        interior_sigma=float(interior_sigma),
+        source_amplitude=float(source_amplitude),
     )
 
 
