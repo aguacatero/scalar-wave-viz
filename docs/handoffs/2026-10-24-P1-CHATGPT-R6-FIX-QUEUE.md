@@ -1,5 +1,11 @@
 # P1 R6 Finding-by-Finding Fix Queue & Resolution Ledger
 
+> [!WARNING] HISTORICAL RECORD / SUPERSEDED NOTE (P1-R8-F4)
+> This R6 fix ledger is an immutable historical record. Findings and statements regarding local energy continuity in Section 3.1 have been superseded by subsequent review findings:
+> 1. **Units:** The wave equation implementation uses arbitrary energy units (`E_arb`), NOT Joules (`J`). The sampled initial continuum diagnostic was $E_\text{init} = 7.67857\text{ E}_\text{arb}$ (with initial discrete Hamiltonian $H^{-1/2} = 7.80852\text{ E}_\text{arb}$), and the observed residual at original $\Delta t_0$ was $0.02483\text{ E}_\text{arb}$ ($0.3233\%$).
+> 2. **Continuity Criterion:** The `< 1%` continuity criterion was a single-dt coincidental proxy agreement, NOT a general refinement-validated conservation law. As demonstrated in R7 and R8 reviews, halving $\Delta t$ increases the continuum diagnostic mismatch to $\sim 4.04\%$ and levels off around $\sim 5.57\%$ due to velocity time-staggering and spatial discretization mismatch.
+> 3. **Canonical Ledgers:** See [docs/handoffs/2026-10-24-P1-CHATGPT-R7-FIX-QUEUE.md](2026-10-24-P1-CHATGPT-R7-FIX-QUEUE.md) and [docs/handoffs/2026-10-24-P1-CHATGPT-R8-FIX-QUEUE.md](2026-10-24-P1-CHATGPT-R8-FIX-QUEUE.md) for the active resolution and the exact discrete control-volume theorem ($H_\text{int}^{N-1/2} - H_\text{int}^{-1/2} + \sum \Delta B + \sum \Delta D = \sum \Delta W_\text{source}$).
+
 - **Repository:** https://github.com/aguacatero/scalar-wave-viz
 - **PR:** #10 (Draft)
 - **Review Identifier:** [`pullrequestreview-5636987231`](https://github.com/aguacatero/scalar-wave-viz/pull/10#pullrequestreview-5636987231)
@@ -70,7 +76,7 @@
 - **Code:** In `scalar_wave_3d.py`, updated `compute_enclosing_surface_outward_flux` to evaluate interface flux across all 6 faces of $\partial \Omega_{\text{int}}$ using the symmetric bond velocity $v_{\text{bond}} = \frac{v_{\text{in}} + v_{\text{out}}}{2}$.
 - **Proxy Relabeling:** Added `surface_flux_return_ratio_proxy: float` to `SpongeReflectionReferenceSubtractedResult`, `SpongeControlRow`, and `SpongeParameterSweepRow`, keeping `surface_integrated_return_flux_ratio` as a `@property` alias for backwards compatibility.
 - **Epistemic Clarity:** Clarified in `metric_note` and docstrings that this metric is an approximate surface-flux proxy across the 6 boundary faces rather than a closed conservative control-volume identity. Exact physical discrete energy conservation and absorption are certified by the whole-domain leapfrog identity ($H_{\text{final}} + D_{\text{sponge}} = H_{\text{init}}$ to $< 10^{-12}$) and total dissipation $\ge 90\%$.
-- **Adversarial Test:** Added `test_interior_control_volume_flux_continuity_and_residual` in `tests/test_p1_wave_3d.py`, demonstrating that cumulative symmetric outward flux tracks interior energy loss to within $0.32\%$ ($0.025\text{ J}$ residual on $7.81\text{ J}$ pulse, $< 1\%$ threshold). Verified spatial convergence under grid refinement ($\Delta x = 1.0\text{ m} \to 0.5\text{ m}$) where the flux proxy converges from $1.18\%$ to $1.11\%$ (relative difference $6.55\% < 15\%$).
+- **Adversarial Test:** Added `test_interior_control_volume_flux_continuity_and_residual` in `tests/test_p1_wave_3d.py`, demonstrating that cumulative symmetric outward flux tracks interior energy loss to within $0.32\%$ ($0.02483\text{ E}_\text{arb}$ residual on $7.67857\text{ E}_\text{arb}$ initial continuum pulse energy; see top notice regarding units and superseded `< 1%` refinement claim). Verified spatial convergence under grid refinement ($\Delta x = 1.0\text{ m} \to 0.5\text{ m}$) where the flux proxy converges from $1.18\%$ to $1.11\%$ (relative difference $6.55\% < 15\%$).
 
 ### 3.2 P1-R6-F2 Resolution: Legacy Absorption-Success Flag Invalidation
 - **Code:** In `scalar_wave_3d.py`, updated `SpongeReflectionProbeResult` and `fixed_window_late_early_probe_amplitude_proxy` so that `legacy_metric_invalid_for_absorption: bool = True` and `is_absorbed_to_tolerance: bool = False` unconditionally.
