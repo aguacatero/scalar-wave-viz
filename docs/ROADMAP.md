@@ -26,7 +26,7 @@
 - [x] Benchmark field solution and compute forces on **whole device** plus environment.
 - [x] Add H0-versus-H1 prediction comparison with error and experimental control panels.
 
-*Status (2026-10-25):* Active on dedicated branch `p2-patent-geometry-exodus-2026-10-25` following explicit owner merge of P1 PR #10 and kickoff authorization for [Issue #7](https://github.com/aguacatero/scalar-wave-viz/issues/7). Draft PR opened pending independent ChatGPT scientific review.
+*Status (2026-10-26):* Active on dedicated branch `p2-patent-geometry-exodus-2026-10-25` under PR #11. Independent ChatGPT scientific review R1 concluded `CHANGES REQUIRED` (6 High, 2 Medium findings). R2 remediation implemented rigorous programmatic controls, material-side boundary face quadrature with discrete rasterization tolerances, direct enclosure wall electrostatic tractions matching inner contour reactions to <0.01%, 3D finite-difference modeling of end fringing, contextual Tajmar & Schreiber (2020) literature audit, and adversarial falsification tests. Awaiting R2 re-review.
 
 ## P3 — nuclear and scalar-field hypotheses
 

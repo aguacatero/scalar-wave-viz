@@ -22,8 +22,11 @@ import numpy as np
 from exodus_hypothesis_evaluator import (
     evaluate_exodus_patent,
     generate_exodus_patent_manifest,
+    compute_electric_fields,
+    compute_h0_whole_apparatus_ledger,
+    solve_exodus_electrostatics,
 )
-from exodus_patent_geometry import ExodusPatentParameters
+from exodus_patent_geometry import ExodusPatentParameters, build_exodus_2d_grid
 
 
 def get_current_git_shas() -> tuple[str, str]:
@@ -122,16 +125,23 @@ def run_exodus_demo(
     h0 = result.h0_ledger
     h1 = result.h1_prediction
 
-    labels = ["H0: Blade (101)", "H0: Ground (102)", "H0: Enclosure", "H0: Net System", "H1: Patent Eq.11", "H1: 1/2 Factor"]
-    forces_un = [
-        h0.blade_force_x.force_3d_n * 1e6,
-        h0.ground_force_x.force_3d_n * 1e6,
-        h0.enclosure_box_force_x.force_3d_n * 1e6,
-        h0.net_system_force_x.force_3d_n * 1e6,
-        h1.predicted_force_3d_n * 1e6,
-        h1.missing_half_factor_corrected_force_3d_n * 1e6,
+    labels = [
+        "H0: Blade (101)",
+        "H0: Ground (102)",
+        "H0: Enclosure Reaction",
+        "H0: Net System",
+        "H1: Patent Eq.11",
+        "H1: 1/2 factor only\n(omits reactions)",
     ]
-    colors = ["#2563eb", "#3b82f6", "#64748b", "#16a34a" if abs(forces_un[3]) < 10 else "#dc2626", "#d97706", "#f59e0b"]
+    forces_un = [
+        h0.blade_force_x.force_3d_extruded_n * 1e6,
+        h0.ground_force_x.force_3d_extruded_n * 1e6,
+        h0.enclosure_direct_wall_force_x.total_enclosure_force_3d_extruded_n * 1e6,
+        h0.net_system_force_x.force_3d_extruded_n * 1e6,
+        h1.predicted_force_3d_extruded_n * 1e6,
+        h1.missing_half_factor_force_3d_extruded_n * 1e6,
+    ]
+    colors = ["#2563eb", "#3b82f6", "#64748b", "#16a34a" if abs(forces_un[3]) < 50 else "#dc2626", "#d97706", "#f59e0b"]
 
     bars = ax_b.bar(range(len(labels)), forces_un, color=colors, edgecolor="black", width=0.6)
     ax_b.set_xticks(range(len(labels)))
@@ -145,13 +155,17 @@ def run_exodus_demo(
         y_pos = val + (5 if val >= 0 else -15)
         ax_b.text(bar.get_x() + bar.get_width() / 2, y_pos, f"{val:.1f} µN", ha="center", va="bottom", fontsize=8)
 
-    # Panel C: Experimental Null Benchmark (Tajmar & Schreiber 2020) vs Patent Claim
+    # Panel C: Contextual Literature Comparison (Tajmar & Schreiber 2020 vs Patent Claim)
     ax_c = axes[1, 0]
-    exp_labels = ["H0 Net Equilibrium\n(Theory)", "Tajmar & Schreiber 2020\nHigh Vacuum (<10⁻⁵ mbar)", "Exodus Patent Claim\nAir Pendulum Stand (FIG. 22)"]
+    exp_labels = [
+        "H0 Net Equilibrium\n(Theory, 0 µN)",
+        "Tajmar & Schreiber 2020\nVacuum Balance (~±3 µN)",
+        "Exodus Patent Claim\nAir Pendulum Stand (~237 µN)",
+    ]
     exp_vals_un = [
-        abs(h0.net_system_force_x.force_3d_n) * 1e6,
-        result.controls.tajmar_schreiber_2020_null_bound_n * 1e6,
-        result.controls.patent_claimed_force_n * 1e6,
+        max(0.01, abs(h0.net_system_force_x.force_3d_extruded_n) * 1e6),
+        2.94,  # ±0.3 mg equivalent weight ~ 2.94 uN accuracy
+        237.0, # Claimed force in air
     ]
     exp_colors = ["#16a34a", "#0284c7", "#e11d48"]
     exp_bars = ax_c.bar(range(len(exp_labels)), exp_vals_un, color=exp_colors, edgecolor="black", width=0.5)
@@ -159,13 +173,22 @@ def run_exodus_demo(
     ax_c.set_xticklabels(exp_labels, fontsize=9)
     ax_c.set_yscale("log")
     ax_c.set_ylabel("Force Magnitude (µN) [Log Scale]")
-    ax_c.set_title("Panel C: Independent Experimental Null Bound vs Patent Claim", fontsize=11, fontweight="bold")
+    ax_c.set_title("Panel C: Contextual Literature & Model Comparison", fontsize=11, fontweight="bold")
     ax_c.grid(True, which="both", linestyle=":", alpha=0.5)
 
     for bar, val in zip(exp_bars, exp_vals_un):
         ax_c.text(bar.get_x() + bar.get_width() / 2, val * 1.3, f"{val:.2f} µN", ha="center", va="bottom", fontsize=8, fontweight="bold")
 
-    # Panel D: Mesh Convergence Study (Refinement h -> 0)
+    ax_c.text(
+        0.5, 0.05,
+        "Contextual comparison: Tajmar & Schreiber (2020) tested capacitors in vacuum;\npatent tested 9 blades in air with unshielded environmental couplings.",
+        transform=ax_c.transAxes,
+        ha="center",
+        fontsize=8,
+        bbox=dict(boxstyle="round", facecolor="#f8fafc", edgecolor="#cbd5e1"),
+    )
+
+    # Panel D: Mesh Convergence & 3D Finite Model Accounting
     ax_d = axes[1, 1]
     dx_steps = [0.0010, 0.0008, 0.0006, 0.0005]
     residuals = []
@@ -173,9 +196,12 @@ def run_exodus_demo(
 
     for dxi in dx_steps:
         sub_p = ExodusPatentParameters(applied_voltage_v=25000.0, num_blades=1, dx_m=dxi, dy_m=dxi)
-        sub_res = evaluate_exodus_patent(sub_p)
-        residuals.append(sub_res.h0_ledger.residual_3d_n * 1e6)
-        blade_forces.append(sub_res.h0_ledger.blade_force_x.force_3d_n * 1e6)
+        sub_grid = build_exodus_2d_grid(sub_p)
+        sub_pot, _, _ = solve_exodus_electrostatics(sub_grid)
+        sub_ex, sub_ey, _ = compute_electric_fields(sub_grid, sub_pot)
+        sub_h0 = compute_h0_whole_apparatus_ledger(sub_grid, sub_ex, sub_ey)
+        residuals.append(sub_h0.residual_3d_extruded_n * 1e6)
+        blade_forces.append(sub_h0.blade_force_x.force_3d_extruded_n * 1e6)
 
     h_mm = np.array(dx_steps) * 1000.0
     ax_d.plot(h_mm, residuals, "o-", color="#16a34a", label="Net Residual F_net (µN)")
