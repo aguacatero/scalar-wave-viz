@@ -4,6 +4,12 @@
 
 The goal is to help people understand what **specified physical theories predict**, what is assumed, what is measured, and which experimental observations could discriminate between explanations.
 
+## Optional local Antigravity automation
+
+[Fresh-session recovery and shared 5-hour token budgeting](docs/AGY_AUTOPILOT.md) is available for local setup. Each controlled project is capped at 35% of a user-configured token budget; the scheduler is **not enabled on your Mac by merging this repository change** and does not claim to read Google's account quota.
+
+---
+
 ## Research progress
 
 ![Scientific roadmap: P0 and P1 scientifically accepted; P2 through P4 pending; 2 of 5 review gates accepted](assets/research-progress.svg)

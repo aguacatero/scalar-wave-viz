@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "token_budget_per_5h": null,
+  "project_cap_fraction": 0.35,
+  "protected_fraction": 0.3,
+  "max_run_tokens": 12000,
+  "min_run_tokens": 3000,
+  "max_parallel": 2,
+  "timeout_seconds": 900,
+  "agy_binary": "agy",
+  "projects": [
+    {
+      "id": "scalar-wave-viz",
+      "repo_full_name": "aguacatero/scalar-wave-viz",
+      "repo_path": "/ABSOLUTE/PATH/TO/scalar-wave-viz",
+      "model": "",
+      "enabled": true
+    },
+    {
+      "id": "septuagint-diaspora-book",
+      "repo_full_name": "aguacatero/septuagint-diaspora-book",
+      "repo_path": "/ABSOLUTE/PATH/TO/septuagint-diaspora-book",
+      "model": "",
+      "enabled": true
+    }
+  ]
+}
