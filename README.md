@@ -6,9 +6,16 @@ The goal is to help people understand what **specified physical theories predict
 
 ## Research progress
 
-![Scientific roadmap: P0 accepted, P1 through P4 pending; 1 of 5 review gates accepted](assets/research-progress.svg)
+![Scientific roadmap: P0 and P1 scientifically accepted; P2 through P4 pending; 2 of 5 review gates accepted](assets/research-progress.svg)
 
-**P0 — ACCEPTED (independent R8 review, [PR #5](https://github.com/aguacatero/scalar-wave-viz/pull/5)).** The conventional electrostatics scientific baseline passed its scoped acceptance gate. **Next:** [P1 numerical validation and whole-apparatus force accounting](https://github.com/aguacatero/scalar-wave-viz/issues/6), followed by [P2 source-bound patent-geometry reproduction](https://github.com/aguacatero/scalar-wave-viz/issues/7). This bar tracks review milestones, **not** physical validity, anomalous propulsion, or experimental confirmation.
+**Scientific milestone progress: 2 of 5 independently accepted (P0 and P1).** This is a count of *scoped scientific review gates*, not an estimate of overall engineering completion, proof of physical validity, anomalous propulsion, or experimental confirmation.
+
+- **P0 — ACCEPTED AND MERGED.** Conventional electrostatics baseline accepted at [R8 on PR #5](https://github.com/aguacatero/scalar-wave-viz/pull/5#pullrequestreview-5566614469) and merged into `main`.
+- **P1 — SCIENTIFIC BASELINE ACCEPTED, NOT MERGED.** Numerical validation and whole-apparatus 2D force accounting accepted at [R11 on draft PR #10](https://github.com/aguacatero/scalar-wave-viz/pull/10#pullrequestreview-5644613779) for scientific code SHA `2a87abd0f8de873899f541d521d303d0f4462954`. [Accepted-source CI](https://github.com/aguacatero/scalar-wave-viz/actions/runs/40198587319) passed 72 tests. The PR remains **draft, open, unmerged, and awaiting explicit owner merge authorization**; later documentation-only commits do not change the accepted scientific implementation.
+- **P2 — NOT STARTED / BLOCKED.** [Exodus patent geometry reproduction and H0/H1 comparison](https://github.com/aguacatero/scalar-wave-viz/issues/7) may begin only after the authorized P1 merge and a separate owner go-ahead.
+- **P3 and P4 — PENDING.** Nuclear/scalar-field hypotheses and the interactive research dashboard have not passed their scientific gates.
+
+**Agent update rule:** on every substantive project update and every readiness/completion handoff, verify and refresh this section; update `assets/research-progress.svg` and this image's alt text when gate/status labels change. Follow [AGENTS.md](AGENTS.md#mandatory-readme-progress-synchronization--every-project-update).
 
 ## First reproducible conventional-electrostatics baseline
 
@@ -31,7 +38,7 @@ Open the latest successful [Physics baseline tests workflow](https://github.com/
 
 ## Existing notebooks — illustrative, not experimentally verified
 
-- [wave_3d.ipynb](wave_3d.ipynb): a 3D *mathematical* scalar wave simulation, with user-selected relative material wave speeds Air=1, Bismuth=0.55, Moscovium=0.15, metamaterial=0.04. **These values are hypothetical presets**, not established material responses. Important numerical resolution/boundary issues remain.
+- [wave_3d.ipynb](wave_3d.ipynb): a 3D *mathematical* scalar wave simulation, with user-selected relative material wave speeds Air=1, Bismuth=0.55, Moscovium=0.15, metamaterial=0.04. **These values are hypothetical presets**, not established material responses. The toy equation has independently reviewed numerical checks, but the more extreme hypothetical material speed presets remain under-resolved and cannot support physical material claims.
 - [mc_stability.ipynb](mc_stability.ipynb): exploratory nuclear stability and synthesis charts. Hypothetical Mc-291–299 half-lives and the isotope-mass-to-wave-speed interpolation are **not derived by the software** from measured data or validated model predictions.
 - [wave_demo.ipynb](wave_demo.ipynb): educational wave examples; one saved output contains a Matplotlib error.
 
