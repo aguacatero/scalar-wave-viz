@@ -10,23 +10,23 @@
 - [x] Add CI workflow.
 - [x] Confirm remote CI checks after publishing this PR (verified workflow run 39187698432 on PR #5; confirms workflow execution and test pass, NOT physical validation of novel propulsion).
 
-## P1 — numerical repairs and validations (accepted in R11; unmerged draft PR #10)
+## P1 — numerical repairs and validations (accepted and merged)
 
 - [x] Relocate 3D scalar source out of boundary damping and implement verifiable absorbing boundaries.
 - [x] Resolve all frequencies at appropriate grid points/wavelength, then demonstrate convergence and known reflection benchmarks.
 - [x] Validate discrete energy conservation and source normalization.
 - [x] Add convergence and closed-contour stress integration for the electrostatic field; track reaction on grounded enclosure.
 
-*Status (2026-10-25):* Independently accepted in R11 review ([pullrequestreview-5644613779](https://github.com/aguacatero/scalar-wave-viz/pull/10#pullrequestreview-5644613779)) for scientific code SHA `2a87abd0f8de873899f541d521d303d0f4462954` ([72 tests passed in CI Run 40198587319](https://github.com/aguacatero/scalar-wave-viz/actions/runs/40198587319)). Awaiting explicit repository owner merge authorization. PR #10 remains **DRAFT, OPEN, and UNMERGED**.
+*Status (2026-10-25):* Independently accepted in R11 review ([pullrequestreview-5644613779](https://github.com/aguacatero/scalar-wave-viz/pull/10#pullrequestreview-5644613779)) for scientific code SHA `2a87abd0f8de873899f541d521d303d0f4462954` ([72 tests passed in CI Run 40198587319](https://github.com/aguacatero/scalar-wave-viz/actions/runs/40198587319)). Merged to `main` at `8e1fdb32655d073002ae5a794b08e48f19a78a0f` following explicit owner authorization. [Issue #6](https://github.com/aguacatero/scalar-wave-viz/issues/6) closed.
 
-## P2 — Exodus source-bounded reproduction (not started; awaiting owner-authorized P1 merge)
+## P2 — Exodus source-bounded reproduction (active; in progress)
 
-- [ ] Select patent figure and transcribe exact claim and relevant equations with citations.
-- [ ] Implement its geometry accurately; use 3D when 2D does not preserve force dimensions.
-- [ ] Benchmark field solution and compute forces on **whole device** plus environment.
-- [ ] Add H0-versus-H1 prediction comparison with error and experimental control panels.
+- [x] Select patent figure and transcribe exact claim and relevant equations with citations.
+- [x] Implement its geometry accurately; use 3D when 2D does not preserve force dimensions.
+- [x] Benchmark field solution and compute forces on **whole device** plus environment.
+- [x] Add H0-versus-H1 prediction comparison with error and experimental control panels.
 
-*Status (2026-10-25):* Not started. Blocked pending explicit repository owner merge authorization of P1 PR #10 and kickoff authorization for [Issue #7](https://github.com/aguacatero/scalar-wave-viz/issues/7).
+*Status (2026-10-25):* Active on dedicated branch `p2-patent-geometry-exodus-2026-10-25` following explicit owner merge of P1 PR #10 and kickoff authorization for [Issue #7](https://github.com/aguacatero/scalar-wave-viz/issues/7). Draft PR opened pending independent ChatGPT scientific review.
 
 ## P3 — nuclear and scalar-field hypotheses
 

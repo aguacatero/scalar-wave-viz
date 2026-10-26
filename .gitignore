@@ -4,3 +4,5 @@ __pycache__/
 .pytest_cache/
 electrostatics_baseline.png
 electrostatics_manifest.json
+exodus_patent_comparison.png
+exodus_patent_manifest.json
