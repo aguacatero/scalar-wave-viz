@@ -21,12 +21,12 @@
 
 ## P2 — Exodus source-bounded reproduction (active; in progress)
 
-- [x] Select patent figure and transcribe exact claim and relevant equations with citations.
-- [x] Implement its geometry accurately; use 3D when 2D does not preserve force dimensions.
-- [x] Benchmark field solution and compute forces on **whole device** plus environment.
-- [x] Add H0-versus-H1 prediction comparison with error and experimental control panels.
+- [ ] Select patent figure and transcribe exact claim and relevant equations with citations.
+- [ ] Implement its geometry accurately; use 3D when 2D does not preserve force dimensions.
+- [ ] Benchmark field solution and compute forces on **whole device** plus environment.
+- [ ] Add H0-versus-H1 prediction comparison with error and experimental control panels.
 
-*Status (2026-10-26):* Active on dedicated branch `p2-patent-geometry-exodus-2026-10-25` under PR #11. Independent ChatGPT scientific review R1 concluded `CHANGES REQUIRED` (6 High, 2 Medium findings). R2 remediation implemented rigorous programmatic controls, material-side boundary face quadrature with discrete rasterization tolerances, direct enclosure wall electrostatic tractions matching inner contour reactions to <0.01%, 3D finite-difference modeling of end fringing, contextual Tajmar & Schreiber (2020) literature audit, and adversarial falsification tests. Awaiting R2 re-review.
+*Status (2026-10-27):* Active on dedicated branch `p2-patent-geometry-exodus-2026-10-25` under Draft [PR #11](https://github.com/aguacatero/scalar-wave-viz/pull/11) ([Issue #7](https://github.com/aguacatero/scalar-wave-viz/issues/7)). Checkboxes remain unchecked pending independent scientific acceptance. Independent ChatGPT scientific review R1 ([issuecomment-6415952244](https://github.com/aguacatero/scalar-wave-viz/pull/11#issuecomment-6415952244)) concluded `CHANGES REQUIRED — P2 R1 NOT ACCEPTED` (6 High, 2 Medium findings). R2 remediation implements the 5-category parameter taxonomy (`PATENT_EXPLICIT_VALUE`, `DERIVED_FROM_PATENT`, `EXTERNAL_ESTIMATE_FOR_UNSPECIFIED`, `MODELING_ASSUMPTION`, `PATENT_OMITTED_UNKNOWN`), explicit separation of FIGS. 4–8 (single-stage schematic) vs FIG. 21 (9-blade epoxy test article), 1-cell-thick exterior surface masks (`100a`, `101a`, `100b`) with material-side quadrature and analytical uniform/nonuniform field regressions, non-tautological H0 whole-system force accounting summing direct enclosure wall tractions (`F_blade + F_ground + F_dielectric + F_wall`), analytic parallel-plate Maxwell-stress benchmark, a converged 3D SPD CG finite-difference solver with 6-face Maxwell stress integration and computed fringing ratio, programmatic controls (`+V` vs `-V`, `V=0`, symmetric capacitor, 180° spatial inversion BVP, asymmetric wall proximity coupling) with adversarial false-positive rejection gates, and accurate contextual characterization of Tajmar & Schreiber (2020). Awaiting independent ChatGPT R2 re-review.
 
 ## P3 — nuclear and scalar-field hypotheses
 
