@@ -139,8 +139,8 @@ def run_exodus_demo(
         "H0 2D Extr.\nGround (102)",
         "H0 2D Extr.\nDirect Wall",
         "H0 2D Extr.\nNet System",
-        "True 3D\nBlade (101)",
-        "True 3D\nNet System",
+        "Finite 3D Approx\nBlade (101)",
+        "Finite 3D Approx\nNet System",
         "H1 Eq.(11)\nQuadrature",
         "H1 0.5x Eq.(11)\n(no reactions)",
     ]
@@ -149,8 +149,8 @@ def run_exodus_demo(
         h0.ground_force_x.force_3d_extruded_n * 1e3,
         h0.enclosure_direct_wall_force_x.total_enclosure_force_3d_extruded_n * 1e3,
         h0.net_system_force_x.force_3d_extruded_n * 1e3,
-        f3d.true_3d_blade_force_x_n * 1e3,
-        f3d.true_3d_net_system_force_x_n * 1e3,
+        f3d.finite_3d_blade_force_x_n * 1e3,
+        f3d.finite_3d_net_system_force_x_n * 1e3,
         h1.predicted_force_3d_extruded_n * 1e3,
         h1.missing_half_factor_force_3d_extruded_n * 1e3,
     ]
@@ -170,7 +170,7 @@ def run_exodus_demo(
     ax_b.set_xticklabels(labels, rotation=22, ha="right", fontsize=8.5)
     ax_b.axhline(0, color="black", linewidth=0.8)
     ax_b.set_ylabel("Force along X (mN)")
-    ax_b.set_title("Panel B: Force Accounting (2D Extruded H0, True 3D H0, & Patent H1)", fontsize=11, fontweight="bold")
+    ax_b.set_title("Panel B: Force Accounting (2D Extruded H0, Finite 3D H0 Approx, & Patent H1)", fontsize=11, fontweight="bold")
     ax_b.grid(True, linestyle=":", alpha=0.5, axis="y")
 
     for bar, val in zip(bars, forces_mn):

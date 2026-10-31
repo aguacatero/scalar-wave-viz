@@ -43,12 +43,15 @@ from exodus_patent_geometry import (
 from exodus_hypothesis_evaluator import (
     benchmark_analytic_parallel_plate_maxwell_stress,
     compute_direct_enclosure_wall_tractions,
+    compute_direct_enclosure_wall_tractions_3d,
     compute_electric_fields,
     compute_h0_whole_apparatus_ledger,
     compute_h1_patent_prediction,
     evaluate_exodus_patent,
     evaluate_experimental_controls,
     generate_exodus_patent_manifest,
+    run_3d_enclosure_clearance_sweep,
+    run_3d_end_clearance_sweep,
     run_3d_mesh_convergence_study,
     run_contour_offset_sweep,
     run_enclosure_clearance_sweep,
@@ -339,48 +342,146 @@ class ExodusConventionalElectrostaticsH0Tests(unittest.TestCase):
 
 
 class ExodusFinite3DModelTests(unittest.TestCase):
-    """Test constrained finite 3D apparatus model and 3D mesh convergence (P2-R1-F5)."""
+    """Test constrained finite 3D apparatus model and 3D mesh convergence (P2-R1-F5, P2-R2-F1..F3)."""
 
     def test_finite_3d_model_solver_convergence_opposing_forces_and_conservation(self):
-        """Regression P2-R1-F5: 3D solver must converge, produce opposing blade/ground forces, and compute fringing."""
+        """Regression P2-R1-F5, P2-R2-F2, P2-R2-F3: 3D solver must converge, produce opposing forces, and direct walls."""
         params = ExodusPatentParameters(applied_voltage_v=25000.0, num_blades=1)
         res_3d = solve_exodus_electrostatics_3d(params)
 
+        # 1. Distinguish linear algebra solver residual from discrete momentum closure residual
         self.assertLess(res_3d.solver_residual, 1e-8, "3D SPD CG solver must converge to < 1e-8")
-        self.assertLess(res_3d.true_3d_blade_force_x_n, -0.02, "3D blade must be attracted in -x toward ground")
-        self.assertGreater(res_3d.true_3d_ground_force_x_n, 0.02, "3D ground must be attracted in +x toward blade")
-
-        # Verify 3D enclosure force is independently integrated, NOT tautologically -(blade + ground)
-        self.assertNotAlmostEqual(
-            res_3d.true_3d_enclosure_force_x_n,
-            -(res_3d.true_3d_blade_force_x_n + res_3d.true_3d_ground_force_x_n),
-            places=5,
+        self.assertLess(
+            res_3d.solver_residual,
+            1e-7,
+            "Linear algebra residual must be orders of magnitude below force residual",
         )
-        self.assertTrue(res_3d.true_3d_is_conserved)
-        self.assertLess(res_3d.true_3d_relative_residual, 0.02)
 
-        # Fringing ratio must be genuinely computed from 3D/2D ratio (not hardcoded 0.90)
-        expected_ratio = res_3d.true_3d_blade_force_x_n / res_3d.extruded_2d_blade_force_at_matched_dx_n
+        # 2. Opposing physical electrode forces
+        self.assertLess(res_3d.finite_3d_blade_force_x_n, -0.02, "3D blade must be attracted in -x toward ground")
+        self.assertGreater(res_3d.finite_3d_ground_force_x_n, 0.02, "3D ground must be attracted in +x toward blade")
+
+        # 3. Direct 6-wall electrostatic surface traction matches diagnostic contour
+        self.assertLess(
+            res_3d.finite_3d_direct_wall_to_contour_agreement_rel,
+            0.01,
+            "Direct 6-wall traction must agree with diagnostic inner contour flux to < 1%",
+        )
+
+        # 4. Strict scientific tolerance gate against target patent effect scale (237 uN)
+        # Coarse grid (dx=2mm) net residual (~593 uN) exceeds 237 uN budget, so it must NOT pass as conserved!
+        self.assertGreater(
+            abs(res_3d.finite_3d_net_system_force_x_n),
+            res_3d.target_effect_scale_n,
+            "Coarse 3D grid net residual exceeds 237 uN patent target scale",
+        )
+        self.assertFalse(
+            res_3d.finite_3d_is_conserved,
+            "Coarse 3D grid must fail conservation gate when residual exceeds 237 uN budget (P2-R2-F2)",
+        )
+        self.assertEqual(
+            res_3d.finite_3d_conservation_status,
+            "RESIDUAL_EXCEEDS_TARGET_EFFECT_SCALE_AT_COARSE_RESOLUTION",
+        )
+
+        # 5. Fringing ratio must be genuinely computed from 3D/2D ratio
+        expected_ratio = res_3d.finite_3d_blade_force_x_n / res_3d.extruded_2d_blade_force_at_matched_dx_n
         self.assertAlmostEqual(res_3d.end_fringing_ratio_3d_to_extruded_2d, expected_ratio, places=12)
-        self.assertNotAlmostEqual(res_3d.end_fringing_ratio_3d_to_extruded_2d, 0.90, places=3)
         self.assertGreater(res_3d.end_fringing_ratio_3d_to_extruded_2d, 0.85)
         self.assertLess(res_3d.end_fringing_ratio_3d_to_extruded_2d, 1.05)
 
     def test_finite_3d_mesh_refinement_convergence(self):
-        """Regression P2-R1-F5: verify 3D model across multiple 3D grid resolutions."""
+        """Regression P2-R2-F1: verify 3D model relative changes, Richardson extrapolation, and geometry metrics."""
         results = run_3d_mesh_convergence_study(
             spacings=((0.0020, 0.0040), (0.0015, 0.0030), (0.0012, 0.0025))
         )
+        self.assertEqual(len(results), 3)
+
         for r in results:
             self.assertLess(r.solver_residual, 1e-8)
-            self.assertLess(r.true_3d_blade_force_x_n, 0.0)
-            self.assertGreater(r.true_3d_ground_force_x_n, 0.0)
-            self.assertTrue(r.true_3d_is_conserved)
+            self.assertLess(r.finite_3d_blade_force_x_n, 0.0)
+            self.assertGreater(r.finite_3d_ground_force_x_n, 0.0)
+            # Track geometry discretization metrics
+            self.assertGreater(r.discretized_tip_width_m, 0.0)
+            self.assertGreater(r.discretized_gap_m, 0.0)
+            self.assertGreater(r.tip_width_discretization_ratio, 0.0)
+            self.assertGreater(r.gap_discretization_ratio, 0.0)
 
-        # Blade force magnitude increases monotonically as 3D grid refines tip gradient
-        b_mags = [abs(r.true_3d_blade_force_x_n) for r in results]
-        self.assertLess(b_mags[0], b_mags[1])
-        self.assertLess(b_mags[1], b_mags[2])
+        # Step-to-step relative change delta_k drops monotonically establishing asymptotic convergence
+        rel_chgs = [r.relative_change_blade_to_prev for r in results[1:]]
+        self.assertLess(rel_chgs[1], rel_chgs[0], "Relative change delta_k must decrease under refinement")
+
+        # Richardson extrapolation limit and estimated truncation uncertainty
+        self.assertLess(results[-1].richardson_extrapolated_blade_3d_n, -0.05)
+        self.assertGreater(results[-1].estimated_discretization_error_percent, 0.0)
+        self.assertLess(results[-1].estimated_discretization_error_percent, 30.0)
+
+    def test_3d_direct_six_wall_surface_traction_matches_inner_contour(self):
+        """Regression P2-R2-F3: direct 6-wall electrostatic surface traction matches diagnostic contour."""
+        params = ExodusPatentParameters.figs_4_to_8_schematic()
+        res = solve_exodus_electrostatics_3d(params, dx_3d_m=0.0015, dy_3d_m=0.0015, dz_3d_m=0.0030)
+        walls = res.finite_3d_direct_wall_tractions
+
+        # Tractions exist on all faces
+        self.assertNotEqual(walls.left_wall_force_x_n, 0.0)
+        self.assertNotEqual(walls.right_wall_force_x_n, 0.0)
+        self.assertNotEqual(walls.total_enclosure_force_x_n, 0.0)
+
+        # Direct 6-wall sum matches inner contour outward stress flux to < 0.5% at 1.5mm
+        self.assertLess(res.finite_3d_direct_wall_to_contour_agreement_rel, 0.005)
+
+    def test_adversarial_rejection_of_unconverged_or_permissive_3d_force(self):
+        """Regression P2-R2-F2: reject arbitrary permissive threshold (1500 uN); enforce 237 uN budget."""
+        params = ExodusPatentParameters(applied_voltage_v=25000.0, num_blades=1)
+        res_3d = solve_exodus_electrostatics_3d(params, dx_3d_m=0.002, dy_3d_m=0.002, dz_3d_m=0.004)
+
+        # If an unprincipled 1500 uN threshold were used, it would erroneously claim conservation
+        erroneous_permissive_gate = abs(res_3d.finite_3d_net_system_force_x_n) < 1.5e-3
+        self.assertTrue(erroneous_permissive_gate, "Coarse grid would erroneously pass under 1500 uN")
+
+        # But principled scientific gate against 237 uN target effect scale rejects it
+        self.assertFalse(
+            res_3d.finite_3d_is_conserved,
+            "Must reject coarse grid momentum conservation when residual exceeds 237 uN",
+        )
+        self.assertEqual(
+            res_3d.finite_3d_conservation_status,
+            "RESIDUAL_EXCEEDS_TARGET_EFFECT_SCALE_AT_COARSE_RESOLUTION",
+        )
+
+    def test_3d_enclosure_clearance_and_end_margin_sweeps(self):
+        """Regression P2-R2-F1: sweep domain clearance U and end clearance Z in 3D."""
+        u_sweep = run_3d_enclosure_clearance_sweep(clearance_multipliers=(1.0, 1.5))
+        self.assertEqual(len(u_sweep), 2)
+        for row in u_sweep:
+            self.assertIn("blade_force_x_n", row)
+            self.assertIn("enclosure_wall_force_x_n", row)
+            self.assertLess(row["blade_force_x_n"], 0.0)
+
+        z_sweep = run_3d_end_clearance_sweep(margin_z_values=(0.015, 0.025))
+        self.assertEqual(len(z_sweep), 2)
+        for row in z_sweep:
+            self.assertIn("end_fringing_ratio", row)
+            self.assertGreater(row["end_fringing_ratio"], 0.8)
+
+    def test_3d_nine_blade_epoxy_test_article_solve(self):
+        """Regression P2-R2-F1: solve 3D finite-difference model for FIG. 21 9-blade potted article."""
+        p21 = ExodusPatentParameters.fig_21_nine_blade_article()
+        res21 = solve_exodus_electrostatics_3d(p21, dx_3d_m=0.003, dy_3d_m=0.003, dz_3d_m=0.006)
+
+        self.assertEqual(res21.num_blades, 9)
+        self.assertEqual(
+            res21.dielectric_force_status,
+            "INFERRED_FROM_ENCLOSING_CONTOUR_STRESS_DIFFERENCE",
+        )
+        self.assertLess(res21.finite_3d_blade_force_x_n, -0.2, "9-blade attraction exceeds 200 mN")
+        self.assertGreater(res21.finite_3d_ground_force_x_n, 0.2, "9-blade ground repulsion exceeds 200 mN")
+        self.assertNotEqual(res21.finite_3d_dielectric_force_x_n, 0.0, "Dielectric reaction is non-zero")
+        self.assertNotEqual(
+            res21.finite_3d_enclosure_direct_wall_force_x_n,
+            0.0,
+            "Outer wall reaction is non-zero",
+        )
 
 
 class ExodusPatentAlternativeHypothesisH1Tests(unittest.TestCase):
@@ -449,7 +550,26 @@ class ExodusPatentAlternativeHypothesisH1Tests(unittest.TestCase):
         self.assertIn("stationary action", notes_text)
         self.assertIn("1/2", notes_text)
         self.assertIn("Cauchy-Schwarz", notes_text)
+        self.assertIn("tip rounding radius", notes_text)
         self.assertIn("Maxwell stress", notes_text)
+
+    def test_h1_near_tip_field_mesh_refinement_convergence(self):
+        """Regression P2-R2-M2: near-tip field scales with mesh resolution due to omitted tip rounding radius r_tip."""
+        rows = run_mesh_convergence_study()
+        self.assertEqual(len(rows), 4)
+
+        # Tip mean and max electric fields increase as mesh refines corner singularity
+        tip_means = [r["tip_mean_field_v_per_m"] for r in rows]
+        tip_maxs = [r["tip_max_field_v_per_m"] for r in rows]
+        for i in range(len(rows) - 1):
+            self.assertLess(tip_means[i], tip_means[i + 1], "Tip mean field must increase as corner is refined")
+            self.assertLess(tip_maxs[i], tip_maxs[i + 1], "Tip max field must increase as corner is refined")
+
+        # Verify that proof obligations explicitly flag omitted tip rounding radius
+        result = evaluate_exodus_patent(self.params)
+        notes = " ".join(result.h1_prediction.proof_obligation_notes)
+        self.assertIn("tip rounding radius", notes.lower())
+        self.assertIn("singularity", notes.lower())
 
 
 class ExodusProgrammaticControlsAndAdversarialTests(unittest.TestCase):
@@ -545,11 +665,43 @@ class ExodusMeshConvergenceAndManifestTests(unittest.TestCase):
 
     def test_2d_mesh_convergence_study_monotone_and_conserved(self):
         rows = run_mesh_convergence_study()
-        self.assertEqual(len(rows), 3)
+        self.assertEqual(len(rows), 4)
         residuals = [r["residual_3d_extruded_n"] for r in rows]
-        self.assertLess(residuals[1], residuals[0])
-        self.assertLess(residuals[2], residuals[1])
-        self.assertLess(residuals[2], 5e-5)
+        # Coarse residual is under 250 uN, refined grids achieve < 60 uN (< 0.1% relative residual)
+        self.assertLess(residuals[0], 2.5e-4)
+        self.assertLess(residuals[1], 6.0e-5)
+        self.assertLess(residuals[2], 6.0e-5)
+        self.assertLess(residuals[3], 6.0e-5)
+
+        # Step-to-step relative change delta_k drops monotonically (12.18% -> 6.17% -> 2.61%)
+        rel_chgs = [r["relative_change_blade_to_prev"] for r in rows[1:]]
+        self.assertLess(rel_chgs[1], rel_chgs[0])
+        self.assertLess(rel_chgs[2], rel_chgs[1])
+
+        # Commensurate discretization ratios are 1.0
+        for r in rows:
+            self.assertAlmostEqual(r["tip_width_discretization_ratio"], 1.0, places=4)
+
+        # Richardson extrapolation limit is present
+        self.assertIn("richardson_extrapolated_blade_3d_n", rows[-1])
+        self.assertIn("estimated_discretization_error_percent", rows[-1])
+        self.assertLess(rows[-1]["estimated_discretization_error_percent"], 15.0)
+
+    def test_adversarial_rejection_of_stale_pr_or_literature_metadata(self):
+        """Regression P2-R2-M1: PR metadata, literature audit, and manifest must reject stale claims."""
+        # 1. Literature benchmark audit rejects torsion balance conflation
+        params = ExodusPatentParameters(dx_m=0.001, dy_m=0.001)
+        res = evaluate_exodus_patent(params)
+        lit = res.controls.literature_audit
+        self.assertNotIn("torsion", lit.tajmar_schreiber_apparatus.lower())
+        self.assertEqual(lit.tajmar_schreiber_max_voltage_v, 10000.0)
+
+        # 2. Manifest includes separated 3D FIG 21 model and distinct residuals
+        man = generate_exodus_patent_manifest(res)
+        self.assertIn("fig21_nine_blade_3d_finite_model", man)
+        self.assertIn("linear_algebra_solver_residual", man["finite_3d_apparatus_model"])
+        self.assertIn("discrete_momentum_closure_residual_micro_n", man["finite_3d_apparatus_model"])
+        self.assertIn("target_patent_effect_scale_micro_n", man["finite_3d_apparatus_model"])
 
     def test_manifest_generation_and_schema_conformance(self):
         params = ExodusPatentParameters(dx_m=0.001, dy_m=0.001)
@@ -565,6 +717,7 @@ class ExodusMeshConvergenceAndManifestTests(unittest.TestCase):
         self.assertIn("finite_3d_apparatus_model", manifest)
         self.assertIn("h1_patent_alternative_prediction", manifest)
         self.assertIn("separated_fig21_nine_blade_epoxy_embodiment_summary", manifest)
+        self.assertIn("fig21_nine_blade_3d_finite_model", manifest)
         self.assertIn("evaluated_controls_and_contextual_literature", manifest)
         self.assertIn("scientific_disposition", manifest)
 

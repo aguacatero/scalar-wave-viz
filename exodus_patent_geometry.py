@@ -77,6 +77,7 @@ class ExodusPatentParameters:
     enclosure_margin_y_m: float = 0.025  # Symbol U: 25 mm margin along y
     enclosure_margin_left_x_m: Optional[float] = None   # Optional asymmetric left wall clearance
     enclosure_margin_right_x_m: Optional[float] = None  # Optional asymmetric right wall clearance
+    enclosure_margin_z_m: float = 0.020  # Symbol U_z: 20 mm end clearance margin along z
 
     # Numerical grid spacing (2D)
     dx_m: float = 0.0005  # 0.5 mm spatial discretization
@@ -383,6 +384,17 @@ class ExodusGrid2D:
     potential_bc: np.ndarray
     fixed_mask: np.ndarray
 
+    # Geometry discretization fidelity tracking (target vs actual grid values)
+    target_tip_width_m: float = 0.00127
+    discretized_tip_width_m: float = 0.00127
+    tip_width_discretization_ratio: float = 1.0
+    target_gap_m: float = 0.00635
+    discretized_gap_m: float = 0.00635
+    gap_discretization_ratio: float = 1.0
+    target_blade_height_m: float = 0.00635
+    discretized_blade_height_m: float = 0.00635
+    blade_height_discretization_ratio: float = 1.0
+
     @property
     def domain_size_x_m(self) -> float:
         return self.nx * self.dx
@@ -620,6 +632,19 @@ def build_exodus_2d_grid(params: Optional[ExodusPatentParameters] = None) -> Exo
 
     fixed_mask = mask_blade_101 | mask_ground_102 | mask_enclosure_box
 
+    # Discretization tracking
+    target_tip_w = float(params.blade_thickness_m)
+    actual_tip_w = float(total_tip_width)
+    tip_ratio = float(actual_tip_w / target_tip_w) if target_tip_w > 0 else 1.0
+
+    target_gap = float(params.gap_spacing_m)
+    actual_gap = float(n_gap * dx)
+    gap_ratio = float(actual_gap / target_gap) if target_gap > 0 else 1.0
+
+    target_height = float(params.blade_height_m)
+    actual_height = float(n_blade_p * dx)
+    height_ratio = float(actual_height / target_height) if target_height > 0 else 1.0
+
     return ExodusGrid2D(
         params=params,
         nx=nx,
@@ -639,6 +664,15 @@ def build_exodus_2d_grid(params: Optional[ExodusPatentParameters] = None) -> Exo
         mask_dielectric_region=mask_dielectric_region,
         potential_bc=potential_bc,
         fixed_mask=fixed_mask,
+        target_tip_width_m=target_tip_w,
+        discretized_tip_width_m=actual_tip_w,
+        tip_width_discretization_ratio=tip_ratio,
+        target_gap_m=target_gap,
+        discretized_gap_m=actual_gap,
+        gap_discretization_ratio=gap_ratio,
+        target_blade_height_m=target_height,
+        discretized_blade_height_m=actual_height,
+        blade_height_discretization_ratio=height_ratio,
     )
 
 
@@ -740,4 +774,13 @@ def build_inverted_180_grid(params: Optional[ExodusPatentParameters] = None) -> 
         mask_dielectric_region=np.fliplr(base_grid.mask_dielectric_region).copy(),
         potential_bc=np.fliplr(base_grid.potential_bc).copy(),
         fixed_mask=np.fliplr(base_grid.fixed_mask).copy(),
+        target_tip_width_m=base_grid.target_tip_width_m,
+        discretized_tip_width_m=base_grid.discretized_tip_width_m,
+        tip_width_discretization_ratio=base_grid.tip_width_discretization_ratio,
+        target_gap_m=base_grid.target_gap_m,
+        discretized_gap_m=base_grid.discretized_gap_m,
+        gap_discretization_ratio=base_grid.gap_discretization_ratio,
+        target_blade_height_m=base_grid.target_blade_height_m,
+        discretized_blade_height_m=base_grid.discretized_blade_height_m,
+        blade_height_discretization_ratio=base_grid.blade_height_discretization_ratio,
     )

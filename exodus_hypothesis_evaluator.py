@@ -75,6 +75,20 @@ class DirectWallTractionForces:
 
 
 @dataclass(frozen=True)
+class DirectWallTractionForces3D:
+    """Forces on the grounded outer enclosure computed directly at the 6 outer wall surfaces in 3D."""
+
+    left_wall_force_x_n: float
+    right_wall_force_x_n: float
+    bottom_wall_force_x_n: float
+    top_wall_force_x_n: float
+    back_wall_force_x_n: float
+    front_wall_force_x_n: float
+    total_enclosure_force_x_n: float
+
+
+
+@dataclass(frozen=True)
 class WholeApparatusForceLedgerH0:
     """Conventional whole-system force accounting under Model H0.
 
@@ -192,7 +206,14 @@ class EvaluatedControlsResult:
 
 @dataclass(frozen=True)
 class Finite3DModelResult:
-    """Results from constrained finite 3D boundary-value model capturing 3D end fringing."""
+    """Results from constrained finite 3D boundary-value model capturing 3D end fringing.
+
+    Explicitly distinguishes:
+        - finite_3d_*: finite 3D numerical approximation (not an unverified 'true' physical measurement)
+        - finite_3d_enclosure_direct_wall_force_x_n: directly integrated on the 6 outer bounding physical walls
+        - finite_3d_enclosure_inner_contour_force_x_n: diagnostic closed-box stress flux
+        - target_effect_scale_n: predeclared patent effect budget (237 uN)
+    """
 
     nx: int
     ny: int
@@ -202,15 +223,58 @@ class Finite3DModelResult:
     dz_m: float
     finite_blade_length_m: float
     solver_residual: float
-    true_3d_blade_force_x_n: float
-    true_3d_ground_force_x_n: float
-    true_3d_dielectric_force_x_n: float
-    true_3d_enclosure_force_x_n: float
-    true_3d_net_system_force_x_n: float
-    true_3d_relative_residual: float
-    true_3d_is_conserved: bool
+    finite_3d_blade_force_x_n: float
+    finite_3d_ground_force_x_n: float
+    finite_3d_dielectric_force_x_n: float
+    finite_3d_enclosure_direct_wall_force_x_n: float
+    finite_3d_enclosure_inner_contour_force_x_n: float
+    finite_3d_direct_wall_to_contour_agreement_rel: float
+    finite_3d_direct_wall_tractions: DirectWallTractionForces3D
+    finite_3d_net_system_force_x_n: float
+    finite_3d_relative_residual: float
+    finite_3d_is_conserved: bool
+    finite_3d_conservation_status: str
+    target_effect_scale_n: float
+    discretized_tip_width_m: float
+    tip_width_discretization_ratio: float
+    discretized_gap_m: float
+    gap_discretization_ratio: float
+    num_blades: int
+    dielectric_force_status: str
     extruded_2d_blade_force_at_matched_dx_n: float
     end_fringing_ratio_3d_to_extruded_2d: float
+    relative_change_blade_to_prev: float = 0.0
+    richardson_extrapolated_blade_3d_n: float = 0.0
+    estimated_discretization_error_percent: float = 0.0
+
+    # Backward-compatible property aliases for previous true_3d_* nomenclature
+    @property
+    def true_3d_blade_force_x_n(self) -> float:
+        return self.finite_3d_blade_force_x_n
+
+    @property
+    def true_3d_ground_force_x_n(self) -> float:
+        return self.finite_3d_ground_force_x_n
+
+    @property
+    def true_3d_dielectric_force_x_n(self) -> float:
+        return self.finite_3d_dielectric_force_x_n
+
+    @property
+    def true_3d_enclosure_force_x_n(self) -> float:
+        return self.finite_3d_enclosure_direct_wall_force_x_n
+
+    @property
+    def true_3d_net_system_force_x_n(self) -> float:
+        return self.finite_3d_net_system_force_x_n
+
+    @property
+    def true_3d_relative_residual(self) -> float:
+        return self.finite_3d_relative_residual
+
+    @property
+    def true_3d_is_conserved(self) -> bool:
+        return self.finite_3d_is_conserved
 
 
 @dataclass
@@ -687,31 +751,85 @@ def run_enclosure_clearance_sweep(
 
 
 def run_mesh_convergence_study(
-    dx_values: Tuple[float, ...] = (0.00127, 0.000635, 0.00127 / 3.0),
+    dx_values: Tuple[float, ...] = (0.00127, 0.000635, 0.00127 / 3.0, 0.00127 / 4.0),
     base_params: Optional[ExodusPatentParameters] = None,
 ) -> List[Dict[str, float]]:
-    """Run a 2D mesh refinement convergence study across patent-unit-commensurate grid spacings."""
+    """Run a 2D mesh refinement convergence study across patent-unit-commensurate grid spacings.
+
+    Calculates:
+        - Absolute forces on blade, ground, wall, net system, and H1 prediction
+        - Step-to-step relative change delta_k = |F_k - F_{k-1}| / |F_k| establishing asymptotic rate
+        - Discretization ratios (actual / target) for tip width and inter-electrode gap
+        - Richardson extrapolated continuum limit (from the finest pair)
+        - Estimated discretization truncation uncertainty percent
+    """
     if base_params is None:
         base_params = ExodusPatentParameters.figs_4_to_8_schematic()
     rows: List[Dict[str, float]] = []
+    prev_blade = None
+    prev_h1 = None
     for dxi in dx_values:
         p = replace(base_params, dx_m=dxi, dy_m=dxi)
         g = build_exodus_2d_grid(p)
         pot, _, _ = solve_exodus_electrostatics(g)
-        ex, ey, _ = compute_electric_fields(g, pot)
+        ex, ey, emag = compute_electric_fields(g, pot)
         ledger = compute_h0_whole_apparatus_ledger(g, ex, ey)
+        h1 = compute_h1_patent_prediction(g, ex, ey, emag)
+        face_100a = next(f for f in g.boundary_faces if f.face_name == "proximal_tip_100a")
+        tip_fields = emag[face_100a.sample_iy_ext, face_100a.sample_ix_ext]
+
+        blade_3d = float(ledger.blade_force_x.force_3d_extruded_n)
+        h1_3d = float(h1.predicted_force_3d_extruded_n)
+
+        rel_chg_b = (
+            abs(blade_3d - prev_blade) / abs(blade_3d)
+            if prev_blade is not None
+            else 0.0
+        )
+        rel_chg_h1 = (
+            abs(h1_3d - prev_h1) / abs(h1_3d)
+            if prev_h1 is not None
+            else 0.0
+        )
+        prev_blade = blade_3d
+        prev_h1 = h1_3d
+
         rows.append({
             "dx_m": float(dxi),
             "blade_force_x_n_per_m": float(ledger.blade_force_x.force_per_length_n_per_m),
-            "blade_force_3d_extruded_n": float(ledger.blade_force_x.force_3d_extruded_n),
+            "blade_force_3d_extruded_n": blade_3d,
             "ground_force_x_n_per_m": float(ledger.ground_force_x.force_per_length_n_per_m),
+            "ground_force_3d_extruded_n": float(ledger.ground_force_x.force_3d_extruded_n),
             "enclosure_wall_force_x_n_per_m": float(
                 ledger.enclosure_direct_wall_force_x.total_enclosure_force_x_n_per_m
+            ),
+            "enclosure_wall_force_3d_extruded_n": float(
+                ledger.enclosure_direct_wall_force_x.total_enclosure_force_3d_extruded_n
             ),
             "net_system_force_x_n_per_m": float(ledger.net_system_force_x.force_per_length_n_per_m),
             "residual_3d_extruded_n": float(ledger.residual_3d_extruded_n),
             "relative_residual": float(ledger.relative_residual_to_blade_force),
+            "h1_predicted_force_3d_extruded_n": h1_3d,
+            "tip_mean_field_v_per_m": float(np.mean(tip_fields)),
+            "tip_max_field_v_per_m": float(np.max(tip_fields)),
+            "discretized_tip_width_m": float(g.discretized_tip_width_m),
+            "tip_width_discretization_ratio": float(g.tip_width_discretization_ratio),
+            "relative_change_blade_to_prev": float(rel_chg_b),
+            "relative_change_h1_to_prev": float(rel_chg_h1),
         })
+
+    # Richardson extrapolation from the two finest grid resolutions
+    if len(rows) >= 2:
+        f_coarse = rows[-2]["blade_force_3d_extruded_n"]
+        f_fine = rows[-1]["blade_force_3d_extruded_n"]
+        r = rows[-2]["dx_m"] / rows[-1]["dx_m"]
+        p_order = 1.0  # Conservative first-order apparent rate near corners
+        f_extrap = f_fine + (f_fine - f_coarse) / (r ** p_order - 1.0)
+        disc_err = abs(f_extrap - f_fine) / abs(f_extrap) if abs(f_extrap) > 0 else 0.0
+        for r_dict in rows:
+            r_dict["richardson_extrapolated_blade_3d_n"] = float(f_extrap)
+            r_dict["estimated_discretization_error_percent"] = float(disc_err * 100.0)
+
     return rows
 
 
@@ -770,6 +888,7 @@ def compute_h1_patent_prediction(
         "Eq. (11) omits the fundamental 1/2 factor in electrostatic surface traction (1/2 * eps0 * E^2).",
         "Eq. (11) evaluates only two face pressures while omitting lateral flanks (100b), base front shoulder, ground counter-force, and enclosure wall reactions.",
         "Cauchy-Schwarz inequality: integral(E^2 dA) >= (<E>)^2 A; plug-in of mean or peak field into E^2*A is invalid for nonuniform fields.",
+        "Patent geometry omits tip rounding radius r_tip; square conductor corners introduce an integrable E ~ r^(-1/3) field singularity under mesh refinement.",
         "Whole-system closed-surface Maxwell stress integration (Model H0) proves net system force is zero.",
     ]
 
@@ -883,20 +1002,100 @@ def integrate_3d_maxwell_stress_box_x(
     return f_xp + f_xm + f_yp + f_ym + f_zp + f_zm
 
 
+def compute_direct_enclosure_wall_tractions_3d(
+    pot_3d: np.ndarray,
+    ex_3d: np.ndarray,
+    ey_3d: np.ndarray,
+    ez_3d: np.ndarray,
+    eps_3d: np.ndarray,
+    dx: float,
+    dy: float,
+    dz: float,
+) -> DirectWallTractionForces3D:
+    """Compute direct electrostatic surface traction on the 6 grounded outer enclosure walls in 3D.
+
+    Evaluates inward-pointing wall surface stress vector T . n_wall on the 6 bounding walls:
+        - Left wall (x = 0, inner surface at ix = 1, inward normal = +x):
+          T_xx = 0.5 * eps * (Ex^2 - Ey^2 - Ez^2)
+        - Right wall (x = nx-1, inner surface at ix = nx - 2, inward normal = -x):
+          -T_xx = -0.5 * eps * (Ex^2 - Ey^2 - Ez^2)
+        - Bottom wall (y = 0, inner surface at iy = 1, inward normal = +y):
+          T_xy = eps * Ex * Ey
+        - Top wall (y = ny-1, inner surface at iy = ny - 2, inward normal = -y):
+          -T_xy = -eps * Ex * Ey
+        - Back wall (z = 0, inner surface at iz = 1, inward normal = +z):
+          T_xz = eps * Ex * Ez
+        - Front wall (z = nz-1, inner surface at iz = nz - 2, inward normal = -z):
+          -T_xz = -eps * Ex * Ez
+    """
+    # Left wall (ix = 1, normal into domain = +x)
+    eps_l = 0.5 * (eps_3d[1:-1, 1:-1, 1] + eps_3d[1:-1, 1:-1, 0])
+    ex_l = -(pot_3d[1:-1, 1:-1, 1] - pot_3d[1:-1, 1:-1, 0]) / dx
+    ey_l = ey_3d[1:-1, 1:-1, 1]
+    ez_l = ez_3d[1:-1, 1:-1, 1]
+    f_l = float(np.sum(0.5 * EPSILON_0 * eps_l * (ex_l**2 - ey_l**2 - ez_l**2)) * dy * dz)
+
+    # Right wall (ix = -2, normal into domain = -x)
+    eps_r = 0.5 * (eps_3d[1:-1, 1:-1, -2] + eps_3d[1:-1, 1:-1, -1])
+    ex_r = -(pot_3d[1:-1, 1:-1, -1] - pot_3d[1:-1, 1:-1, -2]) / dx
+    ey_r = ey_3d[1:-1, 1:-1, -2]
+    ez_r = ez_3d[1:-1, 1:-1, -2]
+    f_r = -float(np.sum(0.5 * EPSILON_0 * eps_r * (ex_r**2 - ey_r**2 - ez_r**2)) * dy * dz)
+
+    # Bottom wall (iy = 1, normal into domain = +y)
+    eps_b = 0.5 * (eps_3d[1:-1, 1, 1:-1] + eps_3d[1:-1, 0, 1:-1])
+    ex_b = ex_3d[1:-1, 1, 1:-1]
+    ey_b = -(pot_3d[1:-1, 1, 1:-1] - pot_3d[1:-1, 0, 1:-1]) / dy
+    f_b = float(np.sum(EPSILON_0 * eps_b * ex_b * ey_b) * dx * dz)
+
+    # Top wall (iy = -2, normal into domain = -y)
+    eps_t = 0.5 * (eps_3d[1:-1, -2, 1:-1] + eps_3d[1:-1, -1, 1:-1])
+    ex_t = ex_3d[1:-1, -2, 1:-1]
+    ey_t = -(pot_3d[1:-1, -1, 1:-1] - pot_3d[1:-1, -2, 1:-1]) / dy
+    f_t = -float(np.sum(EPSILON_0 * eps_t * ex_t * ey_t) * dx * dz)
+
+    # Back wall (iz = 1, normal into domain = +z)
+    eps_back = 0.5 * (eps_3d[1, 1:-1, 1:-1] + eps_3d[0, 1:-1, 1:-1])
+    ex_back = ex_3d[1, 1:-1, 1:-1]
+    ez_back = -(pot_3d[1, 1:-1, 1:-1] - pot_3d[0, 1:-1, 1:-1]) / dz
+    f_back = float(np.sum(EPSILON_0 * eps_back * ex_back * ez_back) * dx * dy)
+
+    # Front wall (iz = -2, normal into domain = -z)
+    eps_front = 0.5 * (eps_3d[-2, 1:-1, 1:-1] + eps_3d[-1, 1:-1, 1:-1])
+    ex_front = ex_3d[-2, 1:-1, 1:-1]
+    ez_front = -(pot_3d[-1, 1:-1, 1:-1] - pot_3d[-2, 1:-1, 1:-1]) / dz
+    f_front = -float(np.sum(EPSILON_0 * eps_front * ex_front * ez_front) * dx * dy)
+
+    total_direct_wall = f_l + f_r + f_b + f_t + f_back + f_front
+
+    return DirectWallTractionForces3D(
+        left_wall_force_x_n=f_l,
+        right_wall_force_x_n=f_r,
+        bottom_wall_force_x_n=f_b,
+        top_wall_force_x_n=f_t,
+        back_wall_force_x_n=f_back,
+        front_wall_force_x_n=f_front,
+        total_enclosure_force_x_n=total_direct_wall,
+    )
+
+
 def solve_exodus_electrostatics_3d(
     params: Optional[ExodusPatentParameters] = None,
     dx_3d_m: float = 0.002,
     dy_3d_m: float = 0.002,
     dz_3d_m: float = 0.004,
+    margin_z_m: Optional[float] = None,
 ) -> Finite3DModelResult:
     """Solve 3D finite-difference electrostatics with finite blade length Lz and 6-face stress integration.
 
     Models finite 3D apparatus including 3D end fringing and finite enclosure walls.
     Crucially:
         1. Integrates all 6 faces of the 3D Maxwell stress box around blade and ground (strictly disjoint).
-        2. Evaluates the 3D enclosure wall reaction independently at the outer enclosure boundary
-           (NOT tautologically assigned as -(F_blade + F_ground)).
-        3. Computes end_fringing_ratio_3d_to_extruded_2d directly from the ratio of the 3D blade
+        2. Evaluates the 3D enclosure wall reaction directly on the 6 outer bounding physical walls
+           via compute_direct_enclosure_wall_tractions_3d (NOT tautologically assigned as -(F_blade + F_ground)).
+        3. Validates direct 6-wall surface traction against diagnostic inner-contour stress flux.
+        4. Compares net force against predeclared target patent effect budget (237 uN).
+        5. Computes end_fringing_ratio_3d_to_extruded_2d directly from the ratio of the 3D blade
            force to the 2D extruded force at matched cross-sectional grid spacing.
     """
     if params is None:
@@ -908,7 +1107,7 @@ def solve_exodus_electrostatics_3d(
 
     margin_x = params.enclosure_margin_x_m
     margin_y = params.enclosure_margin_y_m
-    margin_z = 0.020  # 20 mm end clearance along z
+    margin_z = margin_z_m if margin_z_m is not None else params.enclosure_margin_z_m
 
     lz = params.blade_length_m  # 101.6 mm
 
@@ -1126,23 +1325,57 @@ def solve_exodus_electrostatics_3d(
     )
     f_3d_dielectric_x = (f_3d_article_x - (f_3d_blade_x + f_3d_ground_x)) if has_diel else 0.0
 
-    # Independently evaluated 3D outer enclosure reaction on the inner wall layer (2 .. n-3)
+    # 1. Direct 6-wall electrostatic surface traction
+    direct_walls = compute_direct_enclosure_wall_tractions_3d(
+        pot_3d, ex_3d, ey_3d, ez_3d, eps_3d, dx, dy, dz
+    )
+    f_3d_enclosure_direct = direct_walls.total_enclosure_force_x_n
+
+    # 2. Diagnostic inner contour flux (layer 2 .. nx-3)
     f_3d_enclosure_outward_flux = integrate_3d_maxwell_stress_box_x(
         ex_3d, ey_3d, ez_3d, eps_3d, dx, dy, dz, 2, nx - 3, 2, ny - 3, 2, nz - 3
     )
-    f_3d_enclosure_x = -f_3d_enclosure_outward_flux
+    f_3d_enclosure_inner = -f_3d_enclosure_outward_flux
+    wall_agreement_rel = abs(f_3d_enclosure_direct - f_3d_enclosure_inner) / max(
+        abs(f_3d_enclosure_inner), 1e-12
+    )
 
-    # Genuine non-tautological 3D whole-system net force sum
-    f_3d_net = f_3d_blade_x + f_3d_ground_x + f_3d_dielectric_x + f_3d_enclosure_x
+    # Genuine non-tautological 3D net force sum with direct wall reaction
+    f_3d_net = f_3d_blade_x + f_3d_ground_x + f_3d_dielectric_x + f_3d_enclosure_direct
     char_3d_force = max(abs(f_3d_blade_x), abs(f_3d_ground_x), 1e-12)
     rel_3d_res = float(abs(f_3d_net) / char_3d_force)
+
+    # Scientific acceptance threshold from predeclared target patent effect budget (237 uN)
+    target_effect_scale_n = 2.37e-4
+    is_conserved = bool(abs(f_3d_net) < target_effect_scale_n and rel_3d_res < 0.01)
+    if is_conserved:
+        cons_status = "MOMENTUM_CONSERVED_WITHIN_PREDECLARED_TOLERANCE"
+    else:
+        cons_status = "RESIDUAL_EXCEEDS_TARGET_EFFECT_SCALE_AT_COARSE_RESOLUTION"
+
+    # Geometry discretization metrics
+    target_tip_w = float(params.blade_thickness_m)
+    actual_tip_w = float(n_tip_y * dy)
+    tip_ratio = float(actual_tip_w / target_tip_w) if target_tip_w > 0 else 1.0
+
+    target_gap = float(params.gap_spacing_m)
+    actual_gap = float(n_gap * dx)
+    gap_ratio = float(actual_gap / target_gap) if target_gap > 0 else 1.0
+
+    diel_status = (
+        "INFERRED_FROM_ENCLOSING_CONTOUR_STRESS_DIFFERENCE"
+        if has_diel
+        else "VACUUM_NO_DIELECTRIC"
+    )
 
     # Compare against 2D extruded force at matched cross-sectional grid spacing (dx, dy)
     params_2d_matched = replace(params, dx_m=dx, dy_m=dy)
     grid_2d_matched = build_exodus_2d_grid(params_2d_matched)
     pot_2d_m, _, _ = solve_exodus_electrostatics(grid_2d_matched)
     ex_2d_m, ey_2d_m, _ = compute_electric_fields(grid_2d_matched, pot_2d_m)
-    ledger_2d_m = compute_h0_whole_apparatus_ledger(grid_2d_matched, ex_2d_m, ey_2d_m, contour_offset=ext_offset)
+    ledger_2d_m = compute_h0_whole_apparatus_ledger(
+        grid_2d_matched, ex_2d_m, ey_2d_m, contour_offset=ext_offset
+    )
     f_2d_extruded_matched = ledger_2d_m.blade_force_x.force_3d_extruded_n
 
     end_fringing_ratio = float(
@@ -1158,29 +1391,150 @@ def solve_exodus_electrostatics_3d(
         dz_m=dz,
         finite_blade_length_m=lz,
         solver_residual=solver_res,
-        true_3d_blade_force_x_n=float(f_3d_blade_x),
-        true_3d_ground_force_x_n=float(f_3d_ground_x),
-        true_3d_dielectric_force_x_n=float(f_3d_dielectric_x),
-        true_3d_enclosure_force_x_n=float(f_3d_enclosure_x),
-        true_3d_net_system_force_x_n=float(f_3d_net),
-        true_3d_relative_residual=rel_3d_res,
-        true_3d_is_conserved=bool(abs(f_3d_net) < 1.5e-3 and rel_3d_res < 0.025),
+        finite_3d_blade_force_x_n=float(f_3d_blade_x),
+        finite_3d_ground_force_x_n=float(f_3d_ground_x),
+        finite_3d_dielectric_force_x_n=float(f_3d_dielectric_x),
+        finite_3d_enclosure_direct_wall_force_x_n=float(f_3d_enclosure_direct),
+        finite_3d_enclosure_inner_contour_force_x_n=float(f_3d_enclosure_inner),
+        finite_3d_direct_wall_to_contour_agreement_rel=float(wall_agreement_rel),
+        finite_3d_direct_wall_tractions=direct_walls,
+        finite_3d_net_system_force_x_n=float(f_3d_net),
+        finite_3d_relative_residual=rel_3d_res,
+        finite_3d_is_conserved=is_conserved,
+        finite_3d_conservation_status=cons_status,
+        target_effect_scale_n=target_effect_scale_n,
+        discretized_tip_width_m=actual_tip_w,
+        tip_width_discretization_ratio=tip_ratio,
+        discretized_gap_m=actual_gap,
+        gap_discretization_ratio=gap_ratio,
+        num_blades=params.num_blades,
+        dielectric_force_status=diel_status,
         extruded_2d_blade_force_at_matched_dx_n=float(f_2d_extruded_matched),
         end_fringing_ratio_3d_to_extruded_2d=end_fringing_ratio,
     )
 
 
+def run_3d_enclosure_clearance_sweep(
+    clearance_multipliers: Tuple[float, ...] = (1.0, 1.5, 2.0),
+    base_params: Optional[ExodusPatentParameters] = None,
+    dx_3d_m: float = 0.002,
+    dy_3d_m: float = 0.002,
+    dz_3d_m: float = 0.004,
+) -> List[Dict[str, float]]:
+    """Sweep outer shielding enclosure clearance U in 3D to evaluate boundary influence."""
+    if base_params is None:
+        base_params = ExodusPatentParameters.figs_4_to_8_schematic()
+    base_mx = base_params.enclosure_margin_x_m
+    base_my = base_params.enclosure_margin_y_m
+    results: List[Dict[str, float]] = []
+    for mult in clearance_multipliers:
+        p = replace(
+            base_params,
+            enclosure_margin_x_m=base_mx * mult,
+            enclosure_margin_y_m=base_my * mult,
+        )
+        res = solve_exodus_electrostatics_3d(
+            p, dx_3d_m=dx_3d_m, dy_3d_m=dy_3d_m, dz_3d_m=dz_3d_m
+        )
+        results.append({
+            "clearance_multiplier": float(mult),
+            "margin_x_m": float(base_mx * mult),
+            "margin_y_m": float(base_my * mult),
+            "blade_force_x_n": float(res.finite_3d_blade_force_x_n),
+            "ground_force_x_n": float(res.finite_3d_ground_force_x_n),
+            "enclosure_wall_force_x_n": float(res.finite_3d_enclosure_direct_wall_force_x_n),
+            "net_system_force_x_n": float(res.finite_3d_net_system_force_x_n),
+            "relative_residual": float(res.finite_3d_relative_residual),
+            "end_fringing_ratio": float(res.end_fringing_ratio_3d_to_extruded_2d),
+        })
+    return results
+
+
+def run_3d_end_clearance_sweep(
+    margin_z_values: Tuple[float, ...] = (0.010, 0.020, 0.040),
+    base_params: Optional[ExodusPatentParameters] = None,
+    dx_3d_m: float = 0.002,
+    dy_3d_m: float = 0.002,
+    dz_3d_m: float = 0.004,
+) -> List[Dict[str, float]]:
+    """Sweep end clearance margin along z in 3D to evaluate electrode end boundary influence."""
+    if base_params is None:
+        base_params = ExodusPatentParameters.figs_4_to_8_schematic()
+    results: List[Dict[str, float]] = []
+    for mz in margin_z_values:
+        p = replace(base_params, enclosure_margin_z_m=mz)
+        res = solve_exodus_electrostatics_3d(
+            p, dx_3d_m=dx_3d_m, dy_3d_m=dy_3d_m, dz_3d_m=dz_3d_m, margin_z_m=mz
+        )
+        results.append({
+            "margin_z_m": float(mz),
+            "blade_force_x_n": float(res.finite_3d_blade_force_x_n),
+            "ground_force_x_n": float(res.finite_3d_ground_force_x_n),
+            "enclosure_wall_force_x_n": float(res.finite_3d_enclosure_direct_wall_force_x_n),
+            "net_system_force_x_n": float(res.finite_3d_net_system_force_x_n),
+            "relative_residual": float(res.finite_3d_relative_residual),
+            "end_fringing_ratio": float(res.end_fringing_ratio_3d_to_extruded_2d),
+        })
+    return results
+
+
 def run_3d_mesh_convergence_study(
-    spacings: Tuple[Tuple[float, float], ...] = ((0.0020, 0.0040), (0.0015, 0.0030), (0.0012, 0.0025)),
+    spacings: Tuple[Tuple[float, float], ...] = (
+        (0.0020, 0.0040),
+        (0.0015, 0.0030),
+        (0.0012, 0.0025),
+    ),
     base_params: Optional[ExodusPatentParameters] = None,
 ) -> List[Finite3DModelResult]:
-    """Run a 3D mesh refinement convergence study across multiple (dx=dy, dz) spacings."""
+    """Run a 3D mesh refinement convergence study across multiple (dx=dy, dz) spacings.
+
+    Calculates:
+        - 3D forces on blade, ground, direct outer walls, and net momentum residual
+        - Step-to-step relative change delta_k = |F_k - F_{k-1}| / |F_k|
+        - Discretization metrics (tip width and gap ratios)
+        - Richardson extrapolated continuum limit (from the finest pair)
+        - Estimated discretization truncation uncertainty percent
+    """
     if base_params is None:
-        base_params = ExodusPatentParameters()
-    return [
-        solve_exodus_electrostatics_3d(base_params, dx_3d_m=dx, dy_3d_m=dx, dz_3d_m=dz)
-        for dx, dz in spacings
-    ]
+        base_params = ExodusPatentParameters.figs_4_to_8_schematic()
+
+    results: List[Finite3DModelResult] = []
+    prev_blade = None
+    for dx, dz in spacings:
+        res = solve_exodus_electrostatics_3d(
+            base_params, dx_3d_m=dx, dy_3d_m=dx, dz_3d_m=dz
+        )
+        blade_f = res.finite_3d_blade_force_x_n
+        rel_chg = (
+            abs(blade_f - prev_blade) / abs(blade_f)
+            if prev_blade is not None
+            else 0.0
+        )
+        prev_blade = blade_f
+        res = replace(res, relative_change_blade_to_prev=float(rel_chg))
+        results.append(res)
+
+    if len(results) >= 2:
+        f_coarse = results[-2].finite_3d_blade_force_x_n
+        f_fine = results[-1].finite_3d_blade_force_x_n
+        r = results[-2].dx_m / results[-1].dx_m
+        p_order = 1.0  # Conservative first-order apparent rate near corners
+        f_extrap = f_fine + (f_fine - f_coarse) / (r ** p_order - 1.0)
+        disc_err = (
+            abs(f_extrap - f_fine) / abs(f_extrap) if abs(f_extrap) > 0 else 0.0
+        )
+        updated = []
+        for r_res in results:
+            updated.append(
+                replace(
+                    r_res,
+                    richardson_extrapolated_blade_3d_n=float(f_extrap),
+                    estimated_discretization_error_percent=float(disc_err * 100.0),
+                )
+            )
+        results = updated
+
+    return results
 
 
 
@@ -1434,6 +1788,9 @@ def generate_exodus_patent_manifest(
     fig21_ex, fig21_ey, fig21_emag = compute_electric_fields(fig21_grid, fig21_pot)
     fig21_h0 = compute_h0_whole_apparatus_ledger(fig21_grid, fig21_ex, fig21_ey)
     fig21_h1 = compute_h1_patent_prediction(fig21_grid, fig21_ex, fig21_ey, fig21_emag)
+    fig21_3d = solve_exodus_electrostatics_3d(
+        fig21_params, dx_3d_m=0.003, dy_3d_m=0.003, dz_3d_m=0.006
+    )
 
     manifest: Dict[str, Any] = {
         "manifest_schema_version": "1.2.0",
@@ -1495,20 +1852,69 @@ def generate_exodus_patent_manifest(
                 float(result.finite_3d_model.dy_m),
                 float(result.finite_3d_model.dz_m),
             ],
-            "solver_residual": float(result.finite_3d_model.solver_residual),
-            "true_3d_blade_force_x_n": float(result.finite_3d_model.true_3d_blade_force_x_n),
-            "true_3d_ground_force_x_n": float(result.finite_3d_model.true_3d_ground_force_x_n),
-            "true_3d_dielectric_force_x_n": float(result.finite_3d_model.true_3d_dielectric_force_x_n),
-            "true_3d_enclosure_reaction_x_n": float(result.finite_3d_model.true_3d_enclosure_force_x_n),
-            "true_3d_net_system_force_x_n": float(result.finite_3d_model.true_3d_net_system_force_x_n),
-            "true_3d_relative_residual": float(result.finite_3d_model.true_3d_relative_residual),
-            "true_3d_is_conserved": bool(result.finite_3d_model.true_3d_is_conserved),
+            "linear_algebra_solver_residual": float(result.finite_3d_model.solver_residual),
+            "discrete_momentum_closure_residual_micro_n": float(
+                abs(result.finite_3d_model.finite_3d_net_system_force_x_n) * 1e6
+            ),
+            "target_patent_effect_scale_micro_n": 237.0,
+            "target_effect_ratio": float(
+                abs(result.finite_3d_model.finite_3d_net_system_force_x_n)
+                / result.finite_3d_model.target_effect_scale_n
+            ),
+            "conservation_status": result.finite_3d_model.finite_3d_conservation_status,
+            "is_conserved_within_target_budget": bool(result.finite_3d_model.finite_3d_is_conserved),
+            "finite_3d_blade_force_x_n": float(result.finite_3d_model.finite_3d_blade_force_x_n),
+            "finite_3d_ground_force_x_n": float(result.finite_3d_model.finite_3d_ground_force_x_n),
+            "finite_3d_dielectric_force_x_n": float(result.finite_3d_model.finite_3d_dielectric_force_x_n),
+            "dielectric_force_status": result.finite_3d_model.dielectric_force_status,
+            "finite_3d_enclosure_direct_wall_force_x_n": float(
+                result.finite_3d_model.finite_3d_enclosure_direct_wall_force_x_n
+            ),
+            "finite_3d_enclosure_inner_contour_force_x_n": float(
+                result.finite_3d_model.finite_3d_enclosure_inner_contour_force_x_n
+            ),
+            "direct_wall_to_contour_agreement_rel": float(
+                result.finite_3d_model.finite_3d_direct_wall_to_contour_agreement_rel
+            ),
+            "direct_wall_tractions_breakdown_n": {
+                "left_wall_x_n": float(
+                    result.finite_3d_model.finite_3d_direct_wall_tractions.left_wall_force_x_n
+                ),
+                "right_wall_x_n": float(
+                    result.finite_3d_model.finite_3d_direct_wall_tractions.right_wall_force_x_n
+                ),
+                "bottom_wall_x_n": float(
+                    result.finite_3d_model.finite_3d_direct_wall_tractions.bottom_wall_force_x_n
+                ),
+                "top_wall_x_n": float(
+                    result.finite_3d_model.finite_3d_direct_wall_tractions.top_wall_force_x_n
+                ),
+                "back_wall_x_n": float(
+                    result.finite_3d_model.finite_3d_direct_wall_tractions.back_wall_force_x_n
+                ),
+                "front_wall_x_n": float(
+                    result.finite_3d_model.finite_3d_direct_wall_tractions.front_wall_force_x_n
+                ),
+                "total_enclosure_wall_x_n": float(
+                    result.finite_3d_model.finite_3d_direct_wall_tractions.total_enclosure_force_x_n
+                ),
+            },
+            "finite_3d_net_system_force_x_n": float(result.finite_3d_model.finite_3d_net_system_force_x_n),
+            "finite_3d_relative_residual": float(result.finite_3d_model.finite_3d_relative_residual),
             "extruded_2d_blade_force_at_matched_dx_n": float(
                 result.finite_3d_model.extruded_2d_blade_force_at_matched_dx_n
             ),
             "end_fringing_ratio_3d_to_extruded_2d": float(
                 result.finite_3d_model.end_fringing_ratio_3d_to_extruded_2d
             ),
+            "geometry_discretization_metrics": {
+                "target_tip_width_m": float(result.params.blade_thickness_m),
+                "discretized_tip_width_m": float(result.finite_3d_model.discretized_tip_width_m),
+                "tip_width_discretization_ratio": float(result.finite_3d_model.tip_width_discretization_ratio),
+                "target_gap_m": float(result.params.gap_spacing_m),
+                "discretized_gap_m": float(result.finite_3d_model.discretized_gap_m),
+                "gap_discretization_ratio": float(result.finite_3d_model.gap_discretization_ratio),
+            },
         },
         "h1_patent_alternative_prediction": {
             "transcribed_formula": "F = epsilon_0 * (E2^2 * A2 - E1^2 * A1)",
@@ -1542,6 +1948,27 @@ def generate_exodus_patent_manifest(
             "h0_net_system_force_x_3d_extruded_n": float(fig21_h0.net_system_force_x.force_3d_extruded_n),
             "h1_predicted_force_3d_extruded_n": float(fig21_h1.predicted_force_3d_extruded_n),
             "dimensional_status": "EXTRUDED_2D_APPROXIMATION_NOT_VALIDATED_FOR_PHYSICAL_FIG21_ARTICLE",
+        },
+        "fig21_nine_blade_3d_finite_model": {
+            "embodiment_id": fig21_params.embodiment_id,
+            "num_blades": fig21_params.num_blades,
+            "dielectric_relative_permittivity_assumed": float(fig21_params.dielectric_relative_permittivity),
+            "finite_blade_length_m": float(fig21_3d.finite_blade_length_m),
+            "grid_dimensions": [fig21_3d.nx, fig21_3d.ny, fig21_3d.nz],
+            "linear_algebra_solver_residual": float(fig21_3d.solver_residual),
+            "discrete_momentum_closure_residual_micro_n": float(
+                abs(fig21_3d.finite_3d_net_system_force_x_n) * 1e6
+            ),
+            "finite_3d_blade_force_x_n": float(fig21_3d.finite_3d_blade_force_x_n),
+            "finite_3d_ground_force_x_n": float(fig21_3d.finite_3d_ground_force_x_n),
+            "finite_3d_dielectric_force_x_n": float(fig21_3d.finite_3d_dielectric_force_x_n),
+            "dielectric_force_status": fig21_3d.dielectric_force_status,
+            "finite_3d_enclosure_direct_wall_force_x_n": float(
+                fig21_3d.finite_3d_enclosure_direct_wall_force_x_n
+            ),
+            "finite_3d_net_system_force_x_n": float(fig21_3d.finite_3d_net_system_force_x_n),
+            "finite_3d_relative_residual": float(fig21_3d.finite_3d_relative_residual),
+            "end_fringing_ratio_3d_to_extruded_2d": float(fig21_3d.end_fringing_ratio_3d_to_extruded_2d),
         },
         "evaluated_controls_and_contextual_literature": {
             "polarity_reversal_evaluated": bool(result.controls.polarity_reversal_evaluated),
@@ -1590,13 +2017,16 @@ def generate_exodus_patent_manifest(
         },
         "scientific_disposition": {
             "theoretical_h0_status": "CONSERVED_ZERO_NET_MOMENTUM_IN_CLOSED_SYSTEM",
-            "computational_h0_status": "VERIFIED_BY_DIRECT_WALL_TRACTION_AND_3D_STRESS_INTEGRATION",
+            "computational_h0_status": "EVALUATED_2D_CONSERVED_AND_FINITE_3D_APPROXIMATION",
+            "force_convergence_status": "ASYMPTOTIC_2D_COMMENSURATE_CONVERGENCE_ESTABLISHED_3D_APPROXIMATE_FINITE_DIFFERENCE",
             "model_h1_status": "REFUTED_DERIVATION_OMITS_HALF_FACTOR_AND_REACTION_SURFACES",
             "physical_thrust_measurement": "NOT_MEASURED_AND_NOT_EVALUATED_NUMERICAL_SIMULATION_ONLY",
             "epistemic_warning": (
                 "An educational field visualizer or patent issuance does NOT establish anomalous propellantless thrust. "
                 "Closed-surface Maxwell stress integration confirms zero net momentum transfer in a closed static system. "
                 "The patent's Eq. (11) calculation omits reaction stresses and the factor of 1/2. "
+                "All 3D results represent finite-length numerical approximations, not physical experimental measurements; "
+                "physical geometry accuracy and convergence remain UNVERIFIED pending independent laboratory measurements. "
                 "Cross-apparatus literature comparisons (Tajmar & Schreiber 2020 at 10 kV vs Patent FIG. 21 at 25 kV) "
                 "are contextual only; corona/ion-wind, lead-wire forces, and chamber Coulomb coupling are candidate "
                 "confounders requiring experimental discrimination rather than established causes."
