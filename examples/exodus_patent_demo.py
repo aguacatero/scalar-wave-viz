@@ -139,8 +139,8 @@ def run_exodus_demo(
         "H0 2D Extr.\nGround (102)",
         "H0 2D Extr.\nDirect Wall",
         "H0 2D Extr.\nNet System",
-        "Finite 3D Approx\nBlade (h0=1.27mm)",
-        "Finite 3D Approx\nNet (683 µN)",
+        f"Finite 3D Approx\nBlade (h0={f3d.dx_m * 1e3:.2f}mm)",
+        f"Finite 3D Approx\nNet ({abs(f3d.finite_3d_net_system_force_x_n) * 1e6:.0f} µN)",
         "H1 Eq.(11)\nQuadrature",
         "H1 0.5x Eq.(11)\n(no reactions)",
     ]

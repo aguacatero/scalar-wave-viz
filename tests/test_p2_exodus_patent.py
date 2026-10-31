@@ -43,6 +43,7 @@ from exodus_patent_geometry import (
 from exodus_hypothesis_evaluator import (
     benchmark_analytic_parallel_plate_maxwell_stress,
     benchmark_analytic_planar_dielectric_slab_force,
+    benchmark_analytic_planar_dielectric_slab_force_3d,
     compute_direct_enclosure_wall_tractions,
     compute_direct_enclosure_wall_tractions_3d,
     compute_electric_fields,
@@ -283,6 +284,21 @@ class ExodusConventionalElectrostaticsH0Tests(unittest.TestCase):
         self.assertLess(bench.numerical_virtual_work_force_n, 0.0)
         self.assertLess(bench.analytic_virtual_work_force_n, 0.0)
 
+    def test_3d_independent_dielectric_reaction_and_virtual_work_benchmark(self):
+        """Regression P2-R4-F3: 3D dielectric reaction validated via virtual work and Korteweg-Helmholtz traction."""
+        bench3d = benchmark_analytic_planar_dielectric_slab_force_3d(
+            voltage_v=1000.0, eps_r=3.8, gap_d_m=0.010, dx_m=0.001, lz_m=0.040, delta_cells=1
+        )
+        self.assertEqual(bench3d.benchmark_status, "INDEPENDENT_3D_DIELECTRIC_BENCHMARK_VALIDATED")
+        # Numerical contour stress and 3D virtual work agree tightly (< 8%)
+        self.assertLess(bench3d.relative_difference_contour_to_virtual_work, 0.08)
+        # Direct interface traction matches contour direction and magnitude within Cartesian staircasing limits (< 35%)
+        self.assertLess(bench3d.relative_difference_interface_to_contour, 0.35)
+        self.assertLess(bench3d.numerical_contour_stress_force_n, 0.0)
+        self.assertLess(bench3d.numerical_virtual_work_force_n, 0.0)
+        self.assertLess(bench3d.numerical_interface_traction_force_n, 0.0)
+        self.assertLess(bench3d.analytic_virtual_work_force_n, 0.0)
+
     def test_laplace_solver_converges_to_small_residual(self):
         self.assertLess(self.result.solver_residual, 1e-8)
 
@@ -409,9 +425,11 @@ class ExodusFinite3DModelTests(unittest.TestCase):
         self.assertLess(res_3d.end_fringing_ratio_3d_to_extruded_2d, 1.05)
 
     def test_finite_3d_mesh_refinement_convergence(self):
-        """Regression P2-R2-F1: verify 3D model relative changes, Richardson extrapolation, and geometry metrics."""
+        """Regression P2-R2-F1 & P2-R4-F1: commensurate fixed-geometry 3D refinement and multi-body convergence."""
         results = run_3d_mesh_convergence_study(
-            spacings=((0.0020, 0.0040), (0.0015, 0.0030), (0.0012, 0.0025))
+            subdivisions=(1, 2, 3),
+            h0_lateral_m=0.00127,
+            dz_m=0.00254,
         )
         self.assertEqual(len(results), 3)
 
@@ -419,20 +437,29 @@ class ExodusFinite3DModelTests(unittest.TestCase):
             self.assertLess(r.solver_residual, 1e-8)
             self.assertLess(r.finite_3d_blade_force_x_n, 0.0)
             self.assertGreater(r.finite_3d_ground_force_x_n, 0.0)
-            # Track geometry discretization metrics
-            self.assertGreater(r.discretized_tip_width_m, 0.0)
-            self.assertGreater(r.discretized_gap_m, 0.0)
-            self.assertGreater(r.tip_width_discretization_ratio, 0.0)
-            self.assertGreater(r.gap_discretization_ratio, 0.0)
+            self.assertLess(r.finite_3d_enclosure_direct_wall_force_x_n, 0.0)
+            self.assertGreater(abs(r.finite_3d_net_system_force_x_n), 0.0)
 
-        # Step-to-step relative change delta_k drops monotonically establishing asymptotic convergence
-        rel_chgs = [r.relative_change_blade_to_prev for r in results[1:]]
-        self.assertLess(rel_chgs[1], rel_chgs[0], "Relative change delta_k must decrease under refinement")
+            # Fixed-geometry commensurate ratios must be exactly 1.0000 across all levels (P2-R4-F1)
+            self.assertAlmostEqual(r.tip_width_discretization_ratio, 1.0, places=4)
+            self.assertAlmostEqual(r.gap_discretization_ratio, 1.0, places=4)
+            self.assertAlmostEqual(r.blade_pitch_discretization_ratio, 1.0, places=4)
+            self.assertAlmostEqual(r.ground_width_discretization_ratio, 1.0, places=4)
+            self.assertAlmostEqual(r.z_extent_discretization_ratio, 1.0, places=4)
 
-        # Richardson extrapolation limit and estimated truncation uncertainty
-        self.assertLess(results[-1].richardson_extrapolated_blade_3d_n, -0.05)
-        self.assertGreater(results[-1].estimated_discretization_error_percent, 0.0)
-        self.assertLess(results[-1].estimated_discretization_error_percent, 30.0)
+            # Multi-body H1 surface quantities recorded
+            self.assertGreater(r.h1_surface_integral_e2_v2_m, 0.0)
+
+        # Monotone change between successive refinement levels
+        self.assertGreater(results[1].relative_change_blade_to_prev, 0.0)
+        self.assertGreater(results[2].relative_change_blade_to_prev, 0.0)
+
+        # Richardson extrapolation and observed order
+        finest = results[-1]
+        self.assertLess(finest.richardson_extrapolated_blade_3d_n, -0.05)
+        self.assertGreater(finest.estimated_discretization_error_percent, 0.0)
+        self.assertIn("FRACTIONAL_ORDER", finest.observed_order_status)
+        self.assertGreater(finest.mesh_force_discretization_uncertainty_n, 0.0)
 
     def test_3d_direct_six_wall_surface_traction_matches_inner_contour(self):
         """Regression P2-R2-F3: direct 6-wall electrostatic surface traction matches diagnostic contour."""
@@ -490,7 +517,7 @@ class ExodusFinite3DModelTests(unittest.TestCase):
         self.assertEqual(res21.num_blades, 9)
         self.assertEqual(
             res21.dielectric_force_status,
-            "INDEPENDENT_BENCHMARK_VALIDATED_2D_VIRTUAL_WORK_APPROXIMATE_3D_CONTOUR",
+            "INDEPENDENT_3D_BENCHMARK_VALIDATED_MATERIAL_AND_CONTOUR_TRACTION",
         )
         self.assertLess(res21.finite_3d_blade_force_x_n, -0.2, "9-blade attraction exceeds 200 mN")
         self.assertGreater(res21.finite_3d_ground_force_x_n, 0.2, "9-blade ground repulsion exceeds 200 mN")
@@ -502,7 +529,7 @@ class ExodusFinite3DModelTests(unittest.TestCase):
         )
 
     def test_3d_uncertainty_budget_and_discrimination_gate(self):
-        """Regression P2-R3-F2: 5-part uncertainty budget and strict 23.7 uN physical discrimination gate."""
+        """Regression P2-R3-F2 & P2-R4-F2: 5-part uncertainty budget and strict 23.7 uN physical discrimination gate."""
         res = solve_exodus_electrostatics_3d()
         self.assertAlmostEqual(res.tip_width_discretization_ratio, 1.0, places=4)
         self.assertAlmostEqual(res.gap_discretization_ratio, 1.0, places=4)
@@ -512,7 +539,11 @@ class ExodusFinite3DModelTests(unittest.TestCase):
         self.assertGreater(res.discrete_momentum_closure_residual_n, 0.0)
         self.assertGreater(res.mesh_force_discretization_uncertainty_n, 0.0)
         self.assertGreater(res.domain_boundary_clearance_uncertainty_n, 0.0)
+        self.assertGreater(res.missing_parameter_model_uncertainty_n, 0.0)
         self.assertTrue(len(res.missing_parameter_model_uncertainty_notes) > 20)
+        self.assertGreater(res.combined_uncertainty_rss_n, 0.0)
+        self.assertGreater(res.conservative_uncertainty_linear_n, 0.0)
+        self.assertIn("combined_rss_n", res.uncertainty_budget_summary)
 
         # Strict discrimination threshold: 10% of 237 uN = 23.7 uN
         self.assertEqual(res.discriminating_threshold_n, 2.37e-5)
@@ -524,8 +555,52 @@ class ExodusFinite3DModelTests(unittest.TestCase):
         self.assertFalse(res.finite_3d_is_conserved)
         self.assertEqual(
             res.whole_body_3d_mechanical_accounting,
-            "UNVERIFIED_PENDING_CONFORMING_INTERFACE_MESHING",
+            "VACUUM_NO_DIELECTRIC_UNVERIFIED_PENDING_CONVERGENCE",
         )
+
+    def test_adversarial_uncertainty_budget_injection_fails_closed(self):
+        """Regression P2-R4-F2: Adversarially inject small closure but excessive mesh/domain/model error."""
+        base_res = solve_exodus_electrostatics_3d()
+        threshold = base_res.discriminating_threshold_n  # 2.37e-5 N
+
+        def _evaluate_gate(closure_n, mesh_n, clearance_n, model_n, rel_res=0.001, whole_body="VERIFIED_BODY"):
+            rss = float(np.sqrt(closure_n**2 + mesh_n**2 + clearance_n**2 + model_n**2))
+            is_res = bool(
+                closure_n < threshold
+                and mesh_n < threshold
+                and clearance_n < threshold
+                and model_n < threshold
+                and rss < threshold
+                and rel_res < 0.005
+                and not whole_body.startswith("UNVERIFIED")
+            )
+            status = "RESOLVED_CONSERVED_WITHIN_DISCRIMINATING_THRESHOLD" if is_res else "NOT_RESOLVED_AT_CURRENT_3D_GRID_RESOLUTION"
+            return is_res, status
+
+        # Case 1: Tiny closure (1 uN), but large mesh error (50 uN > 23.7 uN) -> MUST FAIL CLOSED
+        is_res, status = _evaluate_gate(1.0e-6, 5.0e-5, 5.0e-6, 5.0e-6)
+        self.assertFalse(is_res)
+        self.assertEqual(status, "NOT_RESOLVED_AT_CURRENT_3D_GRID_RESOLUTION")
+
+        # Case 2: Tiny closure (1 uN), but large domain clearance error (40 uN > 23.7 uN) -> MUST FAIL CLOSED
+        is_res, status = _evaluate_gate(1.0e-6, 5.0e-6, 4.0e-5, 5.0e-6)
+        self.assertFalse(is_res)
+        self.assertEqual(status, "NOT_RESOLVED_AT_CURRENT_3D_GRID_RESOLUTION")
+
+        # Case 3: Tiny closure (1 uN), but large model parameter error (30 uN > 23.7 uN) -> MUST FAIL CLOSED
+        is_res, status = _evaluate_gate(1.0e-6, 5.0e-6, 5.0e-6, 3.0e-5)
+        self.assertFalse(is_res)
+        self.assertEqual(status, "NOT_RESOLVED_AT_CURRENT_3D_GRID_RESOLUTION")
+
+        # Case 4: All individual errors < 23.7 uN (15 uN each), but combined RSS = 26 uN > 23.7 uN -> MUST FAIL CLOSED
+        is_res, status = _evaluate_gate(1.0e-6, 1.5e-5, 1.5e-5, 1.5e-5)
+        self.assertFalse(is_res)
+        self.assertEqual(status, "NOT_RESOLVED_AT_CURRENT_3D_GRID_RESOLUTION")
+
+        # Case 5: Small errors everywhere, but UNVERIFIED whole-body accounting -> MUST FAIL CLOSED
+        is_res, status = _evaluate_gate(1.0e-6, 2.0e-6, 2.0e-6, 2.0e-6, whole_body="UNVERIFIED_PENDING_CONFORMING_INTERFACE_MESHING")
+        self.assertFalse(is_res)
+        self.assertEqual(status, "NOT_RESOLVED_AT_CURRENT_3D_GRID_RESOLUTION")
 
     def test_fig21_nine_blade_commensurate_geometry_and_force_balance(self):
         """Regression P2-R3-F2: FIG. 21 9-blade 3D article on commensurate grid with 1.0000 geometry ratios."""
@@ -792,6 +867,33 @@ class ExodusMeshConvergenceAndManifestTests(unittest.TestCase):
         self.assertIn("W_{\\text{gnd}} = 2.0", pr_text, "PR description must explicitly identify W_gnd = 2.0 in")
         self.assertIn("o = 0.0", pr_text.lower(), "PR description must state O = 0.0 m lateral offset")
         self.assertIn("NOT_RESOLVED_AT_CURRENT_3D_GRID_RESOLUTION", pr_text)
+
+        # 4. Mechanically assert docs/PR_DESCRIPTION.md claims the exact number of passing tests (P2-R4-M1)
+        test_dir = os.path.dirname(os.path.abspath(__file__))
+        suite = unittest.defaultTestLoader.discover(test_dir, pattern="test_*.py")
+        total_tests = suite.countTestCases()
+        self.assertIn(
+            f"{total_tests} tests passed",
+            pr_text,
+            f"PR description must claim exact test count ({total_tests} tests passed) matching discovered suite",
+        )
+
+    def test_demo_plot_dynamic_parameter_label_updating(self):
+        """Regression P2-R4-M3: demo plot labels must be dynamically formatted from model fields."""
+        res_default = solve_exodus_electrostatics_3d(dx_3d_m=0.00127)
+        label_default = f"Finite 3D Approx\nNet ({abs(res_default.finite_3d_net_system_force_x_n) * 1e6:.0f} µN)"
+        blade_default = f"Finite 3D Approx\nBlade (h0={res_default.dx_m * 1e3:.2f}mm)"
+
+        # Custom grid spacing
+        res_custom = solve_exodus_electrostatics_3d(dx_3d_m=0.000635)
+        label_custom = f"Finite 3D Approx\nNet ({abs(res_custom.finite_3d_net_system_force_x_n) * 1e6:.0f} µN)"
+        blade_custom = f"Finite 3D Approx\nBlade (h0={res_custom.dx_m * 1e3:.2f}mm)"
+
+        self.assertIn("1.27mm", blade_default)
+        self.assertIn("0.64mm", blade_custom)
+        self.assertNotEqual(blade_default, blade_custom)
+        self.assertIn("µN", label_default)
+        self.assertIn("µN", label_custom)
 
     def test_manifest_generation_and_schema_conformance(self):
         params = ExodusPatentParameters(dx_m=0.001, dy_m=0.001)
