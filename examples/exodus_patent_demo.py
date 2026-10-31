@@ -20,6 +20,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from exodus_hypothesis_evaluator import (
+    ExodusEvaluationResult,
     compute_electric_fields,
     compute_h0_whole_apparatus_ledger,
     evaluate_exodus_patent,
@@ -41,6 +42,24 @@ def get_current_git_shas() -> tuple[str, str]:
         checkout_sha = "UNKNOWN_CHECKOUT"
     head_sha = pr_head if pr_head else checkout_sha
     return head_sha, checkout_sha
+
+
+def format_demo_bar_chart_labels(result: ExodusEvaluationResult) -> list[str]:
+    """Format side-by-side force accounting bar chart labels dynamically from model results.
+
+    Addresses Finding P2-R4-M3 & P2-R5-M1.
+    """
+    f3d = result.finite_3d_model
+    return [
+        "H0 2D Extr.\nBlade (101)",
+        "H0 2D Extr.\nGround (102)",
+        "H0 2D Extr.\nDirect Wall",
+        "H0 2D Extr.\nNet System",
+        f"Finite 3D Approx\nBlade (h0={f3d.dx_m * 1e3:.2f}mm)",
+        f"Finite 3D Approx\nNet ({abs(f3d.finite_3d_net_system_force_x_n) * 1e6:.0f} µN)",
+        "H1 Eq.(11)\nQuadrature",
+        "H1 0.5x Eq.(11)\n(no reactions)",
+    ]
 
 
 def run_exodus_demo(
@@ -134,16 +153,7 @@ def run_exodus_demo(
     h1 = result.h1_prediction
     f3d = result.finite_3d_model
 
-    labels = [
-        "H0 2D Extr.\nBlade (101)",
-        "H0 2D Extr.\nGround (102)",
-        "H0 2D Extr.\nDirect Wall",
-        "H0 2D Extr.\nNet System",
-        f"Finite 3D Approx\nBlade (h0={f3d.dx_m * 1e3:.2f}mm)",
-        f"Finite 3D Approx\nNet ({abs(f3d.finite_3d_net_system_force_x_n) * 1e6:.0f} µN)",
-        "H1 Eq.(11)\nQuadrature",
-        "H1 0.5x Eq.(11)\n(no reactions)",
-    ]
+    labels = format_demo_bar_chart_labels(result)
     forces_mn = [
         h0.blade_force_x.force_3d_extruded_n * 1e3,
         h0.ground_force_x.force_3d_extruded_n * 1e3,
