@@ -1,6 +1,6 @@
 # Exodus patent comparison — source-bound research specification
 
-**Status: not yet an implemented patent reproduction.**
+**Status (2026-10-25): Phase P2 active on branch p2-patent-geometry-exodus-2026-10-25 (draft PR pending independent ChatGPT scientific review). Implements source-bound FIGS. 4–8 embodiment, parameter audit, H0 Maxwell-stress momentum accounting, H1 Eq. (11) transcription, and Tajmar & Schreiber (2020) null benchmark.**
 
 ## Primary sources
 

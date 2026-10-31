@@ -19,6 +19,12 @@ jobs:
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
           GITHUB_EVENT_NAME: ${{ github.event_name }}
         run: MPLBACKEND=Agg python examples/electrostatics_demo.py
+      - name: Run Exodus patent demo & generate manifest
+        env:
+          PR_SOURCE_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
+        run: MPLBACKEND=Agg python examples/exodus_patent_demo.py
       - name: Verify manifest provenance gate
         env:
           PR_SOURCE_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
@@ -35,6 +41,14 @@ jobs:
           if pr_sha:
               assert prov['pr_source_head_sha'] == pr_sha, f'pr_source_head_sha {prov[\"pr_source_head_sha\"]} != PR head {pr_sha}'
               assert m['git_commit'] == pr_sha, f'manifest git_commit {m[\"git_commit\"]} != PR head {pr_sha}'
+          with open('exodus_patent_manifest.json') as f2:
+              m2 = json.load(f2)
+          prov2 = m2.get('git_provenance', {})
+          print('Exodus P2 manifest provenance:', json.dumps(prov2, indent=2))
+          assert 'source_head_sha' in prov2 and prov2['source_head_sha'] != 'UNKNOWN', 'Missing P2 source_head_sha'
+          assert 'tested_checkout_sha' in prov2 and prov2['tested_checkout_sha'] != 'UNKNOWN', 'Missing P2 tested_checkout_sha'
+          if pr_sha:
+              assert prov2['source_head_sha'] == pr_sha, f'P2 source_head_sha {prov2[\"source_head_sha\"]} != PR head {pr_sha}'
           print('Manifest provenance gate passed.')
           "
       - uses: actions/upload-artifact@v4
@@ -43,5 +57,7 @@ jobs:
           path: |
             electrostatics_baseline.png
             electrostatics_manifest.json
+            exodus_patent_comparison.png
+            exodus_patent_manifest.json
           retention-days: 30
           if-no-files-found: error

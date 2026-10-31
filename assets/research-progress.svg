@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="740" height="122" viewBox="0 0 740 122" role="img" aria-labelledby="title description">
   <title id="title">Scientific roadmap: P0 and P1 scientifically accepted, P2 through P4 pending</title>
-  <desc id="description">Five acceptance-gated stages. P0 baseline accepted and merged; P1 scientific baseline accepted but awaiting owner-authorized merge; P2 through P4 pending. Review gates do not measure physical validity.</desc>
+  <desc id="description">Five acceptance-gated stages. P0 and P1 accepted and merged; P2 active (pending independent review); P3 through P4 pending. Review gates do not measure physical validity.</desc>
   <rect x="1" y="1" width="738" height="120" rx="12" fill="#ffffff" stroke="#cbd5e1" stroke-width="2"/>
   <text x="20" y="27" font-family="Arial, Helvetica, sans-serif" font-size="16" font-weight="700" fill="#0f172a">Scientific roadmap</text>
   <text x="720" y="27" text-anchor="end" font-family="Arial, Helvetica, sans-serif" font-size="14" fill="#475569">2 / 5 gates accepted</text>
