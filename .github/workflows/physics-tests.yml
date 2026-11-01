@@ -19,12 +19,18 @@ jobs:
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
           GITHUB_EVENT_NAME: ${{ github.event_name }}
         run: MPLBACKEND=Agg python examples/electrostatics_demo.py
+      - name: Run Exodus patent demo & generate manifest
+        env:
+          PR_SOURCE_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
+        run: MPLBACKEND=Agg python examples/exodus_patent_demo.py
       - name: Verify manifest provenance gate
         env:
           PR_SOURCE_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           python -c "
-          import json, os
+          import json, os, math
           with open('electrostatics_manifest.json') as f:
               m = json.load(f)
           prov = m.get('provenance', {})
@@ -35,7 +41,41 @@ jobs:
           if pr_sha:
               assert prov['pr_source_head_sha'] == pr_sha, f'pr_source_head_sha {prov[\"pr_source_head_sha\"]} != PR head {pr_sha}'
               assert m['git_commit'] == pr_sha, f'manifest git_commit {m[\"git_commit\"]} != PR head {pr_sha}'
-          print('Manifest provenance gate passed.')
+          with open('exodus_patent_manifest.json') as f2:
+              m2 = json.load(f2)
+          prov2 = m2.get('git_provenance', {})
+          print('Exodus P2 manifest provenance:', json.dumps(prov2, indent=2))
+          assert 'source_head_sha' in prov2 and prov2['source_head_sha'] != 'UNKNOWN', 'Missing P2 source_head_sha'
+          assert 'tested_checkout_sha' in prov2 and prov2['tested_checkout_sha'] != 'UNKNOWN', 'Missing P2 tested_checkout_sha'
+          assert prov2.get('governing_review') == 'P2_R8_REMEDIATION', f'Unexpected governing review: {prov2.get(\"governing_review\")}'
+          if pr_sha:
+              assert prov2['source_head_sha'] == pr_sha, f'P2 source_head_sha {prov2[\"source_head_sha\"]} != PR head {pr_sha}'
+
+          # Strict JSON finiteness check across manifests (P2-R8-F5)
+          def check_finiteness(obj, path=''):
+              if isinstance(obj, dict):
+                  for k, v in obj.items():
+                      check_finiteness(v, f'{path}.{k}')
+              elif isinstance(obj, list):
+                  for i, v in enumerate(obj):
+                      check_finiteness(v, f'{path}[{i}]')
+              elif isinstance(obj, float):
+                  assert math.isfinite(obj), f'Non-finite float at {path}: {obj}'
+
+          check_finiteness(m, 'electrostatics_manifest')
+          check_finiteness(m2, 'exodus_patent_manifest')
+
+          # Semantic consistency assertions for uncalibrated FIG. 21 fields (P2-R8-F5)
+          fig21 = m2.get('fig21_nine_blade_3d_finite_model', {})
+          u_budget = fig21.get('uncertainty_budget_5_part', {})
+          assert u_budget.get('domain_boundary_clearance_uncertainty_n') is None, 'domain_boundary_clearance_uncertainty_n must be null when uncalibrated'
+          assert fig21.get('domain_boundary_placement_sensitivity_n') is None, 'domain_boundary_placement_sensitivity_n must be null when uncalibrated'
+          assert u_budget.get('combined_uncertainty_rss_n') is None, 'combined_uncertainty_rss_n must be null when uncalibrated'
+          assert u_budget.get('conservative_uncertainty_linear_n') is None, 'conservative_uncertainty_linear_n must be null when uncalibrated'
+          assert fig21.get('physical_scale_discrimination_status') == 'NOT_RESOLVED_AT_CURRENT_3D_GRID_RESOLUTION'
+          assert fig21.get('whole_body_3d_mechanical_accounting') == 'UNVERIFIED_PENDING_CONFORMING_INTERFACE_MESHING'
+
+          print('Manifest provenance and semantic integrity gates passed successfully.')
           "
       - uses: actions/upload-artifact@v4
         with:
@@ -43,5 +83,7 @@ jobs:
           path: |
             electrostatics_baseline.png
             electrostatics_manifest.json
+            exodus_patent_comparison.png
+            exodus_patent_manifest.json
           retention-days: 30
           if-no-files-found: error
