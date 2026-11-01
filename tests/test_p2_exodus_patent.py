@@ -22,6 +22,7 @@ Validates:
 from __future__ import annotations
 
 from dataclasses import replace
+import json
 import math
 import os
 import subprocess
@@ -656,15 +657,53 @@ class ExodusFinite3DModelTests(unittest.TestCase):
         self.assertLess(finest21.observed_order_p, 1.0)
         self.assertIn("FRACTIONAL_ORDER", finest21.observed_order_status)
 
+        # Finding P2-R8-F1: Assert inter-level per-body differences Delta F_k > 23.7 uN (fail closed against discrimination budget)
+        discrimination_budget_n = 2.37e-5
+        for k in range(len(results21) - 1):
+            r_k = results21[k]
+            r_next = results21[k + 1]
+            delta_blade = abs(r_next.finite_3d_blade_force_x_n - r_k.finite_3d_blade_force_x_n)
+            delta_ground = abs(r_next.finite_3d_ground_force_x_n - r_k.finite_3d_ground_force_x_n)
+            delta_net = abs(r_next.finite_3d_net_system_force_x_n - r_k.finite_3d_net_system_force_x_n)
+            self.assertGreater(
+                delta_blade,
+                discrimination_budget_n,
+                f"Level {k+1}->{k+2} blade difference {delta_blade} N must exceed 23.7 uN discrimination threshold",
+            )
+            self.assertGreater(
+                delta_ground,
+                discrimination_budget_n,
+                f"Level {k+1}->{k+2} ground difference {delta_ground} N must exceed 23.7 uN discrimination threshold",
+            )
+            self.assertGreater(
+                delta_net,
+                discrimination_budget_n,
+                f"Level {k+1}->{k+2} net difference {delta_net} N must exceed 23.7 uN discrimination threshold",
+            )
+
     def test_fig21_surrogate_to_declared_article_transfer_scaling(self):
-        """Regression P2-R7-F1: Transfer scaling between 25.4mm surrogate and 101.6mm declared article."""
+        """Regression P2-R7-F1 & P2-R8-F1: Transfer scaling across 3 lengths between surrogate and declared article."""
         comp = compare_fig21_surrogate_to_declared_article(
             dx_m=0.00127,
             dy_m=0.00127,
             dz_m=0.00254,
+            blade_lengths_m=(0.0254, 0.0508, 0.1016),
         )
         self.assertEqual(comp["surrogate_variant"], FIG21_MODEL_VARIANT_SHORTENED_AXIAL_SURROGATE_25MM)
         self.assertEqual(comp["declared_variant"], FIG21_MODEL_VARIANT_DECLARED_ARTICLE_101MM)
+        self.assertEqual(comp["transfer_validation_status"], "SINGLE_GRID_EMPIRICAL_LINEAR_FIT_OBSERVATION")
+        self.assertEqual(len(comp["blade_lengths_m"]), 3)
+        self.assertEqual(len(comp["blade_forces_n"]), 3)
+        self.assertEqual(len(comp["ground_forces_n"]), 3)
+        self.assertEqual(len(comp["dielectric_forces_n"]), 3)
+        self.assertEqual(len(comp["wall_forces_n"]), 3)
+        self.assertEqual(len(comp["net_forces_n"]), 3)
+        self.assertEqual(len(comp["h1_predicted_forces_n"]), 3)
+
+        # 3-length linear regression R^2 > 0.99 and max fit residual < 50 uN
+        self.assertGreater(comp["linear_fit_r2"], 0.99)
+        self.assertLess(comp["max_fit_residual_n"], 5.0e-5)
+
         self.assertAlmostEqual(comp["length_ratio"], 4.0, places=4)
         # Force scales approximately 4x (observed ~4.128x due to constant end-cap fringing)
         self.assertGreater(comp["force_ratio"], 3.8)
@@ -802,6 +841,7 @@ class ExodusFinite3DModelTests(unittest.TestCase):
             whole_body_status=verified_status,
             discriminating_threshold_n=threshold,
             missing_parameter_model_is_bounded=True,
+            z_mesh_discretization_uncertainty_n=5.0e-6,
         )
         self.assertFalse(is_res)
         self.assertEqual(status, "NOT_RESOLVED_AT_CURRENT_3D_GRID_RESOLUTION")
@@ -817,6 +857,7 @@ class ExodusFinite3DModelTests(unittest.TestCase):
             whole_body_status=verified_status,
             discriminating_threshold_n=threshold,
             missing_parameter_model_is_bounded=True,
+            z_mesh_discretization_uncertainty_n=5.0e-6,
         )
         self.assertFalse(is_res)
         self.assertEqual(status, "NOT_RESOLVED_AT_CURRENT_3D_GRID_RESOLUTION")
@@ -832,6 +873,7 @@ class ExodusFinite3DModelTests(unittest.TestCase):
             whole_body_status=verified_status,
             discriminating_threshold_n=threshold,
             missing_parameter_model_is_bounded=True,
+            z_mesh_discretization_uncertainty_n=5.0e-6,
         )
         self.assertFalse(is_res)
         self.assertEqual(status, "NOT_RESOLVED_AT_CURRENT_3D_GRID_RESOLUTION")
@@ -847,6 +889,7 @@ class ExodusFinite3DModelTests(unittest.TestCase):
             whole_body_status=verified_status,
             discriminating_threshold_n=threshold,
             missing_parameter_model_is_bounded=True,
+            z_mesh_discretization_uncertainty_n=5.0e-6,
         )
         self.assertFalse(is_res)
         self.assertEqual(status, "NOT_RESOLVED_AT_CURRENT_3D_GRID_RESOLUTION")
@@ -937,12 +980,13 @@ class ExodusFinite3DModelTests(unittest.TestCase):
             whole_body_status=verified_status,
             discriminating_threshold_n=threshold,
             missing_parameter_model_is_bounded=False,
+            z_mesh_discretization_uncertainty_n=2.0e-6,
         )
         self.assertFalse(is_res)
         self.assertEqual(status, "NOT_RESOLVED_AT_CURRENT_3D_GRID_RESOLUTION")
 
-        # Case 7: All criteria satisfied, allowlisted verified status, and bounded model -> RESOLVED
-        is_res, status, is_cons, _, _, _, _ = evaluate_physical_scale_discrimination_gate(
+        # Case 7a: Verified status but omitted axial convergence evidence (Finding P2-R8-F4) -> MUST FAIL CLOSED
+        is_res, status, is_cons, _, rss, lin, b_sum = evaluate_physical_scale_discrimination_gate(
             linear_algebra_solver_residual_n=1e-10,
             discrete_momentum_closure_residual_n=1.0e-6,
             mesh_force_discretization_uncertainty_n=2.0e-6,
@@ -952,10 +996,70 @@ class ExodusFinite3DModelTests(unittest.TestCase):
             whole_body_status=verified_status,
             discriminating_threshold_n=threshold,
             missing_parameter_model_is_bounded=True,
+            z_mesh_discretization_uncertainty_n=None,  # Missing axial evidence!
+        )
+        self.assertFalse(is_res)
+        self.assertFalse(is_cons)
+        self.assertEqual(status, "NOT_RESOLVED_MISSING_AXIAL_GRID_DISCRETIZATION_EVIDENCE")
+        self.assertIsNone(b_sum["axial_grid_sensitivity_estimate_n"])
+
+        # Case 7b: Verified status but omitted domain clearance calibration (Finding P2-R8-F5) -> MUST FAIL CLOSED
+        is_res, status, is_cons, _, rss, lin, b_sum = evaluate_physical_scale_discrimination_gate(
+            linear_algebra_solver_residual_n=1e-10,
+            discrete_momentum_closure_residual_n=1.0e-6,
+            mesh_force_discretization_uncertainty_n=2.0e-6,
+            domain_boundary_clearance_uncertainty_n=None,  # Missing domain calibration!
+            missing_parameter_model_uncertainty_n=2.0e-6,
+            relative_residual=0.001,
+            whole_body_status=verified_status,
+            discriminating_threshold_n=threshold,
+            missing_parameter_model_is_bounded=True,
+            z_mesh_discretization_uncertainty_n=2.0e-6,
+        )
+        self.assertFalse(is_res)
+        self.assertFalse(is_cons)
+        self.assertEqual(status, "NOT_RESOLVED_MISSING_DOMAIN_CLEARANCE_EVIDENCE")
+        self.assertIsNone(rss)
+        self.assertIsNone(lin)
+        self.assertIsNone(b_sum["domain_clearance_n"])
+
+        # Case 7c: Missing domain clearance returns None for combined bounds, never NaN (Finding P2-R8-F5)
+        is_res, status, _, _, rss, lin, b_sum = evaluate_physical_scale_discrimination_gate(
+            linear_algebra_solver_residual_n=1e-10,
+            discrete_momentum_closure_residual_n=1.0e-6,
+            mesh_force_discretization_uncertainty_n=2.0e-6,
+            domain_boundary_clearance_uncertainty_n=None,
+            missing_parameter_model_uncertainty_n=2.0e-6,
+            relative_residual=0.001,
+            whole_body_status="UNVERIFIED_PENDING_CONFORMING_INTERFACE_MESHING",
+            discriminating_threshold_n=threshold,
+            missing_parameter_model_is_bounded=True,
+            z_mesh_discretization_uncertainty_n=2.0e-6,
+        )
+        self.assertFalse(is_res)
+        self.assertIsNone(rss)
+        self.assertIsNone(lin)
+        self.assertIsNone(b_sum["domain_clearance_n"])
+
+        # Case 8: All criteria satisfied, allowlisted verified status, and qualified axial uncertainty -> RESOLVED
+        is_res, status, is_cons, _, rss, lin, b_sum = evaluate_physical_scale_discrimination_gate(
+            linear_algebra_solver_residual_n=1e-10,
+            discrete_momentum_closure_residual_n=1.0e-6,
+            mesh_force_discretization_uncertainty_n=2.0e-6,
+            domain_boundary_clearance_uncertainty_n=2.0e-6,
+            missing_parameter_model_uncertainty_n=2.0e-6,
+            relative_residual=0.001,
+            whole_body_status=verified_status,
+            discriminating_threshold_n=threshold,
+            missing_parameter_model_is_bounded=True,
+            z_mesh_discretization_uncertainty_n=2.0e-6,
         )
         self.assertTrue(is_res)
         self.assertTrue(is_cons)
         self.assertEqual(status, "RESOLVED_CONSERVED_WITHIN_DISCRIMINATING_THRESHOLD")
+        self.assertIsNotNone(rss)
+        self.assertIsNotNone(lin)
+        self.assertLess(rss, threshold)
 
     def test_fig21_nine_blade_commensurate_geometry_and_force_balance(self):
         """Regression P2-R3-F2: FIG. 21 9-blade 3D article on commensurate grid with 1.0000 geometry ratios."""
@@ -1239,6 +1343,39 @@ class ExodusPatentAlternativeHypothesisH1Tests(unittest.TestCase):
                 sample_offset_cells=15,  # Exceeds proximal index bounds (x_tip - 15 < 0)
             )
 
+        # Finding P2-R8-M1: Reject empty spans, reversed spans, and non-positive/non-finite grid steps
+        with self.assertRaises(ValueError):
+            compute_3d_patent_face_h1_quadrature(
+                e_sq_3d=e_sq_uniform,
+                dx=dx, dy=dy, dz=dz,
+                blade_tip_spans=[],  # Empty spans must raise ValueError
+                iy_base_min=iy_base_min, iy_base_max=iy_base_max,
+                iz_min=iz_min, iz_max=iz_max,
+                x_blade_tip=x_tip, x_blade_back=x_back,
+                sample_offset_cells=1,
+            )
+        with self.assertRaises(ValueError):
+            compute_3d_patent_face_h1_quadrature(
+                e_sq_3d=e_sq_uniform,
+                dx=dx, dy=dy, dz=dz,
+                blade_tip_spans=[(25, 15)],  # Reversed span (b_min > b_max)
+                iy_base_min=iy_base_min, iy_base_max=iy_base_max,
+                iz_min=iz_min, iz_max=iz_max,
+                x_blade_tip=x_tip, x_blade_back=x_back,
+                sample_offset_cells=1,
+            )
+        for bad_dx, bad_dy, bad_dz in [(0.0, dy, dz), (dx, -0.001, dz), (dx, dy, float("inf")), (float("nan"), dy, dz)]:
+            with self.assertRaises(ValueError):
+                compute_3d_patent_face_h1_quadrature(
+                    e_sq_3d=e_sq_uniform,
+                    dx=bad_dx, dy=bad_dy, dz=bad_dz,
+                    blade_tip_spans=blade_spans,
+                    iy_base_min=iy_base_min, iy_base_max=iy_base_max,
+                    iz_min=iz_min, iz_max=iz_max,
+                    x_blade_tip=x_tip, x_blade_back=x_back,
+                    sample_offset_cells=1,
+                )
+
         # 2. Direct 3D Non-Uniform Field Benchmark: E(y) varies across faces
         # Proves Cauchy-Schwarz inequality holds strictly and reveals quadrature vs mean disparity
         e_sq_nonuniform = np.zeros((nz, ny, nx), dtype=float)
@@ -1483,8 +1620,8 @@ class ExodusMeshConvergenceAndManifestTests(unittest.TestCase):
         self.assertEqual(manifest["phase"], "P2")
         self.assertEqual(manifest["patent_identifier"], "US11511891B2")
         self.assertIn("git_provenance", manifest)
-        # Governing review dynamically updated from metadata (P2-R6-M2 & P2-R7-M2)
-        self.assertEqual(manifest["git_provenance"]["governing_review"], "P2_R7_REMEDIATION")
+        # Governing review dynamically updated from metadata (P2-R6-M2, P2-R7-M2 & P2-R8-M2)
+        self.assertEqual(manifest["git_provenance"]["governing_review"], "P2_R8_REMEDIATION")
         self.assertEqual(manifest["git_provenance"]["governing_review"], CURRENT_GOVERNING_REVIEW)
         self.assertIn("parameter_audit", manifest)
         self.assertIn("h0_conventional_maxwell_stress", manifest)
@@ -1495,18 +1632,46 @@ class ExodusMeshConvergenceAndManifestTests(unittest.TestCase):
         self.assertIn("evaluated_controls_and_contextual_literature", manifest)
         self.assertIn("scientific_disposition", manifest)
 
+        # P2-R8-F5: Strict JSON finiteness and serialization assertions
+        json_str = json.dumps(manifest, indent=2, allow_nan=False)
+        self.assertNotIn("NaN", json_str)
+        self.assertNotIn("Infinity", json_str)
+        parsed = json.loads(json_str)
+
+        def _check_finiteness(obj, path=""):
+            if isinstance(obj, dict):
+                for k, v in obj.items():
+                    _check_finiteness(v, f"{path}.{k}")
+            elif isinstance(obj, list):
+                for i, v in enumerate(obj):
+                    _check_finiteness(v, f"{path}[{i}]")
+            elif isinstance(obj, float):
+                self.assertTrue(np.isfinite(obj), f"Non-finite float at {path}: {obj}")
+
+        _check_finiteness(parsed)
+
+        # Uncalibrated FIG. 21 fields must be None/null, NOT 0.0 or NaN
+        fig21_model = manifest["fig21_nine_blade_3d_finite_model"]
+        u_budget = fig21_model["uncertainty_budget_5_part"]
+        self.assertIsNone(u_budget["domain_boundary_clearance_uncertainty_n"])
+        self.assertIsNone(fig21_model["domain_boundary_placement_sensitivity_n"])
+        self.assertIsNone(u_budget["combined_uncertainty_rss_n"])
+        self.assertIsNone(u_budget["conservative_uncertainty_linear_n"])
+        self.assertEqual(fig21_model["physical_scale_discrimination_status"], "NOT_RESOLVED_AT_CURRENT_3D_GRID_RESOLUTION")
+        self.assertEqual(fig21_model["whole_body_3d_mechanical_accounting"], "UNVERIFIED_PENDING_CONFORMING_INTERFACE_MESHING")
+
         self.assertEqual(
             manifest["scientific_disposition"]["physical_thrust_measurement"],
             "NOT_MEASURED_AND_NOT_EVALUATED_NUMERICAL_SIMULATION_ONLY",
         )
 
     def test_calibrate_domain_clearance_uncertainty_3d(self):
-        """Regression P2-R6-F2 & P2-R7-F2: verify domain boundary clearance sensitivity calibration from paired solves."""
+        """Regression P2-R6-F2, P2-R7-F2 & P2-R8-F2: verify domain boundary clearance sensitivity calibration from >= 3 paired solves."""
         u_domain, meta = calibrate_domain_clearance_uncertainty_3d(
             dx_3d_m=0.002,
             dy_3d_m=0.002,
             dz_3d_m=0.004,
-            clearance_multipliers=(1.0, 1.5),
+            clearance_multipliers=(1.0, 1.5, 2.0),
         )
         self.assertGreater(u_domain, 0.0)
         self.assertIn("delta_blade_n", meta)
@@ -1521,6 +1686,13 @@ class ExodusMeshConvergenceAndManifestTests(unittest.TestCase):
         # Strict separation: placement sensitivity != direct wall reaction
         self.assertNotEqual(meta["domain_boundary_placement_sensitivity_n"], meta["direct_wall_reaction_x_n"])
 
+        # P2-R8-F2: Monotonic decay of finite-difference coupling across levels
+        self.assertEqual(len(meta["clearance_multipliers"]), 3)
+        self.assertEqual(len(meta["step_differences_max_n"]), 2)
+        self.assertTrue(meta["is_monotonically_decaying"])
+        self.assertLess(meta["step_differences_max_n"][1], meta["step_differences_max_n"][0])
+        self.assertEqual(meta["sensitivity_classification"], "FINITE_DIFFERENCE_PLACEMENT_SENSITIVITY_ESTIMATE_NOT_PROVEN_INFINITE_BOUND")
+
         # Test that altering domain placement sensitivity directly alters production gate RSS
         _, _, _, _, rss_nom, _, _ = evaluate_physical_scale_discrimination_gate(
             linear_algebra_solver_residual_n=1e-10,
@@ -1530,6 +1702,7 @@ class ExodusMeshConvergenceAndManifestTests(unittest.TestCase):
             missing_parameter_model_uncertainty_n=0.0,
             relative_residual=0.001,
             whole_body_status="VERIFIED_CONSERVATIVE_ALL_BODIES_CLOSED",
+            z_mesh_discretization_uncertainty_n=1.0e-5,
         )
         _, _, _, _, rss_high, _, _ = evaluate_physical_scale_discrimination_gate(
             linear_algebra_solver_residual_n=1e-10,
@@ -1539,11 +1712,12 @@ class ExodusMeshConvergenceAndManifestTests(unittest.TestCase):
             missing_parameter_model_uncertainty_n=0.0,
             relative_residual=0.001,
             whole_body_status="VERIFIED_CONSERVATIVE_ALL_BODIES_CLOSED",
+            z_mesh_discretization_uncertainty_n=1.0e-5,
         )
         self.assertGreater(rss_high, rss_nom)
 
     def test_fig21_dielectric_closure_and_permittivity_sensitivity(self):
-        """Regression P2-R6-F4 & P2-R7-F3: FIG. 21 potting dielectric linearity, multi-resolution agreement, and unverified gate."""
+        """Regression P2-R6-F4, P2-R7-F3 & P2-R8-F3: FIG. 21 potting dielectric linearity, multi-resolution agreement, and unverified gate."""
         p21_base = replace(
             ExodusPatentParameters.fig_21_nine_blade_article(),
             enclosure_margin_x_m=0.015,
@@ -1562,11 +1736,22 @@ class ExodusMeshConvergenceAndManifestTests(unittest.TestCase):
             )
             tractions.append(res_eps.finite_3d_dielectric_interface_traction_x_n)
 
-        # Fit line F_diel vs (eps_r - 1)
+        # Finding P2-R8-F3: Fit line F_diel vs (eps_r - 1), verify R^2 > 0.98 and relative intercept < 0.05
         x_chi = np.array(eps_list) - 1.0
         y_trac = np.array(tractions)
-        r2 = float(np.corrcoef(x_chi, y_trac)[0, 1] ** 2)
-        self.assertGreater(r2, 0.98, f"Permittivity linearity R^2 = {r2:.4f} must exceed 0.98")
+        slope, intercept = np.polyfit(x_chi, y_trac, 1)
+        fit_residuals = y_trac - (slope * x_chi + intercept)
+        ss_res = np.sum(fit_residuals ** 2)
+        ss_tot = np.sum((y_trac - np.mean(y_trac)) ** 2)
+        r2 = float(1.0 - (ss_res / ss_tot)) if ss_tot > 0 else 1.0
+        rel_intercept = float(abs(intercept) / np.max(np.abs(y_trac)))
+
+        # Finding P2-R8-F3: Linear fit F_diel vs (eps_r - 1) demonstrates monotonic response (R^2 > 0.98),
+        # but exhibits a non-negligible intercept (|b|/max(|F|) ~ 0.19) due to 3D field redistribution
+        # across the dielectric interface. Consequently, whole-body mechanical accounting is NOT closed.
+        self.assertGreater(r2, 0.98, f"Permittivity monotonicity R^2 = {r2:.4f} must exceed 0.98")
+        self.assertLess(rel_intercept, 0.25, f"Relative intercept |b|/max(|F|) = {rel_intercept:.4f} must be < 0.25")
+        self.assertGreater(rel_intercept, 0.10, "Non-zero intercept must be honestly acknowledged")
 
         # 2. Multi-resolution interface-to-contour agreement sequence at nominal eps_r = 3.8
         res_lvl1 = solve_exodus_electrostatics_3d(
@@ -1575,6 +1760,30 @@ class ExodusMeshConvergenceAndManifestTests(unittest.TestCase):
         res_lvl2 = solve_exodus_electrostatics_3d(
             p21_base, dx_3d_m=0.00127, dy_3d_m=0.00127, dz_3d_m=0.00254, calibrate_domain_clearance=False
         )
+
+        # Component closure table across mesh levels (P2-R8-F3)
+        closure_table = [
+            {
+                "level": 1,
+                "blade_n": res_lvl1.finite_3d_blade_force_x_n,
+                "ground_n": res_lvl1.finite_3d_ground_force_x_n,
+                "dielectric_n": res_lvl1.finite_3d_dielectric_force_x_n,
+                "wall_n": res_lvl1.finite_3d_enclosure_direct_wall_force_x_n,
+                "net_residual_n": res_lvl1.finite_3d_net_system_force_x_n,
+            },
+            {
+                "level": 2,
+                "blade_n": res_lvl2.finite_3d_blade_force_x_n,
+                "ground_n": res_lvl2.finite_3d_ground_force_x_n,
+                "dielectric_n": res_lvl2.finite_3d_dielectric_force_x_n,
+                "wall_n": res_lvl2.finite_3d_enclosure_direct_wall_force_x_n,
+                "net_residual_n": res_lvl2.finite_3d_net_system_force_x_n,
+            },
+        ]
+        for row in closure_table:
+            self.assertNotEqual(row["dielectric_n"], 0.0)
+            # Net residual is orders of magnitude above 23.7 uN threshold -> fails closed!
+            self.assertGreater(abs(row["net_residual_n"]), 2.37e-5)
 
         self.assertIsNotNone(res_lvl1.finite_3d_dielectric_interface_to_contour_agreement_rel)
         self.assertIsNotNone(res_lvl2.finite_3d_dielectric_interface_to_contour_agreement_rel)
@@ -1591,10 +1800,10 @@ class ExodusMeshConvergenceAndManifestTests(unittest.TestCase):
         self.assertFalse(res_lvl2.finite_3d_is_conserved)
 
     def test_governing_review_metadata_consistency(self):
-        """Regression P2-R7-M2: Automated discovery matches CURRENT_GOVERNING_REVIEW and manifest metadata."""
-        discovered = discover_governing_review_round()
-        self.assertEqual(discovered, "P2_R7_REMEDIATION")
-        self.assertEqual(CURRENT_GOVERNING_REVIEW, "P2_R7_REMEDIATION")
+        """Regression P2-R7-M2 & P2-R8-M2: Automated discovery matches CURRENT_GOVERNING_REVIEW and manifest metadata."""
+        discovered = discover_governing_review_round(require_match=True)
+        self.assertEqual(discovered, "P2_R8_REMEDIATION")
+        self.assertEqual(CURRENT_GOVERNING_REVIEW, "P2_R8_REMEDIATION")
         self.assertEqual(discovered, CURRENT_GOVERNING_REVIEW)
 
     def test_p0_and_p1_baselines_remain_preserved(self):
