@@ -283,28 +283,29 @@ class Finite3DModelResult:
     richardson_extrapolated_blade_3d_n: float = 0.0
     estimated_discretization_error_percent: float = 0.0
 
-    # 5-part uncertainty budget and discrimination gate (P2-R3-F2, P2-R4-F2, P2-R5-F2)
+    # 5-part uncertainty budget and discrimination gate (P2-R3-F2, P2-R4-F2, P2-R5-F2, P2-R6-F2)
     linear_algebra_solver_residual_n: float = 0.0
     discrete_momentum_closure_residual_n: float = 0.0
     mesh_force_discretization_uncertainty_n: float = 0.0
     domain_boundary_clearance_uncertainty_n: float = 0.0
-    missing_parameter_model_uncertainty_n: float = 5.0e-5
+    missing_parameter_model_uncertainty_n: Optional[float] = None
     missing_parameter_model_uncertainty_notes: str = (
         "Omitted blade tip fillet radius r_tip (governs corner singularity), copper tape surface roughness, "
         "epoxy loss tangent tan_delta, ITO sheet resistance, and pendulum suspension lead forces."
     )
     missing_parameter_model_uncertainty_is_bounded: bool = False
     calibrated_domain_clearance_uncertainty_n: Optional[float] = None
+    z_mesh_discretization_uncertainty_n: Optional[float] = None
     combined_uncertainty_rss_n: float = 0.0
     conservative_uncertainty_linear_n: float = 0.0
-    uncertainty_budget_summary: Dict[str, float] = field(default_factory=dict)
+    uncertainty_budget_summary: Dict[str, Any] = field(default_factory=dict)
     discriminating_threshold_n: float = 2.37e-5
     physical_scale_discrimination_status: str = "NOT_RESOLVED_AT_CURRENT_3D_GRID_RESOLUTION"
     whole_body_3d_mechanical_accounting: str = "UNVERIFIED_PENDING_CONFORMING_INTERFACE_MESHING"
     assumed_richardson_order_p: float = 1.0
     richardson_is_assumed_order_estimate: bool = True
 
-    # Commensurate multi-body and H1 quantities (Findings P2-R4-F1, P2-R5-F1, P2-R5-F4)
+    # Commensurate multi-body and H1 quantities (Findings P2-R4-F1, P2-R5-F1, P2-R5-F4, P2-R6-F1, P2-R6-M1)
     mesh_refinement_level: int = 1
     actual_blade_pitch_m: float = 0.0
     blade_pitch_discretization_ratio: float = 1.0
@@ -326,6 +327,7 @@ class Finite3DModelResult:
     h1_3d_literal_patent_eq11_force_n: float = 0.0
     h1_3d_half_factor_corrected_force_n: float = 0.0
     h1_3d_spatial_mean_plugin_force_n: float = 0.0
+    h1_3d_quadrature_status: str = "PROVISIONAL_NEAR_FACE_QUADRATURE_SUBJECT_TO_OFFSET_SENSITIVITY"
     observed_order_p: Optional[float] = None
     observed_order_status: str = "PROVISIONAL_SINGLE_GRID"
 
@@ -1596,20 +1598,111 @@ def compute_direct_enclosure_wall_tractions_3d(
     )
 
 
+VERIFIED_WHOLE_BODY_STATES: FrozenSet[str] = frozenset({
+    "VERIFIED_CONSERVATIVE_ALL_BODIES_CLOSED",
+    "VERIFIED_INDEPENDENT_WHOLE_BODY_CONVERGED",
+})
+
+CURRENT_GOVERNING_REVIEW: str = "P2_R6_REMEDIATION"
+
+
+@dataclass(frozen=True)
+class PatentFaceH13DQuadratureResult:
+    """Result of true 3D patent-face H1 quadrature across proximal and distal electrode faces."""
+    proximal_face_area_m2: float
+    distal_face_area_m2: float
+    proximal_e2_integral_v2_m: float
+    distal_e2_integral_v2_m: float
+    proximal_spatial_mean_e_v_per_m: float
+    distal_spatial_mean_e_v_per_m: float
+    literal_patent_eq11_force_n: float
+    half_factor_corrected_force_n: float
+    spatial_mean_plugin_force_n: float
+    cauchy_schwarz_inequality_holds: bool
+    quadrature_status: str
+
+
+def compute_3d_patent_face_h1_quadrature(
+    e_sq_3d: np.ndarray,
+    dx: float,
+    dy: float,
+    dz: float,
+    blade_tip_spans: List[Tuple[int, int]],
+    iy_base_min: int,
+    iy_base_max: int,
+    iz_min: int,
+    iz_max: int,
+    x_blade_tip: int,
+    x_blade_back: int,
+    sample_offset_cells: int = 1,
+) -> PatentFaceH13DQuadratureResult:
+    """Compute true 3D patent-face H1 directional quadrature across proximal and distal faces.
+
+    Addresses Finding P2-R5-F4 & P2-R6-M1:
+        - Extracts near-face E^2 fields on material boundaries at controlled cell offset.
+        - Evaluates:
+            1. Literal Patent Eq. (11) without 1/2 factor: -eps0 * (int_{prox} E^2 dA - int_{dist} E^2 dA)
+            2. Corrected 0.5x Maxwell traction force: -0.5 * eps0 * (int_{prox} E^2 dA - int_{dist} E^2 dA)
+            3. Spatial-mean plug-in: -eps0 * (<E_prox>^2 * A_prox - <E_dist>^2 * A_dist)
+        - Verifies Cauchy-Schwarz inequality int E^2 dA >= <E>^2 * A across all faces.
+        - Designated provisional subject to face offset sensitivity.
+    """
+    nx = e_sq_3d.shape[2]
+    i_prox = max(0, min(nx - 1, x_blade_tip - sample_offset_cells))
+    prox_e2_list = []
+    prox_pts = 0
+    for b_min, b_max in blade_tip_spans:
+        e2_sub = e_sq_3d[iz_min:iz_max + 1, b_min:b_max + 1, i_prox].ravel()
+        prox_e2_list.append(e2_sub)
+        prox_pts += len(e2_sub)
+    prox_e2_arr = np.concatenate(prox_e2_list) if prox_e2_list else np.array([0.0])
+    area_prox = float(prox_pts * dy * dz)
+    int_e2_prox = float(np.sum(prox_e2_arr) * dy * dz)
+    mean_e_prox = float(np.mean(np.sqrt(np.maximum(prox_e2_arr, 0.0)))) if len(prox_e2_arr) > 0 else 0.0
+
+    i_dist = max(0, min(nx - 1, x_blade_back + sample_offset_cells))
+    dist_e2_sub = e_sq_3d[iz_min:iz_max + 1, iy_base_min:iy_base_max + 1, i_dist].ravel()
+    area_dist = float(len(dist_e2_sub) * dy * dz)
+    int_e2_dist = float(np.sum(dist_e2_sub) * dy * dz)
+    mean_e_dist = float(np.mean(np.sqrt(np.maximum(dist_e2_sub, 0.0)))) if len(dist_e2_sub) > 0 else 0.0
+
+    f_literal = float(-EPSILON_0 * (int_e2_prox - int_e2_dist))
+    f_half = float(-0.5 * EPSILON_0 * (int_e2_prox - int_e2_dist))
+    f_mean_plugin = float(
+        -EPSILON_0 * ((mean_e_prox ** 2) * area_prox - (mean_e_dist ** 2) * area_dist)
+    )
+    cs_prox = bool(int_e2_prox >= (mean_e_prox ** 2) * area_prox * (1.0 - 1e-9))
+    cs_dist = bool(int_e2_dist >= (mean_e_dist ** 2) * area_dist * (1.0 - 1e-9))
+
+    return PatentFaceH13DQuadratureResult(
+        proximal_face_area_m2=area_prox,
+        distal_face_area_m2=area_dist,
+        proximal_e2_integral_v2_m=int_e2_prox,
+        distal_e2_integral_v2_m=int_e2_dist,
+        proximal_spatial_mean_e_v_per_m=mean_e_prox,
+        distal_spatial_mean_e_v_per_m=mean_e_dist,
+        literal_patent_eq11_force_n=f_literal,
+        half_factor_corrected_force_n=f_half,
+        spatial_mean_plugin_force_n=f_mean_plugin,
+        cauchy_schwarz_inequality_holds=bool(cs_prox and cs_dist),
+        quadrature_status="PROVISIONAL_NEAR_FACE_QUADRATURE_SUBJECT_TO_OFFSET_SENSITIVITY",
+    )
+
+
 def evaluate_physical_scale_discrimination_gate(
     linear_algebra_solver_residual_n: float,
     discrete_momentum_closure_residual_n: float,
     mesh_force_discretization_uncertainty_n: float,
     domain_boundary_clearance_uncertainty_n: float,
-    missing_parameter_model_uncertainty_n: float,
+    missing_parameter_model_uncertainty_n: Optional[float],
     relative_residual: float,
     whole_body_status: str,
     discriminating_threshold_n: float = 2.37e-5,
     missing_parameter_model_is_bounded: bool = False,
-) -> Tuple[bool, str, bool, str, float, float, Dict[str, float]]:
+) -> Tuple[bool, str, bool, str, float, float, Dict[str, Any]]:
     """Centralized, pure physical scale discrimination gate for 3D multi-body momentum closure.
 
-    Addresses Finding P2-R4-F2 & P2-R5-F2:
+    Addresses Findings P2-R4-F2, P2-R5-F2 & P2-R6-F3:
         - Evaluates all five components of the uncertainty budget:
             1. u_solver: linear algebra solver residual
             2. u_closure: discrete momentum balance residual
@@ -1617,46 +1710,109 @@ def evaluate_physical_scale_discrimination_gate(
             4. u_domain: domain boundary clearance uncertainty
             5. u_model: omitted apparatus parameters (e.g. corner singularity fillet radius r_tip)
         - Computes both root-sum-square (RSS) and conservative linear uncertainty bounds.
-        - Strict fail-closed predicate requires:
-            a) Each individual uncertainty term < discriminating_threshold_n (23.7 uN)
-            b) Combined RSS uncertainty < discriminating_threshold_n (23.7 uN)
-            c) Relative net momentum residual < 0.5% (0.005)
-            d) Model parameters are demonstrably bounded by sensitivity analysis (missing_parameter_model_is_bounded is True)
-            e) Whole-body mechanical accounting is verified (not UNVERIFIED)
+        - Robust input validation: rejects None, non-finite (NaN, Inf), negative inputs, and empty/invalid status strings.
+        - Strict allowlist predicate requires:
+            a) whole_body_status in VERIFIED_WHOLE_BODY_STATES (rejects all unverified states including
+               VACUUM_NO_DIELECTRIC_UNVERIFIED_PENDING_CONVERGENCE and UNVERIFIED_PENDING_CONFORMING_INTERFACE_MESHING)
+            b) Each individual uncertainty term < discriminating_threshold_n (23.7 uN)
+            c) Combined RSS uncertainty < discriminating_threshold_n (23.7 uN)
+            d) Relative net momentum residual < 0.5% (0.005)
+            e) Model parameters are demonstrably bounded by sensitivity analysis (missing_parameter_model_is_bounded is True
+               and missing_parameter_model_uncertainty_n is not None)
     """
+    # 1. Input validation: check for None, non-finite, or negative numerical inputs
+    numeric_inputs = [
+        linear_algebra_solver_residual_n,
+        discrete_momentum_closure_residual_n,
+        mesh_force_discretization_uncertainty_n,
+        domain_boundary_clearance_uncertainty_n,
+        relative_residual,
+        discriminating_threshold_n,
+    ]
+    for val in numeric_inputs:
+        if val is None or not np.isfinite(val) or val < 0.0:
+            return (
+                False,
+                "NOT_RESOLVED_INVALID_OR_UNBOUNDED_UNCERTAINTY",
+                False,
+                "UNCERTAINTY_INPUTS_NONFINITE_OR_NEGATIVE",
+                float("nan"),
+                float("nan"),
+                {},
+            )
+
+    if not isinstance(whole_body_status, str) or not whole_body_status.strip():
+        return (
+            False,
+            "NOT_RESOLVED_UNVERIFIED_WHOLE_BODY_STATUS",
+            False,
+            "WHOLE_BODY_STATUS_EMPTY_OR_INVALID",
+            float("nan"),
+            float("nan"),
+            {},
+        )
+
+    # 2. Model parameter uncertainty handling (P2-R6-F2)
+    # If missing parameters are unbounded or None, do not pseudo-quantify; fail closed.
+    if (
+        missing_parameter_model_uncertainty_n is None
+        or not np.isfinite(missing_parameter_model_uncertainty_n)
+        or missing_parameter_model_uncertainty_n < 0.0
+        or not missing_parameter_model_is_bounded
+    ):
+        model_u_val = 0.0
+        model_term_passes = False
+        effective_model_is_bounded = False
+        reported_model_u: Optional[float] = (
+            float(missing_parameter_model_uncertainty_n)
+            if (missing_parameter_model_uncertainty_n is not None and np.isfinite(missing_parameter_model_uncertainty_n))
+            else None
+        )
+    else:
+        model_u_val = float(missing_parameter_model_uncertainty_n)
+        model_term_passes = bool(model_u_val < discriminating_threshold_n)
+        effective_model_is_bounded = True
+        reported_model_u = model_u_val
+
+    # 3. Compute combined bounds
     rss_uncert_n = float(np.sqrt(
         linear_algebra_solver_residual_n**2 +
         discrete_momentum_closure_residual_n**2 +
         mesh_force_discretization_uncertainty_n**2 +
         domain_boundary_clearance_uncertainty_n**2 +
-        missing_parameter_model_uncertainty_n**2
+        model_u_val**2
     ))
     linear_uncert_n = float(
         linear_algebra_solver_residual_n +
         discrete_momentum_closure_residual_n +
         mesh_force_discretization_uncertainty_n +
         domain_boundary_clearance_uncertainty_n +
-        missing_parameter_model_uncertainty_n
+        model_u_val
     )
-    budget_summary = {
+
+    budget_summary: Dict[str, Any] = {
         "solver_linear_algebra_n": float(linear_algebra_solver_residual_n),
         "discrete_momentum_closure_n": float(discrete_momentum_closure_residual_n),
         "mesh_discretization_n": float(mesh_force_discretization_uncertainty_n),
         "domain_clearance_n": float(domain_boundary_clearance_uncertainty_n),
-        "missing_parameter_model_n": float(missing_parameter_model_uncertainty_n),
+        "missing_parameter_model_n": reported_model_u,
+        "missing_parameter_model_is_bounded": effective_model_is_bounded,
         "combined_rss_n": float(rss_uncert_n),
         "conservative_linear_n": float(linear_uncert_n),
     }
 
+    # 4. Strict allowlist predicate (P2-R6-F3)
+    whole_body_verified = bool(whole_body_status in VERIFIED_WHOLE_BODY_STATES)
+
     is_resolved = bool(
-        discrete_momentum_closure_residual_n < discriminating_threshold_n
+        whole_body_verified
+        and effective_model_is_bounded
+        and model_term_passes
+        and discrete_momentum_closure_residual_n < discriminating_threshold_n
         and mesh_force_discretization_uncertainty_n < discriminating_threshold_n
         and domain_boundary_clearance_uncertainty_n < discriminating_threshold_n
-        and missing_parameter_model_uncertainty_n < discriminating_threshold_n
-        and missing_parameter_model_is_bounded is True
         and rss_uncert_n < discriminating_threshold_n
         and relative_residual < 0.005
-        and not whole_body_status.startswith("UNVERIFIED")
     )
 
     if is_resolved:
@@ -1997,32 +2153,30 @@ def solve_exodus_electrostatics_3d(
             b_max = min(iy_base_max, b_min + n_tip_y - 1)
             blade_tip_spans.append((b_min, b_max))
 
-    # Proximal tip 100a material-side sampling (cell immediately facing the gap at x_blade_tip - 1)
-    i_prox = max(1, x_blade_tip - 1)
-    prox_e2_list = []
-    prox_pts = 0
-    for b_min, b_max in blade_tip_spans:
-        e2_sub = e_sq_3d[iz_min:iz_max + 1, b_min:b_max + 1, i_prox].ravel()
-        prox_e2_list.append(e2_sub)
-        prox_pts += len(e2_sub)
-    prox_e2_arr = np.concatenate(prox_e2_list) if prox_e2_list else np.array([0.0])
-    area_prox = float(prox_pts * dy * dz)
-    int_e2_prox = float(np.sum(prox_e2_arr) * dy * dz)
-    mean_e_prox = float(np.mean(np.sqrt(prox_e2_arr))) if len(prox_e2_arr) > 0 else 0.0
-
-    # Distal base rear 101a material-side sampling (cell immediately facing enclosure at x_blade_back + 1)
-    i_dist = min(nx - 2, x_blade_back + 1)
-    dist_e2_sub = e_sq_3d[iz_min:iz_max + 1, iy_base_min:iy_base_max + 1, i_dist].ravel()
-    area_dist = float(len(dist_e2_sub) * dy * dz)
-    int_e2_dist = float(np.sum(dist_e2_sub) * dy * dz)
-    mean_e_dist = float(np.mean(np.sqrt(dist_e2_sub))) if len(dist_e2_sub) > 0 else 0.0
-
-    # Patent Eq. (11) directional force (pull along -x toward gap/proximal tip)
-    f_h1_3d_literal = float(-EPSILON_0 * (int_e2_prox - int_e2_dist))
-    f_h1_3d_half = float(-0.5 * EPSILON_0 * (int_e2_prox - int_e2_dist))
-    f_h1_3d_mean_plugin = float(
-        -EPSILON_0 * ((mean_e_prox ** 2) * area_prox - (mean_e_dist ** 2) * area_dist)
+    # Proximal tip 100a and distal base rear 101a true 3D near-face quadrature (P2-R5-F4 & P2-R6-M1)
+    quad_res = compute_3d_patent_face_h1_quadrature(
+        e_sq_3d=e_sq_3d,
+        dx=dx,
+        dy=dy,
+        dz=dz,
+        blade_tip_spans=blade_tip_spans,
+        iy_base_min=iy_base_min,
+        iy_base_max=iy_base_max,
+        iz_min=iz_min,
+        iz_max=iz_max,
+        x_blade_tip=x_blade_tip,
+        x_blade_back=x_blade_back,
+        sample_offset_cells=1,
     )
+    area_prox = quad_res.proximal_face_area_m2
+    area_dist = quad_res.distal_face_area_m2
+    int_e2_prox = quad_res.proximal_e2_integral_v2_m
+    int_e2_dist = quad_res.distal_e2_integral_v2_m
+    mean_e_prox = quad_res.proximal_spatial_mean_e_v_per_m
+    mean_e_dist = quad_res.distal_spatial_mean_e_v_per_m
+    f_h1_3d_literal = quad_res.literal_patent_eq11_force_n
+    f_h1_3d_half = quad_res.half_factor_corrected_force_n
+    f_h1_3d_mean_plugin = quad_res.spatial_mean_plugin_force_n
     h1_e2_total = float(int_e2_prox + int_e2_dist)
     h1_f_dir_x = float(f_h1_3d_literal)
 
@@ -2040,7 +2194,7 @@ def solve_exodus_electrostatics_3d(
         f_3d_blade_x / f_2d_extruded_matched if abs(f_2d_extruded_matched) > 1e-15 else 1.0
     )
 
-    # 5-part uncertainty budget (Findings P2-R3-F2, P2-R4-F2, P2-R5-F2)
+    # 5-part uncertainty budget (Findings P2-R3-F2, P2-R4-F2, P2-R5-F2, P2-R6-F2)
     lin_alg_res_n = float(abs(f_3d_blade_x) * solver_res)
     discrete_momentum_res_n = float(abs(f_3d_net))
     # Discretization error proxy for single grid (replaced in convergence study by actual Richardson extrapolate)
@@ -2048,10 +2202,12 @@ def solve_exodus_electrostatics_3d(
     # Physical upper bound on domain clearance coupling derived directly from wall reaction
     clearance_uncert_n = float(abs(f_3d_enclosure_direct))
     # Omitted apparatus parameters (tip fillet radius, copper surface roughness, suspension wires)
-    missing_param_uncert_n = 5.0e-5  # 50 uN baseline sensitivity scale
+    # Explicitly None and unbounded in single-grid solve pending formal calibration sweeps (P2-R6-F2)
+    missing_param_uncert_n: Optional[float] = None
     missing_param_notes = (
         "Omitted blade tip fillet radius r_tip (governs corner singularity), copper tape surface roughness, "
-        "epoxy loss tangent tan_delta, ITO sheet resistance, and pendulum suspension lead forces."
+        "epoxy loss tangent tan_delta, ITO sheet resistance, and pendulum suspension lead forces. "
+        "Explicitly unbounded pending physical parameter sweeps."
     )
     missing_param_bounded = False  # Explicitly unbounded pending physical parameter sweeps
 
@@ -2162,6 +2318,7 @@ def solve_exodus_electrostatics_3d(
         h1_3d_literal_patent_eq11_force_n=f_h1_3d_literal,
         h1_3d_half_factor_corrected_force_n=f_h1_3d_half,
         h1_3d_spatial_mean_plugin_force_n=f_h1_3d_mean_plugin,
+        h1_3d_quadrature_status=quad_res.quadrature_status,
         observed_order_p=None,
         observed_order_status="PROVISIONAL_SINGLE_GRID",
         finite_3d_dielectric_interface_traction_x_n=f_3d_dielectric_interface,
@@ -2169,6 +2326,48 @@ def solve_exodus_electrostatics_3d(
         finite_3d_dielectric_virtual_work_x_n=None,
         finite_3d_dielectric_interface_to_contour_agreement_rel=diel_agree_rel,
     )
+
+
+def calibrate_domain_clearance_uncertainty_3d(
+    params: Optional[ExodusPatentParameters] = None,
+    dx_3d_m: float = 0.002,
+    dy_3d_m: float = 0.002,
+    dz_3d_m: float = 0.004,
+    clearance_multipliers: Tuple[float, float] = (1.0, 1.5),
+) -> Tuple[float, Dict[str, Any]]:
+    """Calibrate domain boundary clearance uncertainty from paired same-grid solves.
+
+    Addresses Finding P2-R6-F2:
+        Separates physical electrostatic traction on the outer wall from the numerical
+        sensitivity of device force to outer boundary placement:
+            u_domain = |F_blade(U_expanded) - F_blade(U_nominal)|
+    """
+    if params is None:
+        params = ExodusPatentParameters.figs_4_to_8_schematic()
+
+    p_nom = params
+    p_exp = replace(
+        params,
+        enclosure_margin_x_m=params.enclosure_margin_x_m * clearance_multipliers[1],
+        enclosure_margin_y_m=params.enclosure_margin_y_m * clearance_multipliers[1],
+    )
+    res_nom = solve_exodus_electrostatics_3d(p_nom, dx_3d_m=dx_3d_m, dy_3d_m=dy_3d_m, dz_3d_m=dz_3d_m)
+    res_exp = solve_exodus_electrostatics_3d(p_exp, dx_3d_m=dx_3d_m, dy_3d_m=dy_3d_m, dz_3d_m=dz_3d_m)
+
+    delta_blade = float(abs(res_exp.finite_3d_blade_force_x_n - res_nom.finite_3d_blade_force_x_n))
+    delta_ground = float(abs(res_exp.finite_3d_ground_force_x_n - res_nom.finite_3d_ground_force_x_n))
+    u_domain = max(delta_blade, delta_ground)
+
+    metadata: Dict[str, Any] = {
+        "clearance_multiplier_nominal": clearance_multipliers[0],
+        "clearance_multiplier_expanded": clearance_multipliers[1],
+        "blade_force_nominal_n": res_nom.finite_3d_blade_force_x_n,
+        "blade_force_expanded_n": res_exp.finite_3d_blade_force_x_n,
+        "delta_blade_n": delta_blade,
+        "delta_ground_n": delta_ground,
+        "domain_clearance_uncertainty_n": u_domain,
+    }
+    return u_domain, metadata
 
 
 def run_3d_enclosure_clearance_sweep(
@@ -2241,13 +2440,13 @@ def run_3d_mesh_convergence_study(
     h0_lateral_m: float = 0.00127,
     dz_m: float = 0.00254,
     spacings: Optional[Tuple[Tuple[float, float], ...]] = None,
-    refine_z: bool = False,
+    refine_z: bool = True,
 ) -> List[Finite3DModelResult]:
     """Run a 3D mesh refinement convergence study across commensurate fixed-geometry subdivisions.
 
-    Addresses Finding P2-R4-F1 & P2-R5-F1:
+    Addresses Finding P2-R4-F1, P2-R5-F1 & P2-R6-F1:
         - Commensurate subdivisions guarantee actual-to-target geometry ratios remain exactly 1.0000.
-        - Supports both lateral refinement and full 3D refinement (when refine_z=True, dz_k = dz_m / k).
+        - Supports both lateral refinement and full 3D refinement (defaults to refine_z=True, dz_k = dz_m / k).
         - Supports multi-blade assemblies including FIG. 21 nine-blade potted article.
         - Reports 3D forces on all bodies (blade, ground, dielectric, direct outer walls, net system)
           and H1 directional surface quantities at each level.
@@ -2380,7 +2579,8 @@ def run_3d_mesh_convergence_study(
         mesh_uncert_3d_n = float(abs(f_extrap - results[-1].finite_3d_blade_force_x_n))
         updated = []
         for r_res in results:
-            # Re-evaluate the production discrimination gate with the refined 3D discretization error (Finding P2-R5-F2)
+            level_mesh_uncert_n = float(abs(f_extrap - r_res.finite_3d_blade_force_x_n))
+            # Re-evaluate the production discrimination gate with the refined 3D discretization error (Finding P2-R5-F2 & P2-R6-F2)
             (
                 is_res_new,
                 phys_status_new,
@@ -2392,7 +2592,7 @@ def run_3d_mesh_convergence_study(
             ) = evaluate_physical_scale_discrimination_gate(
                 linear_algebra_solver_residual_n=r_res.linear_algebra_solver_residual_n,
                 discrete_momentum_closure_residual_n=r_res.discrete_momentum_closure_residual_n,
-                mesh_force_discretization_uncertainty_n=mesh_uncert_3d_n,
+                mesh_force_discretization_uncertainty_n=level_mesh_uncert_n,
                 domain_boundary_clearance_uncertainty_n=r_res.domain_boundary_clearance_uncertainty_n,
                 missing_parameter_model_uncertainty_n=r_res.missing_parameter_model_uncertainty_n,
                 relative_residual=r_res.finite_3d_relative_residual,
@@ -2410,7 +2610,7 @@ def run_3d_mesh_convergence_study(
                     assumed_richardson_order_p=float(p_obs if p_obs is not None else 1.0),
                     observed_order_p=float(p_obs) if p_obs is not None else None,
                     observed_order_status=order_status,
-                    mesh_force_discretization_uncertainty_n=mesh_uncert_3d_n,
+                    mesh_force_discretization_uncertainty_n=level_mesh_uncert_n,
                     combined_uncertainty_rss_n=rss_new,
                     conservative_uncertainty_linear_n=linear_new,
                     uncertainty_budget_summary=u_summary_new,
@@ -2432,18 +2632,31 @@ def run_3d_z_mesh_convergence_study(
 ) -> List[Finite3DModelResult]:
     """Isolate and evaluate longitudinal z-grid discretization sensitivity.
 
-    Addresses Finding P2-R5-F1:
+    Addresses Finding P2-R5-F1 & P2-R6-F1:
         - Keeps lateral grid fixed at dx_3d_m while refining dz = dz0 / k.
-        - Quantifies longitudinal end-fringing discretization error separately.
+        - Directly computes and reports axial discretization truncation uncertainty in Newtons:
+              u_mesh,z = |F_blade(dz_fine) - F_blade(dz_coarse)| / (r_z^p - 1)
     """
     spacings = tuple((dx_3d_m, dz0_m / k) for k in subdivisions)
-    return run_3d_mesh_convergence_study(
+    results = run_3d_mesh_convergence_study(
         subdivisions=subdivisions,
         base_params=base_params,
         h0_lateral_m=dx_3d_m,
         dz_m=dz0_m,
         spacings=spacings,
+        refine_z=False,
     )
+    if len(results) >= 2:
+        r_z = float(results[0].dz_m / results[-1].dz_m) if results[-1].dz_m > 0 else 2.0
+        delta_f = float(abs(results[-1].finite_3d_blade_force_x_n - results[0].finite_3d_blade_force_x_n))
+        p_assumed = 1.0
+        denom = r_z ** p_assumed - 1.0
+        u_mesh_z = float(delta_f / denom if denom > 1e-9 else delta_f)
+        results = [
+            replace(r, z_mesh_discretization_uncertainty_n=u_mesh_z)
+            for r in results
+        ]
+    return results
 
 
 
@@ -2686,6 +2899,7 @@ def generate_exodus_patent_manifest(
     source_head_sha: str = "UNKNOWN",
     tested_checkout_sha: str = "UNKNOWN",
     output_path: Optional[str] = None,
+    governing_review: str = CURRENT_GOVERNING_REVIEW,
 ) -> Dict[str, Any]:
     """Generate paired JSON evidence manifest with schema 1.2.0 provenance."""
     ledger = get_patent_parameter_ledger(result.params)
@@ -2712,7 +2926,7 @@ def generate_exodus_patent_manifest(
         "git_provenance": {
             "source_head_sha": source_head_sha,
             "tested_checkout_sha": tested_checkout_sha,
-            "governing_review": "P2_R4_REMEDIATION",
+            "governing_review": governing_review,
         },
         "parameter_audit": [asdict(record) for record in ledger],
         "h0_conventional_maxwell_stress": {
@@ -2780,7 +2994,12 @@ def generate_exodus_patent_manifest(
                 "discrete_momentum_closure_residual_n": float(result.finite_3d_model.discrete_momentum_closure_residual_n),
                 "mesh_force_discretization_uncertainty_n": float(result.finite_3d_model.mesh_force_discretization_uncertainty_n),
                 "domain_boundary_clearance_uncertainty_n": float(result.finite_3d_model.domain_boundary_clearance_uncertainty_n),
-                "missing_parameter_model_uncertainty_n": float(result.finite_3d_model.missing_parameter_model_uncertainty_n),
+                "missing_parameter_model_uncertainty_n": (
+                    float(result.finite_3d_model.missing_parameter_model_uncertainty_n)
+                    if result.finite_3d_model.missing_parameter_model_uncertainty_n is not None
+                    else None
+                ),
+                "missing_parameter_model_uncertainty_is_bounded": bool(result.finite_3d_model.missing_parameter_model_uncertainty_is_bounded),
                 "missing_parameter_model_uncertainty_notes": result.finite_3d_model.missing_parameter_model_uncertainty_notes,
                 "combined_uncertainty_rss_n": float(result.finite_3d_model.combined_uncertainty_rss_n),
                 "conservative_uncertainty_linear_n": float(result.finite_3d_model.conservative_uncertainty_linear_n),
@@ -2904,7 +3123,12 @@ def generate_exodus_patent_manifest(
                 "discrete_momentum_closure_residual_n": float(fig21_3d.discrete_momentum_closure_residual_n),
                 "mesh_force_discretization_uncertainty_n": float(fig21_3d.mesh_force_discretization_uncertainty_n),
                 "domain_boundary_clearance_uncertainty_n": float(fig21_3d.domain_boundary_clearance_uncertainty_n),
-                "missing_parameter_model_uncertainty_n": float(fig21_3d.missing_parameter_model_uncertainty_n),
+                "missing_parameter_model_uncertainty_n": (
+                    float(fig21_3d.missing_parameter_model_uncertainty_n)
+                    if fig21_3d.missing_parameter_model_uncertainty_n is not None
+                    else None
+                ),
+                "missing_parameter_model_uncertainty_is_bounded": bool(fig21_3d.missing_parameter_model_uncertainty_is_bounded),
                 "missing_parameter_model_uncertainty_notes": fig21_3d.missing_parameter_model_uncertainty_notes,
                 "combined_uncertainty_rss_n": float(fig21_3d.combined_uncertainty_rss_n),
                 "conservative_uncertainty_linear_n": float(fig21_3d.conservative_uncertainty_linear_n),
