@@ -63,9 +63,9 @@
       <div class="layer-legend-hud" aria-label="Scene Legend">
         <div class="legend-item"><span class="legend-swatch swatch-blade"></span> <span id="legend-blade-label">Blade (-20.0 kV)</span></div>
         <div class="legend-item"><span class="legend-swatch swatch-ground"></span> <span id="legend-ground-label">Ground (0.0 V)</span></div>
-        <div class="legend-item"><span class="legend-swatch swatch-dielectric"></span> <span id="legend-dielectric-label">Dielectric (&epsilon;<sub>r</sub> = 3.8)</span></div>
+        <div class="legend-item"><span class="legend-swatch swatch-dielectric"></span> <span id="legend-dielectric-label">Dielectric (&epsilon;<sub>r</sub> = 3.8 — Visual Proxy Only)</span></div>
         <div class="legend-item"><span class="legend-swatch swatch-field"></span> <span id="legend-field-label">Electric Field E (&plusmn;0 V &rarr; -V)</span></div>
-        <div class="legend-item"><span class="legend-swatch swatch-force"></span> <span id="legend-force-label">Schematic Vectors (Uniform length; F &prop; V<sup>2</sup>)</span></div>
+        <div class="legend-item"><span class="legend-swatch swatch-force"></span> <span id="legend-force-label">Schematic Vectors (Bounded 6–30 mm; F &prop; V<sup>2</sup>)</span></div>
       </div>
     </div>
 
@@ -116,7 +116,7 @@
           <div class="disclaimer-box">
             <strong>Layer Notation:</strong>
             <span class="badge-disclaimer">QUALITATIVE SCHEMATIC FLUX &amp; DIRECTIONS</span>
-            <p>Field lines depict qualitative flux density between electrodes. Arrow lengths illustrate relative voltage scaling (&prop; <i>V</i><sup>2</sup>) with uniform normalized length to show physical line of action only; lengths do not imply component-to-component force ratios.</p>
+            <p>Field lines depict qualitative flux density between electrodes. Arrow lengths illustrate relative voltage scaling (&prop; <i>V</i><sup>2</sup>) bounded to [6, 30] mm for viewport legibility, showing physical line of action and direction only; lengths do not imply component-to-component force ratios or uncalculated newton quantities. Completely extinguished at 0 kV.</p>
           </div>
         </div>
 
@@ -242,21 +242,21 @@
           <!-- Permittivity Slider -->
           <div class="slider-control">
             <div class="slider-header">
-              <label for="slider-eps" class="slider-label">Dielectric Permittivity (&epsilon;<sub>r</sub>):</label>
+              <label for="slider-eps" class="slider-label">Dielectric Permittivity (&epsilon;<sub>r</sub>) [Visual Proxy Only]:</label>
               <span class="slider-value" id="val-eps">3.8 (Epoxy)</span>
             </div>
             <input type="range" id="slider-eps" min="1.0" max="5.0" step="0.1" value="3.8" class="input-range">
-            <div class="slider-hint">Controls polarization stress &amp; capacitive coupling.</div>
+            <div class="slider-hint"><strong>V0 Scope Notice:</strong> &epsilon;<sub>r</sub> is a visual/material proxy in V0 adjusting dielectric mesh rendering and visual density only. Continuous field redistribution, polarization force scaling, and capacitive coupling are <em>not recalculated in V0</em> (deferred to solver-backed V1).</div>
           </div>
 
           <!-- Gap Slider -->
           <div class="slider-control">
             <div class="slider-header">
-              <label for="slider-gap" class="slider-label">Electrode Gap (d):</label>
+              <label for="slider-gap" class="slider-label">Electrode Surface Gap (<i>d</i>):</label>
               <span class="slider-value" id="val-gap">25.0 mm</span>
             </div>
             <input type="range" id="slider-gap" min="16" max="50" step="1" value="25" class="input-range">
-            <div class="slider-hint">Peak electric field: <i>E</i> &approx; <i>V</i> / <i>d</i>. Ground electrode translates dynamically with verified positive physical clearance (&ge; 3.0 mm) from dielectric potting.</div>
+            <div class="slider-hint">Physical blade-tip to ground-face distance: <i>d</i> = <i>x</i><sub>ground,near</sub> &minus; 0. Field scale: <i>E</i> &approx; <i>V</i> / <i>d</i>. Verified &ge; 5.0 mm positive physical clearance from dielectric potting at minimum setting.</div>
           </div>
 
           <button id="btn-reset-sandbox" class="btn btn-secondary btn-block">Reset Sandbox Defaults</button>

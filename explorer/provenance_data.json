@@ -2,7 +2,7 @@
   "metadata": {
     "project": "Scalar Wave Viz",
     "application": "Propulsion Explorer 3D (V0)",
-    "version": "0.3.0-r3",
+    "version": "0.4.0-r4",
     "citation": "Exodus Propulsion Technologies US11511891B2 FIGS. 4-8",
     "scientific_disposition": "EDUCATIONAL_3D_EXPLORER_NO_UNVERIFIED_THRUST",
     "evidence_grade": "PROVISIONAL_ILLUSTRATIVE_SCENE",
@@ -12,7 +12,7 @@
   "four_questions": {
     "what_am_i_seeing": "An illustrative 3D model of an asymmetric electrostatic electrode pair inspired by Exodus Propulsion Technologies patent US11511891B2 (FIGS. 4–8). It depicts a tapered knife-edge blade cathode, an opposing planar ground counter-electrode, solid dielectric potting, and a surrounding grounded conductive test chamber.",
     "why_does_it_happen": "Sharp conductor edges concentrate electric field lines (E &prop; 1/r), producing intense local Maxwell electrostatic tension (T_xx = &frac12;&epsilon;_0 E_x^2) that pulls on the blade edge. Conventional electric field vectors E = -&nabla;&Phi; point from higher potential (ground, 0 V) toward lower potential (cathode, -20 kV). Newton's third law requires equal and opposite electrostatic reaction forces on the opposing ground electrode, dielectric material, and chamber enclosure.",
-    "what_changes_it": "Electrostatic forces scale quadratically with applied voltage (F &prop; V^2). Sharper blade geometry intensifies local peak field gradients. Higher dielectric permittivity alters polarization stress. Closer chamber walls increase capacitive coupling and image-charge reaction forces.",
+    "what_changes_it": "Electrostatic forces scale quadratically with applied voltage (F &prop; V^2). Sharper blade geometry intensifies local peak field gradients. Dielectric choice alters polarization stress (modeled in V0 as a visual density/opacity proxy; continuous field redistribution deferred to solver-backed V1). Closer chamber walls increase capacitive coupling and image-charge reaction forces.",
     "how_could_we_test_it": "To determine whether an asymmetric electrostatic geometry produces genuine propellantless propulsion, the entire isolated test article must be operated in high vacuum (< 10^-5 Torr) on a calibrated micro-Newton torsion pendulum (Tajmar & Schreiber 2020). Null controls must isolate corona ion wind, outgassing, electrostatic image forces on chamber walls, and thermal expansion."
   },
   "components": [
@@ -30,6 +30,8 @@
         "thickness": 3.0,
         "tip_radius": 0.1
       },
+      "tip_radius_modeled_in_mesh": false,
+      "tip_geometry_note": "The V0 3D mesh models an idealized zero-radius knife-edge wedge vertex (r = 0); the cited patent specification (US11511891B2, FIG. 6 / col. 6 lines 15-45) indicates r ≈ 0.1 mm tip curvature. Tip curvature rounding is documented source metadata and is not filleted in the V0 polygonal geometry.",
       "system_boundary": "DEVICE_UNDER_TEST",
       "force_nature": "Attractive electrostatic traction toward ground electrode",
       "schematic_direction": "+X (Forward traction toward ground)",
@@ -49,6 +51,7 @@
         "height": 40.0,
         "depth": 50.8
       },
+      "surface_gap_definition": "Surface-to-surface distance d from knife edge (x=0) to near planar face (x=d). With plate thickness 4 mm, center is at x=d+2.0 mm.",
       "system_boundary": "DEVICE_UNDER_TEST",
       "force_nature": "Attractive electrostatic reaction traction toward blade",
       "schematic_direction": "-X (Reaction traction toward blade)",
@@ -73,7 +76,8 @@
       "schematic_direction": "-X (Polarization stress toward blade)",
       "force_magnitude_status": "SCHEMATIC_VECTOR_NOT_COMPUTED_IN_V0",
       "status": "INTERNAL_MATERIAL_POLARIZATION_STRESS",
-      "note": "Illustrative single-stage potting block in V0 representing patent dielectric medium 600 / epoxy potting. Does not reproduce the multi-blade FIG. 21 test article. Note that patent FIG. 7 depicts electrostatic pressure-force vectors, not dielectric specification."
+      "permittivity_status": "VISUAL_MATERIAL_PROXY_ONLY_IN_V0",
+      "note": "Illustrative single-stage potting block in V0 representing patent dielectric medium 600 / epoxy potting. Does not reproduce the multi-blade FIG. 21 test article. Permittivity slider is a visual material proxy adjusting visual rendering/opacity only; continuous field redistribution, polarization force scaling, and capacitive coupling are not recalculated in V0 and will be introduced in solver-backed V1. Note that patent FIG. 7 depicts electrostatic pressure-force vectors, not dielectric specification."
     },
     {
       "id": "support_mount",

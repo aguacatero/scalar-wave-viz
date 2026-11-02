@@ -1,12 +1,11 @@
 """Unit tests for the 3D Propulsion Explorer (V0) assets, provenance, and launcher.
 
-Remediated for Review Round V0 R3:
-- V0-R2-F1: Verify raycasting prioritizes interior components over outer enclosure chamber.
-- V0-R2-M1: Verify physical clearance (>= 3.0 mm) between ground plate and dielectric; synchronize blade mesh dimensions.
-- V0-R2-M2: Verify dielectric citation references FIGS. 6B, 21, 23A (col. 7 lines 30-55) and rejects FIG. 7.
-- V0-R2-M3: Verified by companion Playwright browser smoke suite (test_v0_browser_smoke.py).
-- V0-R2-M4: Verify uniform normalized vector length without arbitrary force ratio constants.
-- V0-R2-M5: Verify recursive disposal of Three.js geometry and material hierarchies to prevent GPU memory leaks.
+Remediated for Review Round V0 R4:
+- V0-R3-F1: Verify screen coordinate projection and real canvas pointer picking infrastructure.
+- V0-R3-M1: Verify physical surface gap d definition (blade tip to ground near face), positive clearance >= 5.0 mm from dielectric, and tip radius non-modeled provenance metadata.
+- V0-R3-M2: Verified by companion Playwright browser smoke suite (frame-rendered slider sweeps and disposal instrumentation).
+- V0-R3-M3: Verify permittivity slider is explicitly qualified as visual/material proxy only in V0.
+- V0-R3-M4: Verify bounded legibility vector length encoding ([6.0, 30.0] mm), staying strictly inside chamber at all voltages.
 """
 
 from __future__ import annotations
@@ -160,18 +159,31 @@ class PropulsionExplorerProvenanceSchemaTests(unittest.TestCase):
         self.assertNotIn("FIG. 7 (dielectric potting)", citation, "Dielectric citation must not cite FIG. 7 for potting")
 
     def test_blade_and_dielectric_dimensions_provenance_vs_js(self):
-        """V0-R2-M1: verify provenance JSON dimensions synchronize with 3D mesh geometry in JS."""
+        """V0-R2-M1 / V0-R3-M1: verify provenance JSON dimensions synchronize with 3D mesh geometry in JS and tag tip radius."""
         by_id = {c["id"]: c for c in self.data["components"]}
-        blade_dims = by_id["blade_electrode"]["dimensions_mm"]
+        blade = by_id["blade_electrode"]
+        blade_dims = blade["dimensions_mm"]
         self.assertEqual(blade_dims["width"], 30.0)
         self.assertEqual(blade_dims["height"], 25.4)
         self.assertEqual(blade_dims["thickness"], 3.0)
         self.assertEqual(blade_dims["tip_radius"], 0.1)
+        # V0-R3-M1: tip radius must be explicitly tagged as non-modeled source metadata
+        self.assertFalse(blade.get("tip_radius_modeled_in_mesh", True))
+        self.assertIn("idealized", blade.get("tip_geometry_note", "").lower())
 
-        diel_dims = by_id["dielectric_block"]["dimensions_mm"]
+        diel = by_id["dielectric_block"]
+        diel_dims = diel["dimensions_mm"]
         self.assertEqual(diel_dims["width"], 16.0)
         self.assertEqual(diel_dims["height"], 30.0)
         self.assertEqual(diel_dims["depth"], 45.0)
+
+    def test_dielectric_permittivity_proxy_metadata(self):
+        """V0-R3-M3: verify permittivity slider is qualified as visual proxy only in V0 provenance."""
+        by_id = {c["id"]: c for c in self.data["components"]}
+        dielectric = by_id["dielectric_block"]
+        self.assertEqual(dielectric.get("permittivity_status"), "VISUAL_MATERIAL_PROXY_ONLY_IN_V0")
+        self.assertIn("proxy", dielectric.get("note", "").lower())
+        self.assertIn("solver-backed v1", dielectric.get("note", "").lower())
 
 
 class PropulsionExplorerHTMLStructureTests(unittest.TestCase):
@@ -197,6 +209,11 @@ class PropulsionExplorerHTMLStructureTests(unittest.TestCase):
         self.assertIn('id="toggle-enclosure"', self.html)
         self.assertIn('id="toggle-wireframe"', self.html)
         self.assertIn("QUALITATIVE SCHEMATIC FLUX &amp; DIRECTIONS", self.html)
+        # V0-R3-M3: permittivity slider is qualified as visual proxy
+        self.assertIn("Visual Proxy Only", self.html)
+        self.assertIn("visual/material proxy in V0", self.html)
+        # V0-R3-M1: gap slider labels physical surface gap d
+        self.assertIn("Electrode Surface Gap", self.html)
 
     def test_dynamic_legend_elements_present(self):
         """V0-R1-M1 regression: legends have IDs for dynamic binding."""
@@ -270,18 +287,22 @@ class PropulsionExplorerJSLogicTests(unittest.TestCase):
         self.assertIn("return closestInterior || closestEnclosure || null;", self.js)
 
     def test_gap_slider_bounds_prevent_dielectric_collision(self):
-        """V0-R2-M1 regression: dielectric width 16 mm, gap >= 16 mm, ensuring >= 3.0 mm positive physical clearance."""
+        """V0-R2-M1 / V0-R3-M1 regression: physical surface gap d = currentGapMM, ensuring >= 5.0 mm positive clearance from dielectric."""
         self.assertIn("new THREE.BoxGeometry(16, 30, 45)", self.js)
         self.assertIn("currentGapMM = Math.max(16.0", self.js)
+        self.assertIn("groundMesh.position.set(currentGapMM + 2.0, 0, 0);", self.js)
+        # Blade sharp knife-edge is at world x = 0
+        # Ground plate has thickness 4.0 mm with center at x = currentGapMM + 2.0
+        # Near front face is at x_near = (currentGapMM + 2.0) - 2.0 = currentGapMM
+        # Physical surface-to-surface gap = x_near - 0 = currentGapMM identically!
         # Dielectric: center x=3.0, width=16.0 -> x_max = 3.0 + 8.0 = 11.0 mm
-        # Ground plate: center x=gap, width=4.0 -> x_min = gap - 2.0 mm
-        # At minimum gap 16.0 mm: x_min = 16.0 - 2.0 = 14.0 mm
-        # Clearance = 14.0 - 11.0 = +3.0 mm
-        diel_x_max = 3.0 + 16.0 / 2.0  # 11.0 mm
+        # At minimum gap setting (16.0 mm): x_near = 16.0 mm
+        # Clearance from dielectric: 16.0 - 11.0 = +5.0 mm >= 3.0 mm
         min_gap = 16.0
-        ground_x_min = min_gap - 4.0 / 2.0  # 14.0 mm
-        clearance = ground_x_min - diel_x_max
-        self.assertGreaterEqual(clearance, 3.0, f"Expected clearance >= 3.0 mm, got {clearance} mm")
+        diel_x_max = 3.0 + 16.0 / 2.0  # 11.0 mm
+        ground_near_face = min_gap  # 16.0 mm
+        clearance = ground_near_face - diel_x_max
+        self.assertGreaterEqual(clearance, 5.0, f"Expected clearance >= 5.0 mm, got {clearance} mm")
 
     def test_disposal_hierarchy_frees_gpu_memory(self):
         """V0-R2-M5 regression: verify recursive disposeHierarchy prevents GPU memory leaks on slider drag."""
@@ -290,14 +311,21 @@ class PropulsionExplorerJSLogicTests(unittest.TestCase):
         self.assertIn("child.material.dispose()", self.js)
         self.assertIn("disposeHierarchy(obj);", self.js)
 
-    def test_uniform_force_arrow_scaling_no_arbitrary_ratios(self):
-        """V0-R2-M4 regression: verify uniform vector length scaling without arbitrary ratio constants."""
-        self.assertIn("const UNIFORM_ARROW_BASE_LEN = 18.0;", self.js)
+    def test_bounded_force_arrow_legibility_encoding(self):
+        """V0-R3-M4 regression: verify bounded legibility encoding ([6.0, 30.0] mm) stays inside chamber at all voltages."""
+        self.assertIn("const ARROW_MIN_LEN = 6.0;", self.js)
+        self.assertIn("const ARROW_NOM_LEN = 16.0;", self.js)
+        self.assertIn("const ARROW_MAX_LEN = 30.0;", self.js)
         self.assertNotIn("len * 24", self.js)
         self.assertNotIn("len * 22", self.js)
         self.assertNotIn("len * 8", self.js)
         self.assertNotIn("len * 16", self.js)
         self.assertNotIn("len * 10", self.js)
+
+    def test_screen_coords_projection_available(self):
+        """V0-R3-F1 regression: verify getComponentScreenCoords is implemented and exposed for real pointer testing."""
+        self.assertIn("function getComponentScreenCoords(id)", self.js)
+        self.assertIn("getComponentScreenCoords: getComponentScreenCoords", self.js)
 
 
 class PropulsionExplorerLauncherTests(unittest.TestCase):

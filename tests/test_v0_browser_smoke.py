@@ -208,8 +208,8 @@ class PropulsionExplorerBrowserSmokeTests(unittest.TestCase):
 
         self.assertEqual(len(self.page_errors), 0, f"Slider operations threw errors: {self.page_errors}")
 
-    def test_component_selection_and_inspector_details(self):
-        """V0-R2-F1: verify component selection updates inspector without chamber occlusion."""
+    def test_sidebar_component_list_selection(self):
+        """V0-R2-F1: verify sidebar component button clicks update inspector for accessibility."""
         components = [
             ("blade_electrode", "Asymmetric High-Voltage Blade", "PUBLISHED HYPOTHESIS"),
             ("ground_electrode", "Ground Counter-Electrode", "ESTABLISHED MODEL"),
@@ -219,18 +219,256 @@ class PropulsionExplorerBrowserSmokeTests(unittest.TestCase):
         ]
 
         for comp_id, expected_name, expected_badge in components:
-            # Switch back to Layers tab so component list is visible and clickable
             self.page.click("#tab-btn-layers")
             btn = self.page.locator(f".component-item-btn[data-id='{comp_id}']")
             btn.click()
-            self.page.wait_for_timeout(30)
+            self.page.wait_for_timeout(20)
 
             name_el = self.page.locator("#inspector-name").inner_text()
             badge_el = self.page.locator("#inspector-badge").inner_text()
             self.assertEqual(name_el, expected_name)
             self.assertEqual(badge_el, expected_badge)
 
-        self.assertEqual(len(self.page_errors), 0, f"Inspector selection threw errors: {self.page_errors}")
+        self.assertEqual(len(self.page_errors), 0, f"Sidebar list selection threw errors: {self.page_errors}")
+
+    def test_canvas_pointer_picking_all_components_default_view(self):
+        """V0-R3-F1 [HIGH / BLOCKING]: exercise real canvas pointer events (hover & click) on all 5 components.
+
+        Uses real mouse movement and clicking on the WebGL canvas, testing:
+        1. Projected screen coordinate resolution via getComponentScreenCoords.
+        2. Hover state update on #banner-text.
+        3. Canvas click raycast selection without chamber occlusion.
+        4. Inspector title and badge updates matching provenance metadata.
+        """
+        components = [
+            ("blade_electrode", "Asymmetric High-Voltage Blade", "PUBLISHED HYPOTHESIS"),
+            ("dielectric_block", "Solid Dielectric Barrier / Potting", "WHAT-IF PARAMETER"),
+            ("ground_electrode", "Ground Counter-Electrode", "ESTABLISHED MODEL"),
+            ("support_mount", "Structural Support Mount", "ESTABLISHED MODEL"),
+            ("enclosure_walls", "Conductive Enclosure (Chamber)", "ESTABLISHED MODEL"),
+        ]
+
+        # Reset camera to default isometric view
+        self.page.evaluate("() => window.__explorer.setViewPreset('iso', true)")
+        self.page.wait_for_timeout(30)
+
+        for comp_id, expected_name, expected_badge in components:
+            coords = self.page.evaluate("id => window.__explorer.getComponentScreenCoords(id)", comp_id)
+            self.assertIsNotNone(coords, f"Could not project screen coordinates for {comp_id}")
+            cx = coords["clientX"]
+            cy = coords["clientY"]
+
+            # Real mouse move over 3D canvas
+            self.page.mouse.move(cx, cy)
+            self.page.wait_for_timeout(25)
+
+            # Verify hover status banner displays component name
+            banner_text = self.page.locator("#banner-text").inner_text()
+            self.assertIn(expected_name, banner_text, f"Hover banner failed to show {expected_name}; got: '{banner_text}'")
+
+            # Real mouse click on 3D canvas
+            self.page.mouse.click(cx, cy)
+            self.page.wait_for_timeout(25)
+
+            # Verify inspector updated accurately
+            name_el = self.page.locator("#inspector-name").inner_text()
+            badge_el = self.page.locator("#inspector-badge").inner_text()
+            self.assertEqual(name_el, expected_name, f"Inspector name mismatch for {comp_id}")
+            self.assertEqual(badge_el, expected_badge, f"Inspector badge mismatch for {comp_id}")
+
+        self.assertEqual(len(self.page_errors), 0, f"Canvas pointer picking threw errors: {self.page_errors}")
+
+    def test_canvas_pointer_picking_alternate_camera_views(self):
+        """V0-R3-F1: verify canvas pointer picking functions across alternate camera viewpoints (Side & Top)."""
+        presets = ["side", "top"]
+        components = [
+            ("blade_electrode", "Asymmetric High-Voltage Blade"),
+            ("ground_electrode", "Ground Counter-Electrode"),
+            ("dielectric_block", "Solid Dielectric Barrier / Potting"),
+        ]
+
+        for preset in presets:
+            self.page.evaluate(f"() => window.__explorer.setViewPreset('{preset}', true)")
+            self.page.wait_for_timeout(30)
+
+            for comp_id, expected_name in components:
+                coords = self.page.evaluate("id => window.__explorer.getComponentScreenCoords(id)", comp_id)
+                self.assertIsNotNone(coords, f"Projection failed for {comp_id} in {preset} view")
+
+                self.page.mouse.click(coords["clientX"], coords["clientY"])
+                self.page.wait_for_timeout(25)
+
+                name_el = self.page.locator("#inspector-name").inner_text()
+                self.assertEqual(name_el, expected_name, f"Picking failed for {comp_id} in {preset} view; got: '{name_el}'")
+
+        # Return to default view
+        self.page.evaluate("() => window.__explorer.setViewPreset('iso', true)")
+
+    def test_layer_toggles_and_raycast_fallback(self):
+        """V0-R3-F1: verify raycast behavior when layers are toggled off (interior hidden falls back to chamber)."""
+        blade_coords = self.page.evaluate("() => window.__explorer.getComponentScreenCoords('blade_electrode')")
+        self.assertIsNotNone(blade_coords)
+
+        # 1. Normal state: clicking blade selects blade
+        self.page.mouse.click(blade_coords["clientX"], blade_coords["clientY"])
+        self.assertEqual(self.page.locator("#inspector-name").inner_text(), "Asymmetric High-Voltage Blade")
+
+        # 2. Toggle off Interior Geometry layer via click on checkbox input
+        self.page.locator("#toggle-geometry").evaluate("el => el.click()")
+        self.page.wait_for_timeout(25)
+
+        # 3. Click at blade screen coordinates: geometry is hidden, so raycast falls back to enclosure chamber
+        self.page.mouse.click(blade_coords["clientX"], blade_coords["clientY"])
+        self.page.wait_for_timeout(25)
+        self.assertEqual(
+            self.page.locator("#inspector-name").inner_text(),
+            "Conductive Enclosure (Chamber)",
+            "Hiding interior geometry should cause raycast to fall through to enclosure chamber walls"
+        )
+
+        # 4. Restore layers for clean state in subsequent tests
+        self.page.locator("#toggle-geometry").evaluate("el => el.click()")
+        self.page.wait_for_timeout(25)
+
+    def test_gpu_memory_disposal_during_rendered_slider_sweeps(self):
+        """V0-R3-M2 [MED]: instrument prototype .dispose() and drive real DOM sliders across rendered sweeps.
+
+        Addresses review criticisms of synthetic loop:
+        1. Instruments THREE.BufferGeometry.prototype.dispose and Material.prototype.dispose.
+        2. Drives real DOM sliders (#slider-voltage, #slider-gap, #slider-eps).
+        3. Waits for rendered animation frames via requestAnimationFrame / wait_for_timeout.
+        4. Asserts dispose count > 30, proving recursive disposal was executed.
+        5. Asserts renderer.info.memory.geometries remains tightly bounded (diff <= 2).
+        """
+        # Switch to Sandbox tab
+        self.page.click("#tab-btn-sandbox")
+
+        # Install prototype disposal tracking hooks
+        self.page.evaluate("""() => {
+          window.__disposeStats = { geometries: 0, materials: 0 };
+          const origGeomDispose = THREE.BufferGeometry.prototype.dispose;
+          THREE.BufferGeometry.prototype.dispose = function() {
+            window.__disposeStats.geometries++;
+            return origGeomDispose.apply(this, arguments);
+          };
+          const origMatDispose = THREE.Material.prototype.dispose;
+          THREE.Material.prototype.dispose = function() {
+            window.__disposeStats.materials++;
+            return origMatDispose.apply(this, arguments);
+          };
+        }""")
+
+        initial_geoms = self.page.evaluate("() => window.__explorer.renderer.info.memory.geometries")
+
+        # Sweep Voltage slider across 8 steps
+        voltage_steps = [10, 15, 25, 35, 45, 50, 30, 20]
+        for v in voltage_steps:
+            self.page.fill("#slider-voltage", str(v))
+            self.page.dispatch_event("#slider-voltage", "input")
+            self.page.wait_for_timeout(30)
+
+        # Sweep Gap slider across 5 steps
+        gap_steps = [16, 22, 28, 35, 20]
+        for g in gap_steps:
+            self.page.fill("#slider-gap", str(g))
+            self.page.dispatch_event("#slider-gap", "input")
+            self.page.wait_for_timeout(30)
+
+        # Sweep Permittivity slider across 4 steps
+        eps_steps = [1.0, 2.5, 5.0, 3.8]
+        for e in eps_steps:
+            self.page.locator("#slider-eps").evaluate(f"el => {{ el.value = '{e}'; el.dispatchEvent(new Event('input')); }}")
+            self.page.wait_for_timeout(30)
+
+        stats = self.page.evaluate("() => window.__disposeStats")
+        final_geoms = self.page.evaluate("() => window.__explorer.renderer.info.memory.geometries")
+
+        # Prove disposal was called repeatedly
+        self.assertGreater(
+            stats["geometries"], 30,
+            f"Expected > 30 BufferGeometry disposals during rendered slider sweeps; got {stats['geometries']}"
+        )
+
+        # Prove memory remained strictly bounded (no unbounded leak across rendered animation frames)
+        diff = final_geoms - initial_geoms
+        self.assertLessEqual(
+            diff, 2,
+            f"GPU geometry count leaked across rendered sweeps: initial={initial_geoms}, final={final_geoms}, diff={diff}"
+        )
+
+    def test_bounded_force_arrows_browser_verification(self):
+        """V0-R3-M4 [MED]: verify bounded force arrow lengths across voltage range in real browser.
+
+        1. At 0 kV: arrows are extinguished (forceGroup.visible == false).
+        2. At 2 kV: bounded minimum legibility length >= 6.0 mm.
+        3. At 20 kV: exactly 16.0 mm.
+        4. At 50 kV: bounded maximum length 30.0 mm.
+        5. Arrow endpoints stay strictly inside enclosure chamber [-80, 80] mm.
+        """
+        self.page.click("#tab-btn-sandbox")
+
+        # 1. At 0 kV: extinguished
+        self.page.fill("#slider-voltage", "0")
+        self.page.dispatch_event("#slider-voltage", "input")
+        self.page.wait_for_timeout(20)
+        is_visible_0 = self.page.evaluate("() => window.__explorer.forceGroup.visible")
+        self.assertFalse(is_visible_0, "Force arrows should be extinguished at 0 kV")
+
+        # 2. At 2 kV: bounded legibility >= 6.0 mm
+        self.page.fill("#slider-voltage", "2")
+        self.page.dispatch_event("#slider-voltage", "input")
+        self.page.wait_for_timeout(20)
+        data_2kv = self.page.evaluate("""() => {
+          const fg = window.__explorer.forceGroup;
+          if (!fg || !fg.visible) return null;
+          const arrow = fg.children.find(c => c.userData && c.userData.element === "Blade Electrode");
+          return { visible: fg.visible, length: arrow ? arrow.userData.arrowLength : null };
+        }""")
+        self.assertIsNotNone(data_2kv)
+        self.assertTrue(data_2kv["visible"])
+        self.assertGreaterEqual(data_2kv["length"], 6.0, "Force arrow length at 2 kV below 6 mm threshold")
+        self.assertLessEqual(data_2kv["length"], 7.0, "Force arrow length at 2 kV unexpected")
+
+        # 3. At 20 kV: exactly 16.0 mm
+        self.page.fill("#slider-voltage", "20")
+        self.page.dispatch_event("#slider-voltage", "input")
+        self.page.wait_for_timeout(20)
+        data_20kv = self.page.evaluate("""() => {
+          const fg = window.__explorer.forceGroup;
+          const arrow = fg.children.find(c => c.userData && c.userData.element === "Blade Electrode");
+          return { length: arrow ? arrow.userData.arrowLength : null };
+        }""")
+        self.assertAlmostEqual(data_20kv["length"], 16.0, places=2)
+
+        # 4. At 50 kV: bounded maximum 30.0 mm
+        self.page.fill("#slider-voltage", "50")
+        self.page.dispatch_event("#slider-voltage", "input")
+        self.page.wait_for_timeout(20)
+        data_50kv = self.page.evaluate("""() => {
+          const fg = window.__explorer.forceGroup;
+          const arrows = fg.children.filter(c => c.userData && c.userData.arrowLength !== undefined);
+          return arrows.map(a => ({
+            element: a.userData.element,
+            length: a.userData.arrowLength,
+            origin: { x: a.position.x, y: a.position.y, z: a.position.z },
+            dir: { x: a.userData.dirX, y: a.userData.dirY, z: a.userData.dirZ }
+          }));
+        }""")
+        self.assertEqual(len(data_50kv), 5, "Expected 5 force arrows at 50 kV")
+        for arrow in data_50kv:
+            self.assertAlmostEqual(arrow["length"], 30.0, places=2)
+            # Check origin inside chamber [-80, 80]
+            ox, oy, oz = arrow["origin"]["x"], arrow["origin"]["y"], arrow["origin"]["z"]
+            self.assertTrue(-80 <= ox <= 80, f"Arrow origin X {ox} outside chamber")
+            self.assertTrue(-60 <= oy <= 60, f"Arrow origin Y {oy} outside chamber")
+            self.assertTrue(-80 <= oz <= 80, f"Arrow origin Z {oz} outside chamber")
+            # Check tip inside chamber
+            tip_x = ox + arrow["dir"]["x"] * arrow["length"]
+            tip_y = oy + arrow["dir"]["y"] * arrow["length"]
+            tip_z = oz + arrow["dir"]["z"] * arrow["length"]
+            self.assertTrue(-80 <= tip_x <= 80, f"Arrow tip X {tip_x} pierces chamber wall")
+            self.assertTrue(-60 <= tip_y <= 60, f"Arrow tip Y {tip_y} pierces chamber ceiling/floor")
+            self.assertTrue(-80 <= tip_z <= 80, f"Arrow tip Z {tip_z} pierces chamber depth")
 
     def test_raycast_picking_prioritizes_interior_over_chamber(self):
         """V0-R2-F1 regression: getPickedObject returns interior component when ray penetrates chamber wall."""
@@ -238,7 +476,7 @@ class PropulsionExplorerBrowserSmokeTests(unittest.TestCase):
           const exp = window.__explorer;
           if (!exp) return { error: "No __explorer" };
 
-          // Synthetic click event aimed directly at center where blade/ground are located
+          // Aim directly at center where blade/ground are located
           const container = document.getElementById('viewport-container');
           const rect = container.getBoundingClientRect();
           const evt = {
@@ -252,29 +490,8 @@ class PropulsionExplorerBrowserSmokeTests(unittest.TestCase):
           };
         }""")
         self.assertIsNotNone(result.get("id"), "Raycast returned no object")
-        # Must NOT be enclosure_walls when aiming at interior assembly
         self.assertNotEqual(result.get("id"), "enclosure_walls", "Chamber occluded interior component in raycast")
         self.assertIn(result.get("id"), {"blade_electrode", "dielectric_block", "ground_electrode", "support_mount"})
-
-    def test_gpu_memory_does_not_grow_on_repeated_slider_updates(self):
-        """V0-R2-M5 regression: disposeHierarchy prevents linear GPU geometry growth on slider drags."""
-        memory_stats = self.page.evaluate("""() => {
-          const exp = window.__explorer;
-          const initialGeometries = exp.renderer.info.memory.geometries;
-
-          // Simulate 40 rapid slider movements
-          for (let v = 1; v <= 40; v++) {
-            window.currentVoltageKV = v;
-            exp.updateForceVectors();
-          }
-
-          const finalGeometries = exp.renderer.info.memory.geometries;
-          return { initial: initialGeometries, final: finalGeometries };
-        }""")
-        # If geometries were leaking 10 per update, final would be initial + 400!
-        # With proper disposal, final geometries should stay virtually constant (<= initial + 15)
-        diff = memory_stats["final"] - memory_stats["initial"]
-        self.assertLessEqual(diff, 15, f"GPU memory leaked geometries on repeated updates: diff={diff}")
 
     def test_guided_tour_and_help_modals(self):
         """V0-R1-M4: verify Guided Tour and Help modals open, trap focus, and dismiss on Escape."""

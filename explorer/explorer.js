@@ -22,16 +22,17 @@
     metadata: {
       project: "Scalar Wave Viz",
       application: "Propulsion Explorer 3D (V0)",
-      version: "0.3.0-r3",
+      version: "0.4.0-r4",
       citation: "Exodus Propulsion Technologies US11511891B2 FIGS. 4-8",
       scientific_disposition: "EDUCATIONAL_3D_EXPLORER_NO_UNVERIFIED_THRUST",
       evidence_grade: "PROVISIONAL_ILLUSTRATIVE_SCENE",
+      date: "2026-11-02",
       note: "V0 displays qualitative schematic force directions and illustrative field paths. No quantitative force magnitudes are established or claimed."
     },
     four_questions: {
       what_am_i_seeing: "An illustrative 3D model of an asymmetric electrostatic electrode pair inspired by Exodus Propulsion Technologies patent US11511891B2 (FIGS. 4–8). It depicts a tapered knife-edge blade cathode, an opposing planar ground counter-electrode, solid dielectric potting, and a surrounding grounded conductive test chamber.",
       why_does_it_happen: "Sharp conductor edges concentrate electric field lines (E &prop; 1/r), producing intense local Maxwell electrostatic tension (T_xx = &frac12;&epsilon;_0 E_x^2) that pulls on the blade edge. Conventional electric field vectors E = -&nabla;&Phi; point from higher potential (ground, 0 V) toward lower potential (cathode, -20 kV). Newton's third law requires equal and opposite electrostatic reaction forces on the opposing ground electrode, dielectric material, and chamber enclosure.",
-      what_changes_it: "Electrostatic forces scale quadratically with applied voltage (F &prop; V^2). Sharper blade geometry intensifies local peak field gradients. Higher dielectric permittivity alters polarization stress. Closer chamber walls increase capacitive coupling and image-charge reaction forces.",
+      what_changes_it: "Electrostatic forces scale quadratically with applied voltage (F &prop; V^2). Sharper blade geometry intensifies local peak field gradients. Dielectric choice alters polarization stress (modeled in V0 as a visual density/opacity proxy; continuous field redistribution deferred to solver-backed V1). Closer chamber walls increase capacitive coupling and image-charge reaction forces.",
       how_could_we_test_it: "To determine whether an asymmetric electrostatic geometry produces genuine propellantless propulsion, the entire isolated test article must be operated in high vacuum (< 10^-5 Torr) on a calibrated micro-Newton torsion pendulum (Tajmar & Schreiber 2020). Null controls must isolate corona ion wind, outgassing, electrostatic image forces on chamber walls, and thermal expansion."
     },
     components: [
@@ -44,6 +45,8 @@
         default_potential_v: -20000.0,
         provenance_badge: "PUBLISHED HYPOTHESIS",
         dimensions_mm: { width: 30.0, height: 25.4, thickness: 3.0, tip_radius: 0.1 },
+        tip_radius_modeled_in_mesh: false,
+        tip_geometry_note: "The V0 3D mesh models an idealized zero-radius knife-edge wedge vertex (r = 0); the cited patent specification (US11511891B2, FIG. 6 / col. 6 lines 15-45) indicates r ≈ 0.1 mm tip curvature. Tip curvature rounding is documented source metadata and is not filleted in the V0 polygonal geometry.",
         system_boundary: "DEVICE_UNDER_TEST",
         force_nature: "Attractive electrostatic traction toward ground electrode",
         schematic_direction: "+X (Forward traction toward ground)",
@@ -59,6 +62,7 @@
         default_potential_v: 0.0,
         provenance_badge: "ESTABLISHED MODEL",
         dimensions_mm: { width: 4.0, height: 40.0, depth: 50.8 },
+        surface_gap_definition: "Surface-to-surface distance d from knife edge (x=0) to near planar face (x=d). With plate thickness 4 mm, center is at x=d+2.0 mm.",
         system_boundary: "DEVICE_UNDER_TEST",
         force_nature: "Attractive electrostatic reaction traction toward blade",
         schematic_direction: "-X (Reaction traction toward blade)",
@@ -79,7 +83,8 @@
         schematic_direction: "-X (Polarization stress toward blade)",
         force_magnitude_status: "SCHEMATIC_VECTOR_NOT_COMPUTED_IN_V0",
         status: "INTERNAL_MATERIAL_POLARIZATION_STRESS",
-        note: "Illustrative single-stage potting block in V0 representing patent dielectric medium 600 / epoxy potting. Does not reproduce the multi-blade FIG. 21 test article. Note that patent FIG. 7 depicts electrostatic pressure-force vectors, not dielectric specification."
+        permittivity_status: "VISUAL_MATERIAL_PROXY_ONLY_IN_V0",
+        note: "Illustrative single-stage potting block in V0 representing patent dielectric medium 600 / epoxy potting. Does not reproduce the multi-blade FIG. 21 test article. Permittivity slider is a visual material proxy adjusting visual rendering/opacity only; continuous field redistribution, polarization force scaling, and capacitive coupling are not recalculated in V0 and will be introduced in solver-backed V1. Note that patent FIG. 7 depicts electrostatic pressure-force vectors, not dielectric specification."
       },
       {
         id: "support_mount",
@@ -287,9 +292,13 @@
 
     // Groups
     geometryGroup = new THREE.Group();
+    geometryGroup.userData = { isGeometryGroup: true };
     fieldGroup = new THREE.Group();
+    fieldGroup.userData = { isFieldGroup: true };
     forceGroup = new THREE.Group();
+    forceGroup.userData = { isForceGroup: true };
     enclosureGroup = new THREE.Group();
+    enclosureGroup.userData = { isEnclosureGroup: true };
 
     scene.add(geometryGroup);
     scene.add(fieldGroup);
@@ -302,11 +311,23 @@
       renderer: renderer,
       camera: camera,
       controls: controls,
+      geometryGroup: geometryGroup,
+      fieldGroup: fieldGroup,
+      forceGroup: forceGroup,
+      enclosureGroup: enclosureGroup,
       getPickableObjects: () => pickableObjects,
       getPickedObject: getPickedObject,
+      getComponentScreenCoords: getComponentScreenCoords,
       selectComponent: selectComponent,
+      setViewPreset: setViewPreset,
       updateForceVectors: updateForceVectors,
-      updateFieldLines: updateFieldLines
+      updateFieldLines: updateFieldLines,
+      componentMeshes: componentMeshes,
+      getCurrentState: () => ({
+        voltageKV: currentVoltageKV,
+        gapMM: currentGapMM,
+        epsR: currentEpsR
+      })
     };
   }
 
@@ -334,6 +355,11 @@
     pickableObjects.push(bladeMesh);
 
     // 2. Ground Counter-Electrode (Planar Collector at +X)
+    // Physical surface-to-surface gap d:
+    // Blade sharp knife-edge is at world x = 0.
+    // Ground plate has thickness 4.0 mm (spans [x_center - 2, x_center + 2]).
+    // Placing the mesh center at x = currentGapMM + 2.0 ensures that its near face
+    // is at exactly x = currentGapMM, making the physical surface gap identically equal to currentGapMM.
     const groundGeo = new THREE.BoxGeometry(4, 40, 50.8);
     const groundMat = new THREE.MeshStandardMaterial({
       color: 0x10b981,
@@ -343,7 +369,7 @@
       emissiveIntensity: 0.2
     });
     const groundMesh = new THREE.Mesh(groundGeo, groundMat);
-    groundMesh.position.set(currentGapMM, 0, 0);
+    groundMesh.position.set(currentGapMM + 2.0, 0, 0);
     groundMesh.castShadow = true;
     groundMesh.receiveShadow = true;
     groundMesh.userData = { id: "ground_electrode", name: "Ground Counter-Electrode" };
@@ -353,7 +379,8 @@
 
     // 3. Dielectric Block (Epoxy Potting Barrier)
     // Placed between x = -5 and x = +11 mm (width 16 mm, centered at x = 3 mm)
-    // Ground plate (min gap >= 16 mm, left face >= 14 mm) maintains >= 3.0 mm positive clearance
+    // Ground plate near face is at x = currentGapMM (min gap >= 16 mm),
+    // guaranteeing >= 5.0 mm positive physical clearance from dielectric potting.
     const dielGeo = new THREE.BoxGeometry(16, 30, 45);
     const dielMat = new THREE.MeshPhysicalMaterial({
       color: 0x818cf8,
@@ -548,9 +575,11 @@
   }
 
   // --- Build / Update Action & Reaction Force Vectors ---
-  // Remediated for V0-R1-F1, V0-R1-F4, V0-R2-M4, V0-R2-M5:
-  // - Normalized uniform arrow lengths representing physical action/reaction directions without implying component force ratios.
-  // - Scales strictly as (V/20)^2; vanishes completely at V = 0 kV.
+  // Remediated for V0-R1-F1, V0-R1-F4, V0-R2-M4, V0-R2-M5, V0-R3-M4:
+  // - Bounded legibility encoding strictly preserving monotonic V^2 scaling:
+  //   * Extinguishes completely at V = 0 kV (visible = false).
+  //   * Scales from 6.0 mm (cleanly legible minimum) to 16.0 mm at 20 kV (nominal).
+  //   * Scales from 16.0 mm to 30.0 mm at 50 kV (stays strictly within 80 mm chamber).
   // - Fully disposes nested geometries and materials before rebuild.
   function updateForceVectors() {
     while (forceGroup.children.length > 0) {
@@ -566,64 +595,74 @@
 
     forceGroup.visible = document.getElementById('toggle-forces').checked;
 
-    // Illustrative scaling factor: F ~ (V / 20)^2
-    const scaleFactor = Math.pow(currentVoltageKV / 20.0, 2);
+    // V0-R3-M4: Bounded legibility encoding for schematic vectors
+    const ARROW_MIN_LEN = 6.0;   // Clean legibility minimum for nonzero V
+    const ARROW_NOM_LEN = 16.0;  // Nominal length at 20 kV
+    const ARROW_MAX_LEN = 30.0;  // Upper bound to stay safely inside chamber (x_max < 75 mm)
 
-    // V0-R2-M4: Uniform normalized length for qualitative directional vectors
-    const UNIFORM_ARROW_BASE_LEN = 18.0;
-    const arrowLen = Math.max(0, UNIFORM_ARROW_BASE_LEN * scaleFactor);
-
-    if (arrowLen > 1.5) {
-      // 1. Blade Attractive Traction (+X toward ground)
-      const arrowBlade = createCustomArrow(
-        new THREE.Vector3(1, 0, 0),
-        new THREE.Vector3(0, 0, 0),
-        arrowLen,
-        0xfacc15,
-        "DUT: Blade Electrostatic Traction (+X)"
-      );
-      forceGroup.add(arrowBlade);
-
-      // 2. Ground Reaction Traction (-X toward blade)
-      const arrowGround = createCustomArrow(
-        new THREE.Vector3(-1, 0, 0),
-        new THREE.Vector3(currentGapMM, 0, 0),
-        arrowLen,
-        0xfacc15,
-        "DUT: Ground Reaction Traction (-X)"
-      );
-      forceGroup.add(arrowGround);
-
-      // 3. Dielectric Polarization Stress (-X toward blade)
-      const arrowDiel = createCustomArrow(
-        new THREE.Vector3(-1, 0, 0),
-        new THREE.Vector3(11, 16, 0),
-        arrowLen,
-        0x818cf8,
-        "DUT: Dielectric Polarization Stress (-X)"
-      );
-      forceGroup.add(arrowDiel);
-
-      // 4. Mount Constraint Force (+X structural equilibrium)
-      const arrowMount = createCustomArrow(
-        new THREE.Vector3(1, 0, 0),
-        new THREE.Vector3(5, -20, 0),
-        arrowLen,
-        0x64748b,
-        "DUT: Mount Structural Equilibrium (+X)"
-      );
-      forceGroup.add(arrowMount);
-
-      // 5. External Chamber Wall Reaction (-X image-charge coupling)
-      const arrowWall = createCustomArrow(
-        new THREE.Vector3(-1, 0, 0),
-        new THREE.Vector3(80, 0, 0),
-        arrowLen,
-        0xf59e0b,
-        "External: Chamber Wall Reaction (-X)"
-      );
-      forceGroup.add(arrowWall);
+    let arrowLen;
+    if (currentVoltageKV <= 20.0) {
+      const ratio = currentVoltageKV / 20.0;
+      arrowLen = ARROW_MIN_LEN + (ARROW_NOM_LEN - ARROW_MIN_LEN) * (ratio * ratio);
+    } else {
+      const ratioUpper = (currentVoltageKV * currentVoltageKV - 400.0) / (2500.0 - 400.0);
+      arrowLen = ARROW_NOM_LEN + (ARROW_MAX_LEN - ARROW_NOM_LEN) * Math.min(1.0, Math.max(0.0, ratioUpper));
     }
+
+    // 1. Blade Attractive Traction (+X toward ground)
+    const arrowBlade = createCustomArrow(
+      new THREE.Vector3(1, 0, 0),
+      new THREE.Vector3(0, 0, 0),
+      arrowLen,
+      0xfacc15,
+      "DUT: Blade Electrostatic Traction (+X)"
+    );
+    arrowBlade.userData.element = "Blade Electrode";
+    forceGroup.add(arrowBlade);
+
+    // 2. Ground Reaction Traction (-X toward blade)
+    const arrowGround = createCustomArrow(
+      new THREE.Vector3(-1, 0, 0),
+      new THREE.Vector3(currentGapMM, 0, 0),
+      arrowLen,
+      0xfacc15,
+      "DUT: Ground Reaction Traction (-X)"
+    );
+    arrowGround.userData.element = "Ground Electrode";
+    forceGroup.add(arrowGround);
+
+    // 3. Dielectric Polarization Stress (-X toward blade)
+    const arrowDiel = createCustomArrow(
+      new THREE.Vector3(-1, 0, 0),
+      new THREE.Vector3(11, 16, 0),
+      arrowLen,
+      0x818cf8,
+      "DUT: Dielectric Polarization Stress (-X)"
+    );
+    arrowDiel.userData.element = "Dielectric Potting";
+    forceGroup.add(arrowDiel);
+
+    // 4. Mount Constraint Force (+X structural equilibrium)
+    const arrowMount = createCustomArrow(
+      new THREE.Vector3(1, 0, 0),
+      new THREE.Vector3(5, -20, 0),
+      arrowLen,
+      0x64748b,
+      "DUT: Mount Structural Equilibrium (+X)"
+    );
+    arrowMount.userData.element = "Structural Mount";
+    forceGroup.add(arrowMount);
+
+    // 5. External Chamber Wall Reaction (-X image-charge coupling)
+    const arrowWall = createCustomArrow(
+      new THREE.Vector3(-1, 0, 0),
+      new THREE.Vector3(75, 0, 0),
+      arrowLen,
+      0xf59e0b,
+      "External: Chamber Wall Reaction (-X)"
+    );
+    arrowWall.userData.element = "Chamber Enclosure Walls";
+    forceGroup.add(arrowWall);
   }
 
   // --- Helper: Clean 3D Arrow Helper ---
@@ -662,7 +701,14 @@
     const quaternion = new THREE.Quaternion().setFromUnitVectors(up, normDir);
     group.quaternion.copy(quaternion);
 
-    group.userData = { isArrow: true, label: labelText };
+    group.userData = {
+      isArrow: true,
+      label: labelText,
+      arrowLength: arrowLength,
+      dirX: normDir.x,
+      dirY: normDir.y,
+      dirZ: normDir.z
+    };
     return group;
   }
 
@@ -747,7 +793,7 @@
         : `Blade (0.0 kV — OFF)`;
     }
     if (lGround) lGround.textContent = `Ground (0.0 V)`;
-    if (lDiel) lDiel.textContent = `Dielectric (ε_r = ${currentEpsR.toFixed(1)})`;
+    if (lDiel) lDiel.textContent = `Dielectric (ε_r = ${currentEpsR.toFixed(1)} — Visual Proxy Only)`;
     if (lField) {
       lField.textContent = currentVoltageKV > 0
         ? `Electric Field E (Ground 0 V → Blade -${currentVoltageKV.toFixed(0)} kV)`
@@ -755,7 +801,7 @@
     }
     if (lForce) {
       lForce.textContent = currentVoltageKV > 0
-        ? `Schematic Vectors: Direction only (uniform length, F ∝ V²)`
+        ? `Schematic Vectors: Direction only (bounded 6–30 mm, F ∝ V²)`
         : `Schematic Vectors (0 at 0 V)`;
     }
 
@@ -813,8 +859,12 @@
 
     const dims = comp.dimensions_mm;
     let dimStr = dims ? `${dims.width} × ${dims.height} × ${(dims.thickness || dims.depth || 0)} mm` : '—';
-    if (comp.id === 'ground_electrode') {
-      dimStr += ` (Current Gap d = ${currentGapMM.toFixed(1)} mm)`;
+    if (comp.id === 'blade_electrode') {
+      dimStr += ` (Tip radius: 0.1 mm source metadata; idealized knife-edge vertex in V0 mesh)`;
+    } else if (comp.id === 'ground_electrode') {
+      dimStr += ` (Surface Gap d = ${currentGapMM.toFixed(1)} mm)`;
+    } else if (comp.id === 'dielectric_block') {
+      dimStr += ` (Permittivity ε_r = ${currentEpsR.toFixed(1)}: visual material proxy in V0)`;
     }
     document.getElementById('inspector-dimensions').textContent = dimStr;
 
@@ -867,7 +917,7 @@
   }
 
   // --- Camera View Presets ---
-  function setViewPreset(preset) {
+  function setViewPreset(preset, instant = false) {
     const dist = 140;
     const target = new THREE.Vector3(0, 0, 0);
     let newPos;
@@ -889,7 +939,14 @@
         newPos = new THREE.Vector3(90, 60, 110);
     }
 
-    animateCameraTo(newPos, target);
+    if (instant) {
+      camera.position.copy(newPos);
+      controls.target.copy(target);
+      camera.lookAt(target);
+      controls.update();
+    } else {
+      animateCameraTo(newPos, target);
+    }
   }
 
   function animateCameraTo(targetPos, targetLookAt, durationMs = 500) {
@@ -1139,7 +1196,7 @@
       currentGapMM = Math.max(16.0, parseFloat(e.target.value));
       valGap.textContent = `${currentGapMM.toFixed(1)} mm`;
       if (componentMeshes["ground_electrode"]) {
-        componentMeshes["ground_electrode"].position.x = currentGapMM;
+        componentMeshes["ground_electrode"].position.x = currentGapMM + 2.0;
       }
       updateFieldLines();
       updateForceVectors();
@@ -1213,6 +1270,49 @@
           break;
       }
     });
+  }
+
+  // --- Helper: Screen Coordinate Projection for 3D Components ---
+  // Remediated for V0-R3-F1: Projects unoccluded 3D surface points to client viewport coordinates
+  // allowing automated Playwright tests to exercise real canvas pointer hover & click paths.
+  function getComponentScreenCoords(id) {
+    if (!renderer || !camera) return null;
+    const rect = renderer.domElement.getBoundingClientRect();
+
+    let targetWorldPoint;
+    switch (id) {
+      case 'blade_electrode':
+        targetWorldPoint = new THREE.Vector3(-22, 10, 0);
+        break;
+      case 'dielectric_block':
+        targetWorldPoint = new THREE.Vector3(3, 4, 12);
+        break;
+      case 'ground_electrode':
+        // Near face is at x = currentGapMM, center is at x = currentGapMM + 2.0
+        targetWorldPoint = new THREE.Vector3(currentGapMM + 2.0, 2, 12);
+        break;
+      case 'support_mount':
+        targetWorldPoint = new THREE.Vector3(5, -20, 25);
+        break;
+      case 'enclosure_walls':
+        targetWorldPoint = new THREE.Vector3(0, 52, 45);
+        break;
+      default:
+        if (componentMeshes[id]) {
+          targetWorldPoint = componentMeshes[id].position.clone();
+        } else {
+          return null;
+        }
+    }
+
+    const v = targetWorldPoint.clone().project(camera);
+    if (v.z > 1.0) return null; // Behind camera
+
+    return {
+      clientX: ((v.x + 1) / 2) * rect.width + rect.left,
+      clientY: ((-v.y + 1) / 2) * rect.height + rect.top,
+      worldPoint: { x: targetWorldPoint.x, y: targetWorldPoint.y, z: targetWorldPoint.z }
+    };
   }
 
   // --- Raycasting for 3D Component Picking & Hover ---
