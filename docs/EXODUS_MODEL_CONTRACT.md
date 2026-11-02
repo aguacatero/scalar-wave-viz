@@ -1,6 +1,6 @@
 # Exodus patent comparison — source-bound research specification
 
-**Status: not yet an implemented patent reproduction.**
+**Status (2026-11-01): a 3D patent-specific implementation is in active independent scientific review in [Draft PR #11](https://github.com/aguacatero/scalar-wave-viz/pull/11), not accepted or merged. The independent [R8 review requests changes](https://github.com/aguacatero/scalar-wave-viz/pull/11#issuecomment-6564571034). The accepted P0/P1 baseline on main does not demonstrate Exodus thrust or validate a manufactured thruster.**
 
 ## Primary sources
 
