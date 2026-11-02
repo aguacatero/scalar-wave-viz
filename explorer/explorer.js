@@ -22,7 +22,7 @@
     metadata: {
       project: "Scalar Wave Viz",
       application: "Propulsion Explorer 3D (V0)",
-      version: "0.2.0-r2",
+      version: "0.3.0-r3",
       citation: "Exodus Propulsion Technologies US11511891B2 FIGS. 4-8",
       scientific_disposition: "EDUCATIONAL_3D_EXPLORER_NO_UNVERIFIED_THRUST",
       evidence_grade: "PROVISIONAL_ILLUSTRATIVE_SCENE",
@@ -39,11 +39,11 @@
         id: "blade_electrode",
         name: "Asymmetric High-Voltage Blade",
         role: "Active cathode with sharp tapered knife-edge",
-        citation: "US11511891B2, FIGS. 4–8; col. 6 lines 15–45",
+        citation: "US11511891B2, FIGS. 4–8; col. 6 lines 15–45 (tapered blade cathode)",
         material: "High-conductivity copper / brass",
         default_potential_v: -20000.0,
         provenance_badge: "PUBLISHED HYPOTHESIS",
-        dimensions_mm: { width: 50.8, height: 25.4, thickness: 1.27, tip_radius: 0.1 },
+        dimensions_mm: { width: 30.0, height: 25.4, thickness: 3.0, tip_radius: 0.1 },
         system_boundary: "DEVICE_UNDER_TEST",
         force_nature: "Attractive electrostatic traction toward ground electrode",
         schematic_direction: "+X (Forward traction toward ground)",
@@ -69,16 +69,17 @@
         id: "dielectric_block",
         name: "Solid Dielectric Barrier / Potting",
         role: "High-voltage breakdown suppression and dielectric polarization region",
-        citation: "US11511891B2, FIG. 7 (dielectric potting)",
+        citation: "US11511891B2, FIGS. 6B, 21, 23A; col. 7 lines 30–55 (dielectric medium 600 / high-voltage epoxy potting)",
         material: "Epoxy resin / PTFE / FR-4",
         default_eps_r: 3.8,
         provenance_badge: "WHAT-IF PARAMETER",
-        dimensions_mm: { width: 20.0, height: 30.0, depth: 45.0 },
+        dimensions_mm: { width: 16.0, height: 30.0, depth: 45.0 },
         system_boundary: "DEVICE_UNDER_TEST",
         force_nature: "Dielectric virtual-work polarization stress toward highest field gradient",
         schematic_direction: "-X (Polarization stress toward blade)",
         force_magnitude_status: "SCHEMATIC_VECTOR_NOT_COMPUTED_IN_V0",
-        status: "INTERNAL_MATERIAL_POLARIZATION_STRESS"
+        status: "INTERNAL_MATERIAL_POLARIZATION_STRESS",
+        note: "Illustrative single-stage potting block in V0 representing patent dielectric medium 600 / epoxy potting. Does not reproduce the multi-blade FIG. 21 test article. Note that patent FIG. 7 depicts electrostatic pressure-force vectors, not dielectric specification."
       },
       {
         id: "support_mount",
@@ -294,6 +295,19 @@
     scene.add(fieldGroup);
     scene.add(forceGroup);
     scene.add(enclosureGroup);
+
+    // Expose test hooks for automated browser smoke testing
+    window.__explorer = {
+      scene: scene,
+      renderer: renderer,
+      camera: camera,
+      controls: controls,
+      getPickableObjects: () => pickableObjects,
+      getPickedObject: getPickedObject,
+      selectComponent: selectComponent,
+      updateForceVectors: updateForceVectors,
+      updateFieldLines: updateFieldLines
+    };
   }
 
   // --- Build 3D Scene Elements ---
@@ -301,7 +315,7 @@
     pickableObjects = [];
 
     // 1. Blade Electrode (Asymmetric Tapered Wedge - US11511891B2 FIGS. 4–8)
-    // Synchronized dimensions: 50.8 mm length (Z), 25.4 mm height (Y), 3 mm spine (X)
+    // Synchronized dimensions: 30 mm width (X taper), 25.4 mm height (Y), 3 mm spine (Z thickness)
     const bladeGeo = createBladeWedgeGeometry(30, 25.4, 3);
     const bladeMat = new THREE.MeshStandardMaterial({
       color: 0xf43f5e,
@@ -338,8 +352,9 @@
     pickableObjects.push(groundMesh);
 
     // 3. Dielectric Block (Epoxy Potting Barrier)
-    // Placed between x = -5 and x = +15 mm so that ground (gap >= 15 mm) never intersects
-    const dielGeo = new THREE.BoxGeometry(20, 30, 45);
+    // Placed between x = -5 and x = +11 mm (width 16 mm, centered at x = 3 mm)
+    // Ground plate (min gap >= 16 mm, left face >= 14 mm) maintains >= 3.0 mm positive clearance
+    const dielGeo = new THREE.BoxGeometry(16, 30, 45);
     const dielMat = new THREE.MeshPhysicalMaterial({
       color: 0x818cf8,
       roughness: 0.15,
@@ -350,7 +365,7 @@
       ior: 1.55
     });
     const dielMesh = new THREE.Mesh(dielGeo, dielMat);
-    dielMesh.position.set(5, 0, 0);
+    dielMesh.position.set(3, 0, 0);
     dielMesh.receiveShadow = true;
     dielMesh.userData = { id: "dielectric_block", name: "Solid Dielectric Barrier / Potting" };
     geometryGroup.add(dielMesh);
@@ -435,6 +450,24 @@
     return geom;
   }
 
+  // --- Helper: Clean GPU Resource Disposal ---
+  // Remediated for V0-R2-M5: Walks full object hierarchy and disposes every geometry & material
+  function disposeHierarchy(root) {
+    if (!root) return;
+    root.traverse((child) => {
+      if (child.geometry && typeof child.geometry.dispose === 'function') {
+        child.geometry.dispose();
+      }
+      if (child.material) {
+        if (Array.isArray(child.material)) {
+          child.material.forEach((m) => m && typeof m.dispose === 'function' && m.dispose());
+        } else if (typeof child.material.dispose === 'function') {
+          child.material.dispose();
+        }
+      }
+    });
+  }
+
   // --- Build / Update Electric Field Streamlines ---
   // Remediated for V0-R1-F2:
   // - Convention: E = -grad Phi points from Ground (0 V, high potential) to Blade (-V, low potential)
@@ -443,8 +476,7 @@
     while (fieldGroup.children.length > 0) {
       const obj = fieldGroup.children[0];
       fieldGroup.remove(obj);
-      if (obj.geometry) obj.geometry.dispose();
-      if (obj.material) obj.material.dispose();
+      disposeHierarchy(obj);
     }
 
     if (currentVoltageKV <= 0.0) {
@@ -516,16 +548,15 @@
   }
 
   // --- Build / Update Action & Reaction Force Vectors ---
-  // Remediated for V0-R1-F1, V0-R1-F4:
-  // - Unitless schematic direction arrows scaling with (V/20)^2
-  // - Arrows explicitly correspond to ledger items (blade +X, ground -X, dielectric -X, mount +X, wall -X)
-  // - When V = 0: all arrows disappear
+  // Remediated for V0-R1-F1, V0-R1-F4, V0-R2-M4, V0-R2-M5:
+  // - Normalized uniform arrow lengths representing physical action/reaction directions without implying component force ratios.
+  // - Scales strictly as (V/20)^2; vanishes completely at V = 0 kV.
+  // - Fully disposes nested geometries and materials before rebuild.
   function updateForceVectors() {
     while (forceGroup.children.length > 0) {
       const obj = forceGroup.children[0];
       forceGroup.remove(obj);
-      if (obj.geometry) obj.geometry.dispose();
-      if (obj.material) obj.material.dispose();
+      disposeHierarchy(obj);
     }
 
     if (currentVoltageKV <= 0.0) {
@@ -538,65 +569,56 @@
     // Illustrative scaling factor: F ~ (V / 20)^2
     const scaleFactor = Math.pow(currentVoltageKV / 20.0, 2);
 
-    // 1. Blade Attractive Traction (+X toward ground)
-    const bladeLen = Math.max(0, 24 * scaleFactor);
-    if (bladeLen > 1.5) {
+    // V0-R2-M4: Uniform normalized length for qualitative directional vectors
+    const UNIFORM_ARROW_BASE_LEN = 18.0;
+    const arrowLen = Math.max(0, UNIFORM_ARROW_BASE_LEN * scaleFactor);
+
+    if (arrowLen > 1.5) {
+      // 1. Blade Attractive Traction (+X toward ground)
       const arrowBlade = createCustomArrow(
         new THREE.Vector3(1, 0, 0),
         new THREE.Vector3(0, 0, 0),
-        bladeLen,
+        arrowLen,
         0xfacc15,
         "DUT: Blade Electrostatic Traction (+X)"
       );
       forceGroup.add(arrowBlade);
-    }
 
-    // 2. Ground Reaction Traction (-X toward blade)
-    const groundLen = Math.max(0, 22 * scaleFactor);
-    if (groundLen > 1.5) {
+      // 2. Ground Reaction Traction (-X toward blade)
       const arrowGround = createCustomArrow(
         new THREE.Vector3(-1, 0, 0),
         new THREE.Vector3(currentGapMM, 0, 0),
-        groundLen,
+        arrowLen,
         0xfacc15,
         "DUT: Ground Reaction Traction (-X)"
       );
       forceGroup.add(arrowGround);
-    }
 
-    // 3. Dielectric Polarization Stress (-X toward highest field)
-    const dielLen = Math.max(0, 8 * scaleFactor * (currentEpsR / 3.8));
-    if (dielLen > 1.5) {
+      // 3. Dielectric Polarization Stress (-X toward blade)
       const arrowDiel = createCustomArrow(
         new THREE.Vector3(-1, 0, 0),
-        new THREE.Vector3(12, 16, 0),
-        dielLen,
+        new THREE.Vector3(11, 16, 0),
+        arrowLen,
         0x818cf8,
         "DUT: Dielectric Polarization Stress (-X)"
       );
       forceGroup.add(arrowDiel);
-    }
 
-    // 4. Mount Constraint Force (+X structural equilibrium)
-    const mountLen = Math.max(0, 16 * scaleFactor);
-    if (mountLen > 1.5) {
+      // 4. Mount Constraint Force (+X structural equilibrium)
       const arrowMount = createCustomArrow(
         new THREE.Vector3(1, 0, 0),
         new THREE.Vector3(5, -20, 0),
-        mountLen,
+        arrowLen,
         0x64748b,
         "DUT: Mount Structural Equilibrium (+X)"
       );
       forceGroup.add(arrowMount);
-    }
 
-    // 5. External Chamber Wall Reaction (-X image-charge coupling)
-    const wallLen = Math.max(0, 10 * scaleFactor);
-    if (wallLen > 1.5) {
+      // 5. External Chamber Wall Reaction (-X image-charge coupling)
       const arrowWall = createCustomArrow(
         new THREE.Vector3(-1, 0, 0),
         new THREE.Vector3(80, 0, 0),
-        wallLen,
+        arrowLen,
         0xf59e0b,
         "External: Chamber Wall Reaction (-X)"
       );
@@ -733,8 +755,8 @@
     }
     if (lForce) {
       lForce.textContent = currentVoltageKV > 0
-        ? `Schematic Forces (F ∝ V² = ${Math.pow(currentVoltageKV/20, 2).toFixed(2)}x)`
-        : `Schematic Forces (0 at 0 V)`;
+        ? `Schematic Vectors: Direction only (uniform length, F ∝ V²)`
+        : `Schematic Vectors (0 at 0 V)`;
     }
 
     // 2. Update Inspector if currently selected
@@ -1114,7 +1136,7 @@
     const sliderGap = document.getElementById('slider-gap');
     const valGap = document.getElementById('val-gap');
     sliderGap.addEventListener('input', (e) => {
-      currentGapMM = Math.max(15.0, parseFloat(e.target.value));
+      currentGapMM = Math.max(16.0, parseFloat(e.target.value));
       valGap.textContent = `${currentGapMM.toFixed(1)} mm`;
       if (componentMeshes["ground_electrode"]) {
         componentMeshes["ground_electrode"].position.x = currentGapMM;
@@ -1194,8 +1216,10 @@
   }
 
   // --- Raycasting for 3D Component Picking & Hover ---
-  // Remediated for V0-R1-M2: supports both geometryGroup and enclosureGroup
-  function onPointerDown(event) {
+  // Remediated for V0-R2-F1: Prioritizes visible interior components over the outer chamber box.
+  // The outer chamber is only selected if no interior component is intersected along the ray.
+  function getPickedObject(event) {
+    if (!renderer || !camera) return null;
     const rect = renderer.domElement.getBoundingClientRect();
     mouse.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
     mouse.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
@@ -1203,39 +1227,53 @@
     raycaster.setFromCamera(mouse, camera);
     const intersects = raycaster.intersectObjects(pickableObjects, true);
 
-    if (intersects.length > 0) {
-      let targetObj = intersects[0].object;
+    const isGeomVisible = geometryGroup && geometryGroup.visible;
+    const isEnclVisible = enclosureGroup && enclosureGroup.visible;
+
+    let closestInterior = null;
+    let closestEnclosure = null;
+
+    for (let i = 0; i < intersects.length; i++) {
+      let targetObj = intersects[i].object;
       while (targetObj && (!targetObj.userData || !targetObj.userData.id)) {
         targetObj = targetObj.parent;
       }
-      if (targetObj && targetObj.userData && targetObj.userData.id) {
-        selectComponent(targetObj.userData.id);
+      if (!targetObj || !targetObj.userData || !targetObj.userData.id) continue;
+
+      const id = targetObj.userData.id;
+      if (id === "enclosure_walls") {
+        if (isEnclVisible && !closestEnclosure) {
+          closestEnclosure = targetObj;
+        }
+      } else {
+        if (isGeomVisible && !closestInterior) {
+          closestInterior = targetObj;
+        }
       }
+      if (closestInterior) break;
+    }
+
+    return closestInterior || closestEnclosure || null;
+  }
+
+  function onPointerDown(event) {
+    const picked = getPickedObject(event);
+    if (picked && picked.userData && picked.userData.id) {
+      selectComponent(picked.userData.id);
     }
   }
 
   function onPointerMove(event) {
     const container = document.getElementById('viewport-container');
-    const rect = renderer.domElement.getBoundingClientRect();
-    mouse.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
-    mouse.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+    const picked = getPickedObject(event);
 
-    raycaster.setFromCamera(mouse, camera);
-    const intersects = raycaster.intersectObjects(pickableObjects, true);
-
-    if (intersects.length > 0) {
-      let targetObj = intersects[0].object;
-      while (targetObj && (!targetObj.userData || !targetObj.userData.id)) {
-        targetObj = targetObj.parent;
+    if (picked && picked.userData && picked.userData.id) {
+      container.style.cursor = 'pointer';
+      if (hoveredObject !== picked) {
+        hoveredObject = picked;
+        showBanner(`Hover: ${picked.userData.name} — Click to inspect`);
       }
-      if (targetObj && targetObj.userData && targetObj.userData.id) {
-        container.style.cursor = 'pointer';
-        if (hoveredObject !== targetObj) {
-          hoveredObject = targetObj;
-          showBanner(`Hover: ${targetObj.userData.name} — Click to inspect`);
-        }
-        return;
-      }
+      return;
     }
 
     container.style.cursor = 'default';

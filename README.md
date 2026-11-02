@@ -22,12 +22,13 @@ The planned **interactive 3D lab** lets anyone:
 
 The first working version (**V0**) of the 3D Propulsion Explorer is runnable directly in your web browser:
 - **Interactive 3D Geometry:** Orbit, zoom, and inspect an Exodus-inspired single-stage electrode assembly (US11511891B2 FIGS. 4–8) featuring a high-voltage blade cathode (-20 kV), a planar ground counter-electrode (0 V), solid dielectric potting block, and grounded chamber walls.
-- **Dynamic Field & Force Layers:** Switch between component geometry, signed electric field streamlines ($0\text{ V} \to -20\text{ kV}$) with color-coded $|\mathbf{E}|$, zero-voltage field extinction, and schematic action-reaction force vectors.
+- **Occlusion-Free Interior Picking:** Click or hover directly on interior components (blade, ground plate, dielectric potting, structural mount) straight through the outer transparent chamber walls via intelligent raycasting priority.
+- **Dynamic Field & Force Layers:** Switch between component geometry, signed electric field streamlines ($0\text{ V} \to -20\text{ kV}$) with color-coded $|\mathbf{E}|$, zero-voltage field extinction, and uniform schematic action-reaction force vectors ($F \propto V^2$).
 - **The Four Questions Tour:** Guided plain-language walkthrough answering *What am I seeing?*, *Why does it happen?*, *What changes it?*, and *How could we test it?*, rendered with accessible HTML math notation.
 - **Action-Reaction Force Ledger:** Structured by physical system boundaries, demonstrating that internal electrostatic forces sum identically to zero across the isolated Device Under Test (Boundary A), while clearly separating external lab environment walls (Boundary B) and the closed universe (Boundary C).
-- **Honest Provenance & Disclaimers:** Explicitly marked `WHOLE-BODY THRUST: NOT MEASURED / NOT ESTABLISHED`. No unverified thrust claims, and zero fabricated force numbers.
-- **What-If Sandbox:** Explore how voltage ($0 - 50\text{ kV}$, scaling $\propto V^2$), permittivity ($\varepsilon_r \in [1, 5]$), and collision-bounded electrode spacing alter field gradients.
-- **Accessible & Responsive Design:** Crash-free keyboard navigation, modal focus trapping, and responsive layout verified on mobile screens down to 375px.
+- **Honest Provenance & Disclaimers:** Explicitly marked `WHOLE-BODY THRUST: NOT MEASURED / NOT ESTABLISHED`. No unverified thrust claims, zero fabricated force numbers, and accurate patent citations (FIGS. 6B, 21, 23A for dielectric potting).
+- **What-If Sandbox:** Explore how voltage ($0 - 50\text{ kV}$, scaling $\propto V^2$), permittivity ($\varepsilon_r \in [1, 5]$), and collision-bounded electrode spacing ($\ge 16\text{ mm}$ maintaining $\ge 3.0\text{ mm}$ positive clearance from dielectric) alter field gradients, with zero GPU memory leaks on slider drag.
+- **Accessible & Responsive Design:** Crash-free keyboard navigation, modal focus trapping, and responsive layout verified on mobile screens down to 375px. Tested with automated browser smoke suite.
 
 ![Propulsion Explorer 3D V0 Preview](assets/propulsion_explorer_v0_preview.png)
 
@@ -58,8 +59,15 @@ The question driving the project is **not "How do we prove Exodus is right?"** I
 
 **2 of 5 independently reviewed scientific phases are accepted.** This is *not* a percentage of product completion or proof of unusual propulsion. Educational visual milestones (Track A) proceed in parallel with scientific remediation (Track B).
 
-- **Track A (Interactive 3D Explorer) — V0 R2 REMEDIATED & READY FOR INDEPENDENT RE-REVIEW:**
-  - **V0 — FIRST WORKING 3D EXPLORER (ROUND 2):** Complete standalone browser application delivered on branch `v0-propulsion-explorer-3d` ([Issue #13](https://github.com/aguacatero/scalar-wave-viz/issues/13), [Draft PR #14](https://github.com/aguacatero/scalar-wave-viz/pull/14)). Remediated all findings from ChatGPT independent review V0 R1 (`pullrequestreview-5732570567`): removed invented newton force numbers; reversed electric field streamlines to flow $0\text{ V} \to -20\text{ kV}$ with complete zero-voltage extinction; replaced OrbitControls private method calls with crash-free spherical coordinate math; partitioned force accounting into Boundary A (DUT), Boundary B (Environment), and Boundary C (Universe); enabled enclosure raycast picking; dynamically synchronized UI state on slider input; bounded gap spacing ($\ge 15\text{ mm}$) to prevent mesh collision; and implemented responsive mobile flex-wrapping (375px/390px) and modal focus trapping. 23 unit tests passing; 95 total discovery tests passing.
+- **Track A (Interactive 3D Explorer) — V0 R3 REMEDIATED & READY FOR INDEPENDENT RE-REVIEW:**
+  - **V0 — FIRST WORKING 3D EXPLORER (ROUND 3):** Complete standalone browser application delivered on branch `v0-propulsion-explorer-3d` ([Issue #13](https://github.com/aguacatero/scalar-wave-viz/issues/13), [Draft PR #14](https://github.com/aguacatero/scalar-wave-viz/pull/14)). Remediated all findings from ChatGPT independent re-review V0 R2 (`pullrequestreview-5739337831`):
+    - `V0-R2-F1`: Implemented occlusion-free interior picking (`getPickedObject`) that prioritizes blade, ground, dielectric, and mount through the outer transparent chamber walls.
+    - `V0-R2-M1`: Resized dielectric potting to 16 mm width centered at x=3 mm and set gap slider minimum to 16 mm, guaranteeing $\ge 3.0\text{ mm}$ positive physical clearance across the full slider range $[16, 50]\text{ mm}$; synchronized blade dimensions `{30.0, 25.4, 3.0, 0.1}` between provenance JSON and Three.js mesh.
+    - `V0-R2-M2`: Corrected dielectric patent citation to `US11511891B2, FIGS. 6B, 21, 23A; col. 7 lines 30–55` (dielectric potting) and rejected FIG. 7 (force vectors).
+    - `V0-R2-M3`: Built companion automated browser smoke test suite (`tests/test_v0_browser_smoke.py`) using Playwright against real Chromium; added Playwright to CI workflow; recaptured all 6 visual assets with all layers visibly active.
+    - `V0-R2-M4`: Replaced disparate arrow constants with uniform normalized base length (`UNIFORM_ARROW_BASE_LEN = 18.0`) scaling identically as $18.0 \times (V/20)^2$, strictly depicting action/reaction directions without uncomputed relative force ratios.
+    - `V0-R2-M5`: Implemented recursive `disposeHierarchy(root)` eliminating GPU geometry and material leaks on slider drags.
+    - Verification: 28 unit tests passing; 8 browser smoke tests passing; 108 total tests passing across repo.
 - **Track B (Scientific Acceptance Gates) — 2 OF 5 ACCEPTED:**
   - **P0 — ACCEPTED AND MERGED:** Conventional electrostatics baseline, [PR #5](https://github.com/aguacatero/scalar-wave-viz/pull/5).
   - **P1 — ACCEPTED AND MERGED:** Numerical validation and force accounting, [PR #10](https://github.com/aguacatero/scalar-wave-viz/pull/10). Accepted R11 scientific SHA `2a87abd0f8de873899f541d521d303d0f4462954`; **merged** in main commit `8e1fdb32655d073002ae5a794b08e48f19a78a0f`.

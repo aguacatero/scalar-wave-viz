@@ -1,14 +1,12 @@
 """Unit tests for the 3D Propulsion Explorer (V0) assets, provenance, and launcher.
 
-Remediated for Review Round V0 R2:
-- V0-R1-F1: Verify removal of invented newton numbers and rejection of unearned 'observed/measured' claims.
-- V0-R1-F2: Verify electric field signed direction (ground to cathode) and zero-volt extinction.
-- V0-R1-F3: Verify supported camera orbit/zoom functions without invalid OrbitControls calls.
-- V0-R1-F4: Verify strict boundary separation (DUT vs External Chamber Environment).
-- V0-R1-M1: Verify dynamic metadata binding hooks for sliders, legends, and inspector.
-- V0-R1-M2: Verify enclosure picking and hover raycasting support.
-- V0-R1-M3: Verify geometry synchronization and non-intersecting gap bounds.
-- V0-R1-M4: Verify semantic HTML math, modal focus trapping, and mobile styling.
+Remediated for Review Round V0 R3:
+- V0-R2-F1: Verify raycasting prioritizes interior components over outer enclosure chamber.
+- V0-R2-M1: Verify physical clearance (>= 3.0 mm) between ground plate and dielectric; synchronize blade mesh dimensions.
+- V0-R2-M2: Verify dielectric citation references FIGS. 6B, 21, 23A (col. 7 lines 30-55) and rejects FIG. 7.
+- V0-R2-M3: Verified by companion Playwright browser smoke suite (test_v0_browser_smoke.py).
+- V0-R2-M4: Verify uniform normalized vector length without arbitrary force ratio constants.
+- V0-R2-M5: Verify recursive disposal of Three.js geometry and material hierarchies to prevent GPU memory leaks.
 """
 
 from __future__ import annotations
@@ -19,9 +17,12 @@ import os
 import re
 import socket
 import unittest
+import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 EXPLORER_DIR = REPO_ROOT / "explorer"
 ASSETS_DIR = REPO_ROOT / "assets"
 
@@ -149,6 +150,29 @@ class PropulsionExplorerProvenanceSchemaTests(unittest.TestCase):
         self.assertTrue(any("polarity" in name for name in ctrl_names))
         self.assertTrue(any("enclosure" in name or "clearance" in name for name in ctrl_names))
 
+    def test_dielectric_citation_and_potting_provenance(self):
+        """V0-R2-M2: verify dielectric citation targets FIGS. 6B, 21, 23A (col. 7 lines 30-55) and rejects FIG. 7."""
+        by_id = {c["id"]: c for c in self.data["components"]}
+        dielectric = by_id["dielectric_block"]
+        citation = dielectric.get("citation", "")
+        self.assertIn("FIGS. 6B, 21, 23A", citation)
+        self.assertIn("col. 7 lines 30–55", citation)
+        self.assertNotIn("FIG. 7 (dielectric potting)", citation, "Dielectric citation must not cite FIG. 7 for potting")
+
+    def test_blade_and_dielectric_dimensions_provenance_vs_js(self):
+        """V0-R2-M1: verify provenance JSON dimensions synchronize with 3D mesh geometry in JS."""
+        by_id = {c["id"]: c for c in self.data["components"]}
+        blade_dims = by_id["blade_electrode"]["dimensions_mm"]
+        self.assertEqual(blade_dims["width"], 30.0)
+        self.assertEqual(blade_dims["height"], 25.4)
+        self.assertEqual(blade_dims["thickness"], 3.0)
+        self.assertEqual(blade_dims["tip_radius"], 0.1)
+
+        diel_dims = by_id["dielectric_block"]["dimensions_mm"]
+        self.assertEqual(diel_dims["width"], 16.0)
+        self.assertEqual(diel_dims["height"], 30.0)
+        self.assertEqual(diel_dims["depth"], 45.0)
+
 
 class PropulsionExplorerHTMLStructureTests(unittest.TestCase):
     """Verify HTML semantic tags, accessibility, layer toggles, and disclaimer banners."""
@@ -172,7 +196,7 @@ class PropulsionExplorerHTMLStructureTests(unittest.TestCase):
         self.assertIn('id="toggle-forces"', self.html)
         self.assertIn('id="toggle-enclosure"', self.html)
         self.assertIn('id="toggle-wireframe"', self.html)
-        self.assertIn("SCHEMATIC FLUX &amp; DIRECTIONS / NOT A COMPUTED FIELD", self.html)
+        self.assertIn("QUALITATIVE SCHEMATIC FLUX &amp; DIRECTIONS", self.html)
 
     def test_dynamic_legend_elements_present(self):
         """V0-R1-M1 regression: legends have IDs for dynamic binding."""
@@ -237,10 +261,43 @@ class PropulsionExplorerJSLogicTests(unittest.TestCase):
         self.assertIn("container.addEventListener('pointermove', onPointerMove)", self.js)
         self.assertIn("container.style.cursor = 'pointer'", self.js)
 
+    def test_raycast_picking_prioritizes_interior_over_enclosure(self):
+        """V0-R2-F1 regression: getPickedObject prioritizes interior components over enclosure chamber."""
+        self.assertIn("function getPickedObject(event)", self.js)
+        self.assertIn("let closestInterior = null;", self.js)
+        self.assertIn("let closestEnclosure = null;", self.js)
+        self.assertIn('if (id === "enclosure_walls")', self.js)
+        self.assertIn("return closestInterior || closestEnclosure || null;", self.js)
+
     def test_gap_slider_bounds_prevent_dielectric_collision(self):
-        """V0-R1-M3 regression: dielectric width <= 20 mm, gap >= 15 mm."""
-        self.assertIn("new THREE.BoxGeometry(20, 30, 45)", self.js)
-        self.assertIn("currentGapMM = Math.max(15.0", self.js)
+        """V0-R2-M1 regression: dielectric width 16 mm, gap >= 16 mm, ensuring >= 3.0 mm positive physical clearance."""
+        self.assertIn("new THREE.BoxGeometry(16, 30, 45)", self.js)
+        self.assertIn("currentGapMM = Math.max(16.0", self.js)
+        # Dielectric: center x=3.0, width=16.0 -> x_max = 3.0 + 8.0 = 11.0 mm
+        # Ground plate: center x=gap, width=4.0 -> x_min = gap - 2.0 mm
+        # At minimum gap 16.0 mm: x_min = 16.0 - 2.0 = 14.0 mm
+        # Clearance = 14.0 - 11.0 = +3.0 mm
+        diel_x_max = 3.0 + 16.0 / 2.0  # 11.0 mm
+        min_gap = 16.0
+        ground_x_min = min_gap - 4.0 / 2.0  # 14.0 mm
+        clearance = ground_x_min - diel_x_max
+        self.assertGreaterEqual(clearance, 3.0, f"Expected clearance >= 3.0 mm, got {clearance} mm")
+
+    def test_disposal_hierarchy_frees_gpu_memory(self):
+        """V0-R2-M5 regression: verify recursive disposeHierarchy prevents GPU memory leaks on slider drag."""
+        self.assertIn("function disposeHierarchy(root)", self.js)
+        self.assertIn("child.geometry.dispose()", self.js)
+        self.assertIn("child.material.dispose()", self.js)
+        self.assertIn("disposeHierarchy(obj);", self.js)
+
+    def test_uniform_force_arrow_scaling_no_arbitrary_ratios(self):
+        """V0-R2-M4 regression: verify uniform vector length scaling without arbitrary ratio constants."""
+        self.assertIn("const UNIFORM_ARROW_BASE_LEN = 18.0;", self.js)
+        self.assertNotIn("len * 24", self.js)
+        self.assertNotIn("len * 22", self.js)
+        self.assertNotIn("len * 8", self.js)
+        self.assertNotIn("len * 16", self.js)
+        self.assertNotIn("len * 10", self.js)
 
 
 class PropulsionExplorerLauncherTests(unittest.TestCase):

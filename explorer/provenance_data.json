@@ -2,7 +2,7 @@
   "metadata": {
     "project": "Scalar Wave Viz",
     "application": "Propulsion Explorer 3D (V0)",
-    "version": "0.2.0-r2",
+    "version": "0.3.0-r3",
     "citation": "Exodus Propulsion Technologies US11511891B2 FIGS. 4-8",
     "scientific_disposition": "EDUCATIONAL_3D_EXPLORER_NO_UNVERIFIED_THRUST",
     "evidence_grade": "PROVISIONAL_ILLUSTRATIVE_SCENE",
@@ -20,14 +20,14 @@
       "id": "blade_electrode",
       "name": "Asymmetric High-Voltage Blade",
       "role": "Active cathode with sharp tapered knife-edge",
-      "citation": "US11511891B2, FIGS. 4–8; col. 6 lines 15–45",
+      "citation": "US11511891B2, FIGS. 4–8; col. 6 lines 15–45 (tapered blade cathode)",
       "material": "High-conductivity copper / brass",
       "default_potential_v": -20000.0,
       "provenance_badge": "PUBLISHED HYPOTHESIS",
       "dimensions_mm": {
-        "width": 50.8,
+        "width": 30.0,
         "height": 25.4,
-        "thickness": 1.27,
+        "thickness": 3.0,
         "tip_radius": 0.1
       },
       "system_boundary": "DEVICE_UNDER_TEST",
@@ -59,12 +59,12 @@
       "id": "dielectric_block",
       "name": "Solid Dielectric Barrier / Potting",
       "role": "High-voltage breakdown suppression and dielectric polarization region",
-      "citation": "US11511891B2, FIG. 7 (dielectric potting)",
+      "citation": "US11511891B2, FIGS. 6B, 21, 23A; col. 7 lines 30–55 (dielectric medium 600 / high-voltage epoxy potting)",
       "material": "Epoxy resin / PTFE / FR-4",
       "default_eps_r": 3.8,
       "provenance_badge": "WHAT-IF PARAMETER",
       "dimensions_mm": {
-        "width": 20.0,
+        "width": 16.0,
         "height": 30.0,
         "depth": 45.0
       },
@@ -72,7 +72,8 @@
       "force_nature": "Dielectric virtual-work polarization stress toward highest field gradient",
       "schematic_direction": "-X (Polarization stress toward blade)",
       "force_magnitude_status": "SCHEMATIC_VECTOR_NOT_COMPUTED_IN_V0",
-      "status": "INTERNAL_MATERIAL_POLARIZATION_STRESS"
+      "status": "INTERNAL_MATERIAL_POLARIZATION_STRESS",
+      "note": "Illustrative single-stage potting block in V0 representing patent dielectric medium 600 / epoxy potting. Does not reproduce the multi-blade FIG. 21 test article. Note that patent FIG. 7 depicts electrostatic pressure-force vectors, not dielectric specification."
     },
     {
       "id": "support_mount",

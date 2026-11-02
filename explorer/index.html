@@ -65,7 +65,7 @@
         <div class="legend-item"><span class="legend-swatch swatch-ground"></span> <span id="legend-ground-label">Ground (0.0 V)</span></div>
         <div class="legend-item"><span class="legend-swatch swatch-dielectric"></span> <span id="legend-dielectric-label">Dielectric (&epsilon;<sub>r</sub> = 3.8)</span></div>
         <div class="legend-item"><span class="legend-swatch swatch-field"></span> <span id="legend-field-label">Electric Field E (&plusmn;0 V &rarr; -V)</span></div>
-        <div class="legend-item"><span class="legend-swatch swatch-force"></span> <span id="legend-force-label">Schematic Forces (F &prop; V<sup>2</sup>)</span></div>
+        <div class="legend-item"><span class="legend-swatch swatch-force"></span> <span id="legend-force-label">Schematic Vectors (Uniform length; F &prop; V<sup>2</sup>)</span></div>
       </div>
     </div>
 
@@ -115,8 +115,8 @@
           
           <div class="disclaimer-box">
             <strong>Layer Notation:</strong>
-            <span class="badge-disclaimer">SCHEMATIC FLUX &amp; DIRECTIONS / NOT A COMPUTED FIELD</span>
-            <p>Field lines depict qualitative flux density between electrodes. Arrow lengths illustrate relative scaling (&prop; <i>V</i><sup>2</sup>), not unverified newton quantities.</p>
+            <span class="badge-disclaimer">QUALITATIVE SCHEMATIC FLUX &amp; DIRECTIONS</span>
+            <p>Field lines depict qualitative flux density between electrodes. Arrow lengths illustrate relative voltage scaling (&prop; <i>V</i><sup>2</sup>) with uniform normalized length to show physical line of action only; lengths do not imply component-to-component force ratios.</p>
           </div>
         </div>
 
@@ -255,8 +255,8 @@
               <label for="slider-gap" class="slider-label">Electrode Gap (d):</label>
               <span class="slider-value" id="val-gap">25.0 mm</span>
             </div>
-            <input type="range" id="slider-gap" min="15" max="50" step="1" value="25" class="input-range">
-            <div class="slider-hint">Peak electric field: <i>E</i> &approx; <i>V</i> / <i>d</i>. Ground electrode translates dynamically without volume intersection.</div>
+            <input type="range" id="slider-gap" min="16" max="50" step="1" value="25" class="input-range">
+            <div class="slider-hint">Peak electric field: <i>E</i> &approx; <i>V</i> / <i>d</i>. Ground electrode translates dynamically with verified positive physical clearance (&ge; 3.0 mm) from dielectric potting.</div>
           </div>
 
           <button id="btn-reset-sandbox" class="btn btn-secondary btn-block">Reset Sandbox Defaults</button>
