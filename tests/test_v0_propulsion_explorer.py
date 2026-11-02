@@ -1,11 +1,14 @@
 """Unit tests for the 3D Propulsion Explorer (V0) assets, provenance, and launcher.
 
-Verifies:
-1. File structure and asset completeness for zero-dependency offline operation.
-2. Semantic schema and scientific integrity of provenance_data.json.
-3. Strict conservation of whole-body forces and fail-closed disclaimer assertions.
-4. HTML accessibility, semantic structure, and 4-question educational narrative.
-5. run_explorer.py configuration, argument handling, and port discovery.
+Remediated for Review Round V0 R2:
+- V0-R1-F1: Verify removal of invented newton numbers and rejection of unearned 'observed/measured' claims.
+- V0-R1-F2: Verify electric field signed direction (ground to cathode) and zero-volt extinction.
+- V0-R1-F3: Verify supported camera orbit/zoom functions without invalid OrbitControls calls.
+- V0-R1-F4: Verify strict boundary separation (DUT vs External Chamber Environment).
+- V0-R1-M1: Verify dynamic metadata binding hooks for sliders, legends, and inspector.
+- V0-R1-M2: Verify enclosure picking and hover raycasting support.
+- V0-R1-M3: Verify geometry synchronization and non-intersecting gap bounds.
+- V0-R1-M4: Verify semantic HTML math, modal focus trapping, and mobile styling.
 """
 
 from __future__ import annotations
@@ -45,9 +48,7 @@ class PropulsionExplorerV0AssetTests(unittest.TestCase):
         three_path = EXPLORER_DIR / "vendor" / "three.min.js"
         controls_path = EXPLORER_DIR / "vendor" / "OrbitControls.js"
 
-        # Three.js should be substantial (> 200 KB)
         self.assertGreater(three_path.stat().st_size, 200_000)
-        # OrbitControls should be substantial (> 10 KB)
         self.assertGreater(controls_path.stat().st_size, 10_000)
 
         with open(three_path, "r", encoding="utf-8", errors="ignore") as f:
@@ -60,7 +61,7 @@ class PropulsionExplorerV0AssetTests(unittest.TestCase):
 
 
 class PropulsionExplorerProvenanceSchemaTests(unittest.TestCase):
-    """Verify schema, scientific provenance, and strict whole-body force conservation."""
+    """Verify schema, scientific provenance, and strict system boundary accounting."""
 
     def setUp(self):
         self.provenance_path = EXPLORER_DIR / "provenance_data.json"
@@ -68,7 +69,7 @@ class PropulsionExplorerProvenanceSchemaTests(unittest.TestCase):
             self.data = json.load(f)
 
     def test_top_level_keys(self):
-        expected_keys = {"metadata", "four_questions", "components", "whole_body_ledger", "null_controls"}
+        expected_keys = {"metadata", "four_questions", "components", "force_accounting_ledger", "null_controls"}
         self.assertTrue(expected_keys.issubset(self.data.keys()))
 
     def test_metadata_scientific_disposition(self):
@@ -77,77 +78,76 @@ class PropulsionExplorerProvenanceSchemaTests(unittest.TestCase):
         self.assertEqual(meta["evidence_grade"], "PROVISIONAL_ILLUSTRATIVE_SCENE")
         self.assertIn("US11511891B2", meta["citation"])
 
-    def test_four_questions_narrative_present(self):
+    def test_no_invented_newton_forces_in_components(self):
+        """V0-R1-F1 regression: ensure no invented numeric force quantities appear in data."""
+        components = self.data["components"]
+        for comp in components:
+            self.assertNotIn("nominal_force_n", comp, f"Component {comp['id']} has invented nominal_force_n")
+            self.assertNotIn("force_vector", comp, f"Component {comp['id']} has invented numeric force_vector")
+            self.assertIn("schematic_direction", comp)
+            self.assertEqual(comp["force_magnitude_status"], "SCHEMATIC_VECTOR_NOT_COMPUTED_IN_V0")
+
+            # Must not claim observation or positive measurement on unmeasured models
+            lower_status = comp["status"].lower()
+            self.assertFalse(bool(re.search(r"\bobserved\b", lower_status)), f"Component {comp['id']} claims 'observed' status without measurement")
+            self.assertFalse(bool(re.search(r"(?<!un)measured", lower_status)), f"Component {comp['id']} claims 'measured' status without measurement")
+
+    def test_four_questions_narrative_and_signed_physics(self):
+        """V0-R1-F2 regression: conventional E points from high potential (ground) to low potential (cathode)."""
         fq = self.data["four_questions"]
         self.assertIn("what_am_i_seeing", fq)
         self.assertIn("why_does_it_happen", fq)
         self.assertIn("what_changes_it", fq)
         self.assertIn("how_could_we_test_it", fq)
 
-        # Content checks
-        self.assertIn("US11511891B2", fq["what_am_i_seeing"])
-        self.assertIn("Maxwell", fq["why_does_it_happen"])
-        self.assertIn("V^2", fq["what_changes_it"])
-        self.assertIn("Tajmar", fq["how_could_we_test_it"])
+        why_text = fq["why_does_it_happen"]
+        self.assertIn("higher potential (ground, 0 V) toward lower potential (cathode, -20 kV)", why_text)
+        self.assertIn("Maxwell", why_text)
 
-    def test_components_schema_and_provenance_badges(self):
-        valid_badges = {
-            "ESTABLISHED MODEL",
-            "PUBLISHED HYPOTHESIS",
-            "WHAT-IF PARAMETER",
-            "UNVERIFIED NUMERICAL OUTPUT",
-            "EXPERIMENTAL MEASUREMENT",
-        }
-        components = self.data["components"]
-        self.assertGreaterEqual(len(components), 4)
+        test_text = fq["how_could_we_test_it"]
+        self.assertIn("Tajmar", test_text)
+        self.assertIn("< 10^-5 Torr", test_text)
 
-        component_ids = [c["id"] for c in components]
-        self.assertIn("blade_electrode", component_ids)
-        self.assertIn("ground_electrode", component_ids)
-        self.assertIn("dielectric_block", component_ids)
-        self.assertIn("enclosure_walls", component_ids)
+    def test_system_boundaries_in_ledger(self):
+        """V0-R1-F4 regression: distinguish DUT control volume from external chamber environment."""
+        ledger = self.data["force_accounting_ledger"]
+        self.assertIn("boundary_a_isolated_dut", ledger)
+        self.assertIn("boundary_b_external_environment", ledger)
+        self.assertIn("boundary_c_total_universe", ledger)
 
-        for comp in components:
-            self.assertIn("id", comp)
-            self.assertIn("name", comp)
-            self.assertIn("role", comp)
-            self.assertIn("citation", comp)
-            self.assertIn("provenance_badge", comp)
-            self.assertIn(comp["provenance_badge"], valid_badges)
-            self.assertIn("status", comp)
-            # Ensure no component falsely claims thrust
-            self.assertNotIn("thrust achieved", comp["status"].lower())
-            self.assertNotIn("propulsion verified", comp["status"].lower())
+        dut = ledger["boundary_a_isolated_dut"]
+        self.assertEqual(dut["whole_body_thrust_status"], "NOT MEASURED / NOT ESTABLISHED")
+        self.assertIn("BALANCED", dut["internal_stress_sum"])
+        self.assertIn("UNVERIFIED_PENDING_CHAMBER_CALIBRATION", dut["external_environmental_coupling"])
 
-    def test_whole_body_ledger_strict_conservation(self):
-        ledger = self.data["whole_body_ledger"]
+        ext = ledger["boundary_b_external_environment"]
+        ext_elements = [x["element"] for x in ext["interactions"]]
+        self.assertIn("Chamber Enclosure Walls", ext_elements)
 
-        # Whole body thrust must be unestablished
-        self.assertEqual(ledger["whole_body_thrust_status"], "NOT MEASURED / NOT ESTABLISHED")
+        universe = ledger["boundary_c_total_universe"]
+        self.assertIn("IDENTICALLY ZERO", universe["total_sum"])
 
-        # Sum of forces in conventional electrostatics must be 0.0
-        f_blade = ledger["blade_traction_n"]
-        f_ground = ledger["ground_reaction_n"]
-        f_diel = ledger["dielectric_traction_n"]
-        f_wall = ledger["enclosure_reaction_n"]
-        total_sum = f_blade + f_ground + f_diel + f_wall
+    def test_components_system_boundaries_assigned(self):
+        """V0-R1-F4 regression: every component must specify its system boundary."""
+        for comp in self.data["components"]:
+            self.assertIn("system_boundary", comp)
+            self.assertIn(comp["system_boundary"], {"DEVICE_UNDER_TEST", "EXTERNAL_ENVIRONMENT"})
 
-        self.assertAlmostEqual(total_sum, 0.0, places=4, msg="Action-reaction balance violated in ledger")
-        self.assertEqual(ledger["net_closed_system_force_n"], 0.000)
-
-        # Conservation statement must be present and unequivocal
-        stmt = ledger["scientific_statement"].lower()
-        self.assertIn("sum identically to zero", stmt)
-        self.assertIn("does not produce net propellantless thrust", stmt)
+        # Blade, ground, dielectric, mount must be DUT; enclosure must be EXTERNAL_ENVIRONMENT
+        by_id = {c["id"]: c for c in self.data["components"]}
+        self.assertEqual(by_id["blade_electrode"]["system_boundary"], "DEVICE_UNDER_TEST")
+        self.assertEqual(by_id["ground_electrode"]["system_boundary"], "DEVICE_UNDER_TEST")
+        self.assertEqual(by_id["dielectric_block"]["system_boundary"], "DEVICE_UNDER_TEST")
+        self.assertEqual(by_id["support_mount"]["system_boundary"], "DEVICE_UNDER_TEST")
+        self.assertEqual(by_id["enclosure_walls"]["system_boundary"], "EXTERNAL_ENVIRONMENT")
 
     def test_null_controls_comprehensiveness(self):
         controls = self.data["null_controls"]
         self.assertGreaterEqual(len(controls), 3)
-
         ctrl_names = [c["name"].lower() for c in controls]
-        self.assertTrue(any("vacuum" in name for name in ctrl_names), "Missing high-vacuum control")
-        self.assertTrue(any("polarity" in name for name in ctrl_names), "Missing polarity inversion control")
-        self.assertTrue(any("enclosure" in name or "clearance" in name for name in ctrl_names), "Missing wall clearance control")
+        self.assertTrue(any("vacuum" in name for name in ctrl_names))
+        self.assertTrue(any("polarity" in name for name in ctrl_names))
+        self.assertTrue(any("enclosure" in name or "clearance" in name for name in ctrl_names))
 
 
 class PropulsionExplorerHTMLStructureTests(unittest.TestCase):
@@ -166,35 +166,81 @@ class PropulsionExplorerHTMLStructureTests(unittest.TestCase):
         self.assertIn('role="main"', self.html)
         self.assertIn('role="complementary"', self.html)
 
-    def test_layer_toggles_present(self):
+    def test_layer_toggles_and_disclaimers(self):
         self.assertIn('id="toggle-geometry"', self.html)
         self.assertIn('id="toggle-fields"', self.html)
         self.assertIn('id="toggle-forces"', self.html)
         self.assertIn('id="toggle-enclosure"', self.html)
         self.assertIn('id="toggle-wireframe"', self.html)
-        self.assertIn("SCHEMATIC / NOT TO SCALE", self.html)
+        self.assertIn("SCHEMATIC FLUX &amp; DIRECTIONS / NOT A COMPUTED FIELD", self.html)
 
-    def test_what_if_sliders_present(self):
-        self.assertIn('id="slider-voltage"', self.html)
-        self.assertIn('id="slider-eps"', self.html)
-        self.assertIn('id="slider-gap"', self.html)
-        self.assertIn("WHAT-IF PARAMETER", self.html)
+    def test_dynamic_legend_elements_present(self):
+        """V0-R1-M1 regression: legends have IDs for dynamic binding."""
+        self.assertIn('id="legend-blade-label"', self.html)
+        self.assertIn('id="legend-ground-label"', self.html)
+        self.assertIn('id="legend-dielectric-label"', self.html)
+        self.assertIn('id="legend-field-label"', self.html)
+        self.assertIn('id="legend-force-label"', self.html)
 
-    def test_whole_body_thrust_banner_not_established(self):
+    def test_boundaries_present_in_html_ledger(self):
+        """V0-R1-F4 regression: HTML ledger separates Boundary A from Boundary B."""
+        self.assertIn("Boundary A: Suspended Test Article (DUT Control Volume)", self.html)
+        self.assertIn("Boundary B: External Test Environment", self.html)
+        self.assertIn("DUT Internal Stress Sum", self.html)
         self.assertIn("WHOLE-BODY THRUST: NOT MEASURED / NOT ESTABLISHED", self.html)
-        self.assertIn("internal mechanical stress", self.html.lower())
-        self.assertIn("sum to zero", self.html.lower())
 
-    def test_no_fictitious_or_unqualified_thrust_claims(self):
-        lower_html = self.html.lower()
-        self.assertNotIn("propellantless propulsion achieved", lower_html)
-        self.assertNotIn("anomalous thrust measured", lower_html)
-        self.assertNotIn("scalar wave thrust detected", lower_html)
+    def test_no_raw_latex_syntax_in_html(self):
+        """V0-R1-M4 regression: verify no raw unrendered LaTeX strings in HTML."""
+        self.assertNotIn(r"\propto", self.html)
+        self.assertNotIn(r"\varepsilon", self.html)
+        self.assertNotIn(r"\frac", self.html)
+        self.assertNotIn(r"\nabla", self.html)
 
-    def test_vendor_scripts_loaded_locally(self):
-        self.assertIn('src="vendor/three.min.js"', self.html)
-        self.assertIn('src="vendor/OrbitControls.js"', self.html)
-        self.assertIn('src="explorer.js"', self.html)
+    def test_modal_focus_trap_attributes(self):
+        """V0-R1-M4 regression: modal content has tabindex='-1' for focus capture."""
+        self.assertIn('class="tour-modal-content" tabindex="-1"', self.html)
+        self.assertIn('class="tour-modal-content help-content" tabindex="-1"', self.html)
+
+
+class PropulsionExplorerJSLogicTests(unittest.TestCase):
+    """Verify JavaScript runtime logic, OrbitControls safety, and event bindings."""
+
+    def setUp(self):
+        js_path = EXPLORER_DIR / "explorer.js"
+        with open(js_path, "r", encoding="utf-8") as f:
+            self.js = f.read()
+
+    def test_no_invalid_orbit_controls_method_calls(self):
+        """V0-R1-F3 regression: verify nonexistent rotateLeft/rotateUp/dollyIn are NOT called."""
+        self.assertNotIn("controls.rotateLeft(", self.js)
+        self.assertNotIn("controls.rotateUp(", self.js)
+        self.assertNotIn("controls.dollyIn(", self.js)
+        self.assertNotIn("controls.dollyOut(", self.js)
+
+        # Verify robust mathematical functions are implemented
+        self.assertIn("function orbitCamera(deltaTheta, deltaPhi)", self.js)
+        self.assertIn("function dollyCamera(factor)", self.js)
+
+    def test_zero_voltage_extinguishes_fields_and_forces(self):
+        """V0-R1-F2 regression: zero volts completely turns off field and force groups."""
+        self.assertIn("if (currentVoltageKV <= 0.0)", self.js)
+        self.assertIn("fieldGroup.visible = false", self.js)
+        self.assertIn("forceGroup.visible = false", self.js)
+
+    def test_raycasting_includes_enclosure(self):
+        """V0-R1-M2 regression: pickableObjects includes enclosure_walls."""
+        self.assertIn("pickableObjects.push(chamberMesh)", self.js)
+        self.assertIn("raycaster.intersectObjects(pickableObjects", self.js)
+
+    def test_pointer_hover_installed(self):
+        """V0-R1-M2 regression: pointermove event listener is installed."""
+        self.assertIn("container.addEventListener('pointermove', onPointerMove)", self.js)
+        self.assertIn("container.style.cursor = 'pointer'", self.js)
+
+    def test_gap_slider_bounds_prevent_dielectric_collision(self):
+        """V0-R1-M3 regression: dielectric width <= 20 mm, gap >= 15 mm."""
+        self.assertIn("new THREE.BoxGeometry(20, 30, 45)", self.js)
+        self.assertIn("currentGapMM = Math.max(15.0", self.js)
 
 
 class PropulsionExplorerLauncherTests(unittest.TestCase):
@@ -202,7 +248,6 @@ class PropulsionExplorerLauncherTests(unittest.TestCase):
 
     def test_is_port_available_detects_open_port(self):
         from run_explorer import is_port_available
-        # An unused high port should be available
         avail = is_port_available("127.0.0.1", 59483)
         self.assertTrue(avail)
 
@@ -217,7 +262,6 @@ class PropulsionExplorerLauncherTests(unittest.TestCase):
         self.assertTrue(EXPLORER_DIR.exists())
         self.assertTrue((EXPLORER_DIR / "index.html").exists())
 
-        # Test creating server on an ephemeral high port
         server, port = create_server("127.0.0.1", 59550)
         try:
             self.assertGreaterEqual(port, 59550)

@@ -20,13 +20,14 @@ The planned **interactive 3D lab** lets anyone:
 
 ### Visual Explorer V0 — Available Now in Browser
 
-The first working version (**V0**) of the 3D Propulsion Explorer is now runnable directly in your web browser:
+The first working version (**V0**) of the 3D Propulsion Explorer is runnable directly in your web browser:
 - **Interactive 3D Geometry:** Orbit, zoom, and inspect an Exodus-inspired single-stage electrode assembly (US11511891B2 FIGS. 4–8) featuring a high-voltage blade cathode (-20 kV), a planar ground counter-electrode (0 V), solid dielectric potting block, and grounded chamber walls.
-- **Dynamic Field & Force Layers:** Switch between component geometry, electric field streamlines with color-coded $|\mathbf{E}|$, and action-reaction force vectors.
-- **The Four Questions Tour:** Guided plain-language walkthrough answering *What am I seeing?*, *Why does it happen?*, *What changes it?*, and *How could we test it?*.
-- **Action-Reaction Force Ledger:** Clear table showing how local blade traction is balanced by ground reaction, dielectric polarization, and chamber walls ($F_{\text{net}} = 0.000\text{ N}$).
-- **Honest Provenance & Disclaimers:** Explicitly marked `WHOLE-BODY THRUST: NOT MEASURED / NOT ESTABLISHED`. No unverified thrust claims.
-- **What-If Sandbox:** Explore how voltage ($0 - 50\text{ kV}$, scaling $\propto V^2$), permittivity ($\varepsilon_r \in [1, 5]$), and electrode spacing alter field gradients.
+- **Dynamic Field & Force Layers:** Switch between component geometry, signed electric field streamlines ($0\text{ V} \to -20\text{ kV}$) with color-coded $|\mathbf{E}|$, zero-voltage field extinction, and schematic action-reaction force vectors.
+- **The Four Questions Tour:** Guided plain-language walkthrough answering *What am I seeing?*, *Why does it happen?*, *What changes it?*, and *How could we test it?*, rendered with accessible HTML math notation.
+- **Action-Reaction Force Ledger:** Structured by physical system boundaries, demonstrating that internal electrostatic forces sum identically to zero across the isolated Device Under Test (Boundary A), while clearly separating external lab environment walls (Boundary B) and the closed universe (Boundary C).
+- **Honest Provenance & Disclaimers:** Explicitly marked `WHOLE-BODY THRUST: NOT MEASURED / NOT ESTABLISHED`. No unverified thrust claims, and zero fabricated force numbers.
+- **What-If Sandbox:** Explore how voltage ($0 - 50\text{ kV}$, scaling $\propto V^2$), permittivity ($\varepsilon_r \in [1, 5]$), and collision-bounded electrode spacing alter field gradients.
+- **Accessible & Responsive Design:** Crash-free keyboard navigation, modal focus trapping, and responsive layout verified on mobile screens down to 375px.
 
 ![Propulsion Explorer 3D V0 Preview](assets/propulsion_explorer_v0_preview.png)
 
@@ -51,14 +52,14 @@ The question driving the project is **not "How do we prove Exodus is right?"** I
 
 **Build a useful, clearly labeled educational visualizer early; never describe unverified physics as demonstrated thrust.** Passing tests and attractive plots do not replace physical measurement.
 
-## Project progress — verified November 1, 2026
+## Project progress — verified November 2, 2026
 
 ![Scientific roadmap: P0 and P1 accepted and merged; P2 active in draft review; P3 and P4 pending; 2 of 5 gates accepted](assets/research-progress.svg)
 
 **2 of 5 independently reviewed scientific phases are accepted.** This is *not* a percentage of product completion or proof of unusual propulsion. Educational visual milestones (Track A) proceed in parallel with scientific remediation (Track B).
 
-- **Track A (Interactive 3D Explorer) — V0 IMPLEMENTED & READY FOR REVIEW:**
-  - **V0 — FIRST WORKING 3D EXPLORER:** Complete standalone browser application delivered on branch `v0-propulsion-explorer-3d` ([Issue #13](https://github.com/aguacatero/scalar-wave-viz/issues/13)). Fully offline-ready with vendored Three.js, responsive controls, keyboard navigation fallback, 4-question interactive tour, What-If sandbox sliders, and strict fail-closed force accounting ($F_{\text{net}} = 0\text{ N}$; `WHOLE-BODY THRUST: NOT MEASURED / NOT ESTABLISHED`).
+- **Track A (Interactive 3D Explorer) — V0 R2 REMEDIATED & READY FOR INDEPENDENT RE-REVIEW:**
+  - **V0 — FIRST WORKING 3D EXPLORER (ROUND 2):** Complete standalone browser application delivered on branch `v0-propulsion-explorer-3d` ([Issue #13](https://github.com/aguacatero/scalar-wave-viz/issues/13), [Draft PR #14](https://github.com/aguacatero/scalar-wave-viz/pull/14)). Remediated all findings from ChatGPT independent review V0 R1 (`pullrequestreview-5732570567`): removed invented newton force numbers; reversed electric field streamlines to flow $0\text{ V} \to -20\text{ kV}$ with complete zero-voltage extinction; replaced OrbitControls private method calls with crash-free spherical coordinate math; partitioned force accounting into Boundary A (DUT), Boundary B (Environment), and Boundary C (Universe); enabled enclosure raycast picking; dynamically synchronized UI state on slider input; bounded gap spacing ($\ge 15\text{ mm}$) to prevent mesh collision; and implemented responsive mobile flex-wrapping (375px/390px) and modal focus trapping. 23 unit tests passing; 95 total discovery tests passing.
 - **Track B (Scientific Acceptance Gates) — 2 OF 5 ACCEPTED:**
   - **P0 — ACCEPTED AND MERGED:** Conventional electrostatics baseline, [PR #5](https://github.com/aguacatero/scalar-wave-viz/pull/5).
   - **P1 — ACCEPTED AND MERGED:** Numerical validation and force accounting, [PR #10](https://github.com/aguacatero/scalar-wave-viz/pull/10). Accepted R11 scientific SHA `2a87abd0f8de873899f541d521d303d0f4462954`; **merged** in main commit `8e1fdb32655d073002ae5a794b08e48f19a78a0f`.

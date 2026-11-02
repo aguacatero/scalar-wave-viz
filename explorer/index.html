@@ -56,16 +56,16 @@
       <!-- Scene Notification / Tooltip Banner -->
       <div id="scene-banner" class="scene-banner" role="status" aria-live="polite">
         <span class="banner-icon">ℹ️</span>
-        <span id="banner-text">Click any component to inspect physical role, citations, and local forces.</span>
+        <span id="banner-text">Click or hover any component (blade, ground, dielectric, mount, chamber) to inspect.</span>
       </div>
 
       <!-- Layer Legend Overlay -->
-      <div class="layer-legend-hud">
-        <div class="legend-item"><span class="legend-swatch swatch-blade"></span> Blade (-20 kV)</div>
-        <div class="legend-item"><span class="legend-swatch swatch-ground"></span> Ground (0 V)</div>
-        <div class="legend-item"><span class="legend-swatch swatch-dielectric"></span> Dielectric (ε<sub>r</sub> = 3.8)</div>
-        <div class="legend-item"><span class="legend-swatch swatch-field"></span> Electric Field E</div>
-        <div class="legend-item"><span class="legend-swatch swatch-force"></span> Force Vector F</div>
+      <div class="layer-legend-hud" aria-label="Scene Legend">
+        <div class="legend-item"><span class="legend-swatch swatch-blade"></span> <span id="legend-blade-label">Blade (-20.0 kV)</span></div>
+        <div class="legend-item"><span class="legend-swatch swatch-ground"></span> <span id="legend-ground-label">Ground (0.0 V)</span></div>
+        <div class="legend-item"><span class="legend-swatch swatch-dielectric"></span> <span id="legend-dielectric-label">Dielectric (&epsilon;<sub>r</sub> = 3.8)</span></div>
+        <div class="legend-item"><span class="legend-swatch swatch-field"></span> <span id="legend-field-label">Electric Field E (&plusmn;0 V &rarr; -V)</span></div>
+        <div class="legend-item"><span class="legend-swatch swatch-force"></span> <span id="legend-force-label">Schematic Forces (F &prop; V<sup>2</sup>)</span></div>
       </div>
     </div>
 
@@ -94,12 +94,12 @@
             <label class="toggle-switch">
               <input type="checkbox" id="toggle-fields" checked>
               <span class="slider"></span>
-              <span class="toggle-label">Electric Field &amp; Equipotentials</span>
+              <span class="toggle-label">Electric Field Streamlines</span>
             </label>
             <label class="toggle-switch">
               <input type="checkbox" id="toggle-forces" checked>
               <span class="slider"></span>
-              <span class="toggle-label">Forces &amp; Reaction Vectors</span>
+              <span class="toggle-label">Action &amp; Reaction Vectors</span>
             </label>
             <label class="toggle-switch">
               <input type="checkbox" id="toggle-enclosure" checked>
@@ -115,15 +115,15 @@
           
           <div class="disclaimer-box">
             <strong>Layer Notation:</strong>
-            <span class="badge-disclaimer">SCHEMATIC / NOT TO SCALE</span>
-            <p>Field lines and force vectors illustrate Maxwell stress distribution. Lengths reflect relative magnitude, not unverified thrust claims.</p>
+            <span class="badge-disclaimer">SCHEMATIC FLUX &amp; DIRECTIONS / NOT A COMPUTED FIELD</span>
+            <p>Field lines depict qualitative flux density between electrodes. Arrow lengths illustrate relative scaling (&prop; <i>V</i><sup>2</sup>), not unverified newton quantities.</p>
           </div>
         </div>
 
         <div class="panel-card">
           <h2 class="card-title">Electrode Components</h2>
           <p class="card-desc">Select an element to highlight it in 3D and view details:</p>
-          <div class="component-list" role="listbox" id="component-list">
+          <div class="component-list" role="group" aria-label="Electrode Components" id="component-list">
             <!-- Populated dynamically by JS -->
           </div>
         </div>
@@ -133,28 +133,70 @@
       <section class="tab-panel" id="tab-ledger" role="tabpanel" aria-labelledby="tab-btn-ledger">
         <div class="panel-card">
           <h2 class="card-title">Whole-Body Force Ledger</h2>
-          <p class="card-desc">Conventional electrodynamics: internal electrostatic forces must balance across all system elements.</p>
+          <p class="card-desc">Explicit distinction between the suspended test article (DUT) and the external vacuum chamber.</p>
 
-          <div class="ledger-table-wrapper">
-            <table class="ledger-table" aria-label="Component Force Ledger">
-              <thead>
-                <tr>
-                  <th scope="col">Component</th>
-                  <th scope="col">Force F<sub>x</sub></th>
-                  <th scope="col">Role</th>
-                </tr>
-              </thead>
-              <tbody id="ledger-table-body">
-                <!-- Dynamically populated -->
-              </tbody>
-              <tfoot>
-                <tr class="ledger-net-row">
-                  <th scope="row">Net Closed-System Force</th>
-                  <td id="ledger-net-force" class="net-zero">0.000 N</td>
-                  <td>Balanced (Newton's 3rd Law)</td>
-                </tr>
-              </tfoot>
-            </table>
+          <!-- Boundary 1: Suspended Device Under Test (DUT) -->
+          <div class="ledger-boundary-block">
+            <div class="boundary-header">
+              <h3 class="boundary-title">Boundary A: Suspended Test Article (DUT Control Volume)</h3>
+              <span class="boundary-badge">SUSPENDED APPARATUS</span>
+            </div>
+            <p class="boundary-desc">All elements mounted on the suspended fixture: blade cathode, ground electrode, dielectric block, and support frame.</p>
+
+            <div class="ledger-table-wrapper">
+              <table class="ledger-table" aria-label="DUT Internal Force Ledger">
+                <thead>
+                  <tr>
+                    <th scope="col">DUT Element</th>
+                    <th scope="col">Direction</th>
+                    <th scope="col">Force Nature</th>
+                  </tr>
+                </thead>
+                <tbody id="ledger-dut-tbody">
+                  <!-- Dynamically populated -->
+                </tbody>
+                <tfoot>
+                  <tr class="ledger-net-row">
+                    <th scope="row">DUT Internal Stress Sum</th>
+                    <td class="net-zero">BALANCED</td>
+                    <td>Internal action-reaction pairs cancel</td>
+                  </tr>
+                  <tr class="ledger-sub-row">
+                    <th scope="row">DUT External Chamber Coupling</th>
+                    <td class="net-unverified">UNVERIFIED</td>
+                    <td>Requires boundary clearance calibration</td>
+                  </tr>
+                  <tr class="ledger-sub-row">
+                    <th scope="row">DUT Net Propellantless Thrust</th>
+                    <td class="net-not-established">NOT ESTABLISHED</td>
+                    <td>Zero in conventional electrodynamics</td>
+                  </tr>
+                </tfoot>
+              </table>
+            </div>
+          </div>
+
+          <!-- Boundary 2: External Test Environment -->
+          <div class="ledger-boundary-block">
+            <div class="boundary-header">
+              <h3 class="boundary-title">Boundary B: External Test Environment</h3>
+              <span class="boundary-badge external-badge">EXTERNAL LAB FRAME</span>
+            </div>
+            <p class="boundary-desc">Vacuum tank walls, power leads, and laboratory ground.</p>
+            <div class="ledger-table-wrapper">
+              <table class="ledger-table" aria-label="External Environment Ledger">
+                <thead>
+                  <tr>
+                    <th scope="col">External Element</th>
+                    <th scope="col">Direction</th>
+                    <th scope="col">Interaction Nature</th>
+                  </tr>
+                </thead>
+                <tbody id="ledger-ext-tbody">
+                  <!-- Dynamically populated -->
+                </tbody>
+              </table>
+            </div>
           </div>
 
           <div class="status-banner banner-not-established">
@@ -163,8 +205,9 @@
               <strong class="status-title">WHOLE-BODY THRUST: NOT MEASURED / NOT ESTABLISHED</strong>
             </div>
             <p class="status-text">
-              An attractive force on the blade electrode is an <strong>internal mechanical stress</strong>, not net propellantless propulsion.
-              Newton's third law and Maxwell stress surface integration require internal forces to sum to zero on an isolated closed assembly.
+              Local attraction on the blade cathode is an <strong>internal mechanical stress</strong>, not propellantless propulsion.
+              Summing over the chamber plus apparatus does <em>not</em> prove an isolated test article experiences net propulsion;
+              environmental image charges can transfer momentum to external walls.
             </p>
           </div>
 
@@ -193,7 +236,7 @@
               <span class="slider-value" id="val-voltage">-20.0 kV</span>
             </div>
             <input type="range" id="slider-voltage" min="0" max="50" step="1" value="20" class="input-range">
-            <div class="slider-hint">Force scales quadratically: F &prop; V<sup>2</sup></div>
+            <div class="slider-hint">Force scales quadratically: <i>F</i> &prop; <i>V</i><sup>2</sup>. At 0 kV, electric fields and forces vanish.</div>
           </div>
 
           <!-- Permittivity Slider -->
@@ -203,7 +246,7 @@
               <span class="slider-value" id="val-eps">3.8 (Epoxy)</span>
             </div>
             <input type="range" id="slider-eps" min="1.0" max="5.0" step="0.1" value="3.8" class="input-range">
-            <div class="slider-hint">Controls polarization stress &amp; capacitive coupling</div>
+            <div class="slider-hint">Controls polarization stress &amp; capacitive coupling.</div>
           </div>
 
           <!-- Gap Slider -->
@@ -212,8 +255,8 @@
               <label for="slider-gap" class="slider-label">Electrode Gap (d):</label>
               <span class="slider-value" id="val-gap">25.0 mm</span>
             </div>
-            <input type="range" id="slider-gap" min="10" max="50" step="1" value="25" class="input-range">
-            <div class="slider-hint">Peak electric field: E &approx; V / d</div>
+            <input type="range" id="slider-gap" min="15" max="50" step="1" value="25" class="input-range">
+            <div class="slider-hint">Peak electric field: <i>E</i> &approx; <i>V</i> / <i>d</i>. Ground electrode translates dynamically without volume intersection.</div>
           </div>
 
           <button id="btn-reset-sandbox" class="btn btn-secondary btn-block">Reset Sandbox Defaults</button>
@@ -232,13 +275,15 @@
           <dl class="inspector-details" id="inspector-details">
             <dt>Citation Reference:</dt>
             <dd id="inspector-citation">—</dd>
+            <dt>System Boundary:</dt>
+            <dd id="inspector-boundary">—</dd>
             <dt>Material:</dt>
             <dd id="inspector-material">—</dd>
             <dt>Operating Potential:</dt>
             <dd id="inspector-potential">—</dd>
-            <dt>Dimensions:</dt>
+            <dt>Dimensions (mm):</dt>
             <dd id="inspector-dimensions">—</dd>
-            <dt>Local Force F<sub>x</sub>:</dt>
+            <dt>Schematic Force Vector:</dt>
             <dd id="inspector-force">—</dd>
             <dt>Scientific Status:</dt>
             <dd id="inspector-status">—</dd>
@@ -254,14 +299,14 @@
 
   <!-- Interactive Guided Tour Modal Overlay -->
   <div id="tour-modal" class="tour-modal hidden" role="dialog" aria-modal="true" aria-labelledby="tour-step-title">
-    <div class="tour-modal-content">
+    <div class="tour-modal-content" tabindex="-1">
       <div class="tour-header">
         <span class="tour-step-count" id="tour-step-count">Step 1 of 4</span>
         <h2 class="tour-step-title" id="tour-step-title">What am I seeing?</h2>
         <button id="tour-btn-close" class="modal-close-btn" aria-label="Close guided tour">&times;</button>
       </div>
       <div class="tour-body" id="tour-step-body">
-        <!-- Populated by JS -->
+        <!-- Populated by JS with clean HTML math -->
       </div>
       <div class="tour-footer">
         <button id="tour-btn-prev" class="btn btn-secondary">Previous</button>
@@ -278,7 +323,7 @@
 
   <!-- Help & Four Questions Modal -->
   <div id="help-modal" class="tour-modal hidden" role="dialog" aria-modal="true" aria-labelledby="help-title">
-    <div class="tour-modal-content help-content">
+    <div class="tour-modal-content help-content" tabindex="-1">
       <div class="tour-header">
         <h2 class="tour-step-title" id="help-title">Propulsion Explorer — The Four Questions</h2>
         <button id="help-btn-close" class="modal-close-btn" aria-label="Close help">&times;</button>
@@ -286,31 +331,32 @@
       <div class="tour-body help-body">
         <section class="qa-block">
           <h3>1. What am I seeing?</h3>
-          <p>An asymmetric high-voltage electrode assembly inspired by Exodus Propulsion Technologies patent US11511891B2 (FIGS. 4–8). A tapered knife-edge blade is charged to high voltage opposite a planar ground electrode inside an enclosure.</p>
+          <p>An illustrative 3D model of an asymmetric electrostatic electrode assembly inspired by Exodus Propulsion Technologies patent US11511891B2 (FIGS. 4–8). It features an asymmetric high-voltage knife-edge blade cathode opposite a planar ground counter-electrode inside a grounded conductive enclosure.</p>
         </section>
         <section class="qa-block">
           <h3>2. Why does it happen?</h3>
-          <p>Sharp conductor edges concentrate electric field lines ($E \propto 1/r$). Maxwell stress exerts electrostatic tension ($T_{xx} = \frac{1}{2}\varepsilon_0 E_x^2$) pulling on the blade tip. Simultaneously, opposing electrostatic forces pull on the ground electrode, the dielectric material, and the surrounding chamber walls.</p>
+          <p>Sharp conductor edges concentrate electric field lines (<i>E</i> &prop; 1/<i>r</i>). Maxwell electrostatic stress (<i>T<sub>xx</sub></i> = &frac12;&epsilon;<sub>0</sub><i>E<sub>x</sub></i><sup>2</sup>) exerts tension pulling on the blade tip. Conventional electric field vectors <b>E</b> = -&nabla;&Phi; point from higher potential (0 V, ground) toward lower potential (-20 kV, cathode). By Newton's third law, opposing reaction forces act on the ground electrode, the dielectric potting, and surrounding chamber walls.</p>
         </section>
         <section class="qa-block">
           <h3>3. What changes it?</h3>
-          <p>Voltage scales all electrostatic forces quadratically ($F \propto V^2$). Taper sharpness increases peak field. Dielectric permittivity alters polarization traction. Chamber wall proximity alters image-charge return coupling.</p>
+          <p>Applied voltage scales electrostatic force quadratically (<i>F</i> &prop; <i>V</i><sup>2</sup>). Taper sharpness increases local peak field gradients. Dielectric permittivity alters polarization traction. Chamber wall proximity alters image-charge boundary coupling.</p>
         </section>
         <section class="qa-block">
           <h3>4. How could we test it?</h3>
-          <p>To determine if net thrust exists, the entire closed system must be isolated on a micro-Newton balance in high vacuum ($< 10^{-5}\text{ Torr}$). Null controls must eliminate ion wind, electrostatic wall interactions, and thermal buoyancy.</p>
+          <p>To determine if net thrust exists, the entire isolated test article must be mounted on a calibrated micro-Newton torsion balance in high vacuum (&lt; 10<sup>-5</sup> Torr). Discriminating null controls must isolate corona ion wind, outgassing, electrostatic wall forces, and thermal convection (Tajmar &amp; Schreiber 2020).</p>
         </section>
         <section class="qa-block shortcuts-block">
           <h3>Keyboard Shortcuts</h3>
           <ul>
-            <li><kbd>&larr;</kbd> <kbd>&rarr;</kbd> <kbd>&uarr;</kbd> <kbd>&darr;</kbd> : Orbit camera</li>
-            <li><kbd>+</kbd> / <kbd>-</kbd> : Zoom in / out</li>
-            <li><kbd>R</kbd> : Reset camera view</li>
+            <li><kbd>&larr;</kbd> <kbd>&rarr;</kbd> : Orbit camera horizontally (Azimuth)</li>
+            <li><kbd>&uarr;</kbd> <kbd>&darr;</kbd> : Orbit camera vertically (Polar angle)</li>
+            <li><kbd>+</kbd> / <kbd>-</kbd> : Zoom in / out (Dolly)</li>
+            <li><kbd>R</kbd> : Reset camera to isometric view</li>
             <li><kbd>1</kbd> : Toggle Geometry layer</li>
             <li><kbd>2</kbd> : Toggle Electric Field layer</li>
-            <li><kbd>3</kbd> : Toggle Force Vectors layer</li>
-            <li><kbd>Tab</kbd> : Cycle selectable components</li>
-            <li><kbd>Esc</kbd> : Close open modal</li>
+            <li><kbd>3</kbd> : Toggle Action &amp; Reaction Vectors layer</li>
+            <li><kbd>Tab</kbd> / <kbd>Shift+Tab</kbd> : Navigate selectable elements</li>
+            <li><kbd>Esc</kbd> : Dismiss open modal dialog</li>
           </ul>
         </section>
       </div>

@@ -38,12 +38,12 @@ Build a useful **V0 educational 3D scene in parallel with P2 scientific remediat
 
 These instructions are work rules, **not proof of an automatic Antigravity scheduler or autonomous execution**. Maintain independent scientific review, exact source provenance and owner-only merge authority.
 
-## Current verified baseline (as of 2026-11-01)
+## Current verified baseline (as of 2026-11-02)
 
 - **P0 accepted and merged:** [PR #5](https://github.com/aguacatero/scalar-wave-viz/pull/5); independent R8 accepted science SHA `57067164b47d7d374a1d7bb1c8ce00bb79aa07f8`, [CI: 35 tests passed](https://github.com/aguacatero/scalar-wave-viz/actions/runs/39187698432).
 - **P1 accepted and merged:** [R11 acceptance review](https://github.com/aguacatero/scalar-wave-viz/pull/10#pullrequestreview-5644613779) for exact scientific code SHA `2a87abd0f8de873899f541d521d303d0f4462954`, [CI: 72 tests passed](https://github.com/aguacatero/scalar-wave-viz/actions/runs/40198587319). Owner-authorized [PR #10](https://github.com/aguacatero/scalar-wave-viz/pull/10) was **merged** in main SHA `8e1fdb32655d073002ae5a794b08e48f19a78a0f`. **Do not call PR #10 draft/unmerged.**
 - **P2 active, draft, unmerged and scientifically unaccepted:** [Issue #7](https://github.com/aguacatero/scalar-wave-viz/issues/7) and [Draft PR #11](https://github.com/aguacatero/scalar-wave-viz/pull/11). The [independent R9 review](https://github.com/aguacatero/scalar-wave-viz/pull/11#issuecomment-6566089334) concluded `CHANGES REQUIRED — P2 R9 SCIENTIFIC BASELINE NOT ACCEPTED` (findings tracked for R10). Do not merge P2 or begin P3 science without owner authorization.
-- **Visual experience V0–V4:** V0 implemented on dedicated branch `v0-propulsion-explorer-3d` ([Issue #13](https://github.com/aguacatero/scalar-wave-viz/issues/13)). Complete browser 3D explorer with offline vendored Three.js, layer toggles, 4-question tour, What-If sandbox, and whole-body force ledger. Does not modify accepted P0/P1 baselines.
+- **Visual experience V0–V4:** V0 implemented on dedicated branch `v0-propulsion-explorer-3d` ([Issue #13](https://github.com/aguacatero/scalar-wave-viz/issues/13), [Draft PR #14](https://github.com/aguacatero/scalar-wave-viz/pull/14)). Remediated R1 findings (F1-F4, M1-M4) for R2 re-review: signed field flow ($0\text{ V} \to -20\text{ kV}$), zero-voltage extinction, crash-free spherical keyboard navigation, Boundary A/B/C separation, zero invented forces, raycast enclosure picking, dynamic slider state sync, and mobile support. Does not modify accepted P0/P1 baselines.
 - **Autonomous pickup is conditional:** when invoked, read newest GitHub conversation and review findings. A README or AGENTS instruction itself is **not** a cron/poller. Keep MANUAL-ONLY status unless actual scheduler operation is verified. Never self-approve or merge.
 
 Refresh this point-in-time status from GitHub at every new session.
