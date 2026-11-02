@@ -1,0 +1,326 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Propulsion Explorer 3D (V0) — Scalar Wave Viz</title>
+  <meta name="description" content="A beginner-friendly 3D visual laboratory for exploring electric fields, local Maxwell stress, and whole-body force accounting in an Exodus-inspired electrode assembly.">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⚡</text></svg>">
+  <link rel="stylesheet" href="explorer.css">
+</head>
+<body>
+  <!-- Header / Navigation Bar -->
+  <header class="app-header" role="banner">
+    <div class="header-left">
+      <h1 class="app-title">Propulsion Explorer <span class="badge-version">V0</span></h1>
+      <p class="app-subtitle">Scalar Wave Viz — 3D Laboratory for Field &amp; Force Understanding</p>
+    </div>
+    <div class="header-center">
+      <span class="provenance-pill pill-provisional" id="global-provenance-badge" title="This scene is an illustrative educational 3D model. Unverified whole-body thrust is not established.">
+        PROVISIONAL EDUCATIONAL SCENE
+      </span>
+    </div>
+    <div class="header-right">
+      <button id="btn-start-tour" class="btn btn-primary" aria-label="Start interactive 4-question tour">
+        <span class="btn-icon">💡</span> Start Guided Tour
+      </button>
+      <button id="btn-reset-view" class="btn btn-secondary" aria-label="Reset 3D camera to default position">
+        <span class="btn-icon">🔄</span> Reset View
+      </button>
+      <button id="btn-toggle-help" class="btn btn-secondary" aria-label="Open 4 questions and physics background">
+        <span class="btn-icon">❓</span> Help &amp; Questions
+      </button>
+    </div>
+  </header>
+
+  <!-- Main Viewport and Sidebar Container -->
+  <main class="app-layout" role="main">
+    <!-- 3D Canvas Area -->
+    <div class="viewport-container" id="viewport-container" tabindex="0" aria-label="Interactive 3D electrode assembly view. Use mouse drag to rotate, wheel to zoom, or arrow keys for keyboard navigation.">
+      <canvas id="webgl-canvas"></canvas>
+
+      <!-- Loading Overlay -->
+      <div id="loading-overlay" class="loading-overlay">
+        <div class="spinner"></div>
+        <p class="loading-text">Initializing 3D Propulsion Explorer...</p>
+      </div>
+
+      <!-- View Preset HUD Overlay -->
+      <div class="view-preset-hud" role="toolbar" aria-label="Camera view angle presets">
+        <button class="hud-btn" data-view="isometric" title="Isometric 3D Perspective (Key: I)">Isometric</button>
+        <button class="hud-btn" data-view="side" title="Side Elevation View X-Y (Key: X)">Side (X-Y)</button>
+        <button class="hud-btn" data-view="front" title="Front Cross-Section Y-Z (Key: Y)">Front (Y-Z)</button>
+        <button class="hud-btn" data-view="top" title="Top Plan View X-Z (Key: Z)">Top (X-Z)</button>
+      </div>
+
+      <!-- Scene Notification / Tooltip Banner -->
+      <div id="scene-banner" class="scene-banner" role="status" aria-live="polite">
+        <span class="banner-icon">ℹ️</span>
+        <span id="banner-text">Click any component to inspect physical role, citations, and local forces.</span>
+      </div>
+
+      <!-- Layer Legend Overlay -->
+      <div class="layer-legend-hud">
+        <div class="legend-item"><span class="legend-swatch swatch-blade"></span> Blade (-20 kV)</div>
+        <div class="legend-item"><span class="legend-swatch swatch-ground"></span> Ground (0 V)</div>
+        <div class="legend-item"><span class="legend-swatch swatch-dielectric"></span> Dielectric (ε<sub>r</sub> = 3.8)</div>
+        <div class="legend-item"><span class="legend-swatch swatch-field"></span> Electric Field E</div>
+        <div class="legend-item"><span class="legend-swatch swatch-force"></span> Force Vector F</div>
+      </div>
+    </div>
+
+    <!-- Right Sidebar: Interactive Controls, Science Ledger, and Inspector -->
+    <aside class="sidebar-container" id="sidebar-container" role="complementary">
+      <!-- Tabs for Sidebar Panels -->
+      <nav class="sidebar-tabs" role="tablist">
+        <button class="tab-btn active" data-tab="tab-layers" role="tab" aria-selected="true" id="tab-btn-layers">Layers &amp; Views</button>
+        <button class="tab-btn" data-tab="tab-ledger" role="tab" aria-selected="false" id="tab-btn-ledger">Force Ledger</button>
+        <button class="tab-btn" data-tab="tab-sandbox" role="tab" aria-selected="false" id="tab-btn-sandbox">What-If Sandbox</button>
+        <button class="tab-btn" data-tab="tab-inspector" role="tab" aria-selected="false" id="tab-btn-inspector">Inspector</button>
+      </nav>
+
+      <!-- Tab 1: Layers & Display Toggles -->
+      <section class="tab-panel active" id="tab-layers" role="tabpanel" aria-labelledby="tab-btn-layers">
+        <div class="panel-card">
+          <h2 class="card-title">Visual Layers</h2>
+          <p class="card-desc">Toggle geometry, electric field streamlines, and reaction force vectors.</p>
+          
+          <div class="toggle-group">
+            <label class="toggle-switch">
+              <input type="checkbox" id="toggle-geometry" checked>
+              <span class="slider"></span>
+              <span class="toggle-label">Component Geometry</span>
+            </label>
+            <label class="toggle-switch">
+              <input type="checkbox" id="toggle-fields" checked>
+              <span class="slider"></span>
+              <span class="toggle-label">Electric Field &amp; Equipotentials</span>
+            </label>
+            <label class="toggle-switch">
+              <input type="checkbox" id="toggle-forces" checked>
+              <span class="slider"></span>
+              <span class="toggle-label">Forces &amp; Reaction Vectors</span>
+            </label>
+            <label class="toggle-switch">
+              <input type="checkbox" id="toggle-enclosure" checked>
+              <span class="slider"></span>
+              <span class="toggle-label">Chamber Enclosure Walls</span>
+            </label>
+            <label class="toggle-switch">
+              <input type="checkbox" id="toggle-wireframe">
+              <span class="slider"></span>
+              <span class="toggle-label">Wireframe Mode</span>
+            </label>
+          </div>
+          
+          <div class="disclaimer-box">
+            <strong>Layer Notation:</strong>
+            <span class="badge-disclaimer">SCHEMATIC / NOT TO SCALE</span>
+            <p>Field lines and force vectors illustrate Maxwell stress distribution. Lengths reflect relative magnitude, not unverified thrust claims.</p>
+          </div>
+        </div>
+
+        <div class="panel-card">
+          <h2 class="card-title">Electrode Components</h2>
+          <p class="card-desc">Select an element to highlight it in 3D and view details:</p>
+          <div class="component-list" role="listbox" id="component-list">
+            <!-- Populated dynamically by JS -->
+          </div>
+        </div>
+      </section>
+
+      <!-- Tab 2: Whole-Body Force Ledger (Action-Reaction Accounting) -->
+      <section class="tab-panel" id="tab-ledger" role="tabpanel" aria-labelledby="tab-btn-ledger">
+        <div class="panel-card">
+          <h2 class="card-title">Whole-Body Force Ledger</h2>
+          <p class="card-desc">Conventional electrodynamics: internal electrostatic forces must balance across all system elements.</p>
+
+          <div class="ledger-table-wrapper">
+            <table class="ledger-table" aria-label="Component Force Ledger">
+              <thead>
+                <tr>
+                  <th scope="col">Component</th>
+                  <th scope="col">Force F<sub>x</sub></th>
+                  <th scope="col">Role</th>
+                </tr>
+              </thead>
+              <tbody id="ledger-table-body">
+                <!-- Dynamically populated -->
+              </tbody>
+              <tfoot>
+                <tr class="ledger-net-row">
+                  <th scope="row">Net Closed-System Force</th>
+                  <td id="ledger-net-force" class="net-zero">0.000 N</td>
+                  <td>Balanced (Newton's 3rd Law)</td>
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+
+          <div class="status-banner banner-not-established">
+            <div class="status-header">
+              <span class="status-icon">⚠️</span>
+              <strong class="status-title">WHOLE-BODY THRUST: NOT MEASURED / NOT ESTABLISHED</strong>
+            </div>
+            <p class="status-text">
+              An attractive force on the blade electrode is an <strong>internal mechanical stress</strong>, not net propellantless propulsion.
+              Newton's third law and Maxwell stress surface integration require internal forces to sum to zero on an isolated closed assembly.
+            </p>
+          </div>
+
+          <div class="panel-card-inner">
+            <h3 class="inner-title">Discriminating Null Controls</h3>
+            <ul class="controls-list" id="null-controls-list">
+              <!-- Populated by JS -->
+            </ul>
+          </div>
+        </div>
+      </section>
+
+      <!-- Tab 3: What-If Parameter Sandbox -->
+      <section class="tab-panel" id="tab-sandbox" role="tabpanel" aria-labelledby="tab-btn-sandbox">
+        <div class="panel-card">
+          <div class="card-header-with-badge">
+            <h2 class="card-title">What-If Parameter Sandbox</h2>
+            <span class="provenance-pill pill-whatif">WHAT-IF PARAMETER</span>
+          </div>
+          <p class="card-desc">Explore how voltage, dielectric material, and gap spacing alter electric fields and local forces.</p>
+
+          <!-- Voltage Slider -->
+          <div class="slider-control">
+            <div class="slider-header">
+              <label for="slider-voltage" class="slider-label">High Voltage (V):</label>
+              <span class="slider-value" id="val-voltage">-20.0 kV</span>
+            </div>
+            <input type="range" id="slider-voltage" min="0" max="50" step="1" value="20" class="input-range">
+            <div class="slider-hint">Force scales quadratically: F &prop; V<sup>2</sup></div>
+          </div>
+
+          <!-- Permittivity Slider -->
+          <div class="slider-control">
+            <div class="slider-header">
+              <label for="slider-eps" class="slider-label">Dielectric Permittivity (&epsilon;<sub>r</sub>):</label>
+              <span class="slider-value" id="val-eps">3.8 (Epoxy)</span>
+            </div>
+            <input type="range" id="slider-eps" min="1.0" max="5.0" step="0.1" value="3.8" class="input-range">
+            <div class="slider-hint">Controls polarization stress &amp; capacitive coupling</div>
+          </div>
+
+          <!-- Gap Slider -->
+          <div class="slider-control">
+            <div class="slider-header">
+              <label for="slider-gap" class="slider-label">Electrode Gap (d):</label>
+              <span class="slider-value" id="val-gap">25.0 mm</span>
+            </div>
+            <input type="range" id="slider-gap" min="10" max="50" step="1" value="25" class="input-range">
+            <div class="slider-hint">Peak electric field: E &approx; V / d</div>
+          </div>
+
+          <button id="btn-reset-sandbox" class="btn btn-secondary btn-block">Reset Sandbox Defaults</button>
+        </div>
+      </section>
+
+      <!-- Tab 4: Component Inspector -->
+      <section class="tab-panel" id="tab-inspector" role="tabpanel" aria-labelledby="tab-btn-inspector">
+        <div class="panel-card" id="inspector-card">
+          <div class="card-header-with-badge">
+            <h2 class="card-title" id="inspector-name">Select a Component</h2>
+            <span class="provenance-pill" id="inspector-badge">ESTABLISHED MODEL</span>
+          </div>
+          <p class="inspector-role" id="inspector-role">Click an electrode, dielectric block, or enclosure wall in the 3D scene to inspect.</p>
+          
+          <dl class="inspector-details" id="inspector-details">
+            <dt>Citation Reference:</dt>
+            <dd id="inspector-citation">—</dd>
+            <dt>Material:</dt>
+            <dd id="inspector-material">—</dd>
+            <dt>Operating Potential:</dt>
+            <dd id="inspector-potential">—</dd>
+            <dt>Dimensions:</dt>
+            <dd id="inspector-dimensions">—</dd>
+            <dt>Local Force F<sub>x</sub>:</dt>
+            <dd id="inspector-force">—</dd>
+            <dt>Scientific Status:</dt>
+            <dd id="inspector-status">—</dd>
+          </dl>
+
+          <div class="inspector-explanation" id="inspector-explanation">
+            <!-- Populated dynamically -->
+          </div>
+        </div>
+      </section>
+    </aside>
+  </main>
+
+  <!-- Interactive Guided Tour Modal Overlay -->
+  <div id="tour-modal" class="tour-modal hidden" role="dialog" aria-modal="true" aria-labelledby="tour-step-title">
+    <div class="tour-modal-content">
+      <div class="tour-header">
+        <span class="tour-step-count" id="tour-step-count">Step 1 of 4</span>
+        <h2 class="tour-step-title" id="tour-step-title">What am I seeing?</h2>
+        <button id="tour-btn-close" class="modal-close-btn" aria-label="Close guided tour">&times;</button>
+      </div>
+      <div class="tour-body" id="tour-step-body">
+        <!-- Populated by JS -->
+      </div>
+      <div class="tour-footer">
+        <button id="tour-btn-prev" class="btn btn-secondary">Previous</button>
+        <div class="tour-dots" id="tour-dots">
+          <span class="dot active"></span>
+          <span class="dot"></span>
+          <span class="dot"></span>
+          <span class="dot"></span>
+        </div>
+        <button id="tour-btn-next" class="btn btn-primary">Next</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Help & Four Questions Modal -->
+  <div id="help-modal" class="tour-modal hidden" role="dialog" aria-modal="true" aria-labelledby="help-title">
+    <div class="tour-modal-content help-content">
+      <div class="tour-header">
+        <h2 class="tour-step-title" id="help-title">Propulsion Explorer — The Four Questions</h2>
+        <button id="help-btn-close" class="modal-close-btn" aria-label="Close help">&times;</button>
+      </div>
+      <div class="tour-body help-body">
+        <section class="qa-block">
+          <h3>1. What am I seeing?</h3>
+          <p>An asymmetric high-voltage electrode assembly inspired by Exodus Propulsion Technologies patent US11511891B2 (FIGS. 4–8). A tapered knife-edge blade is charged to high voltage opposite a planar ground electrode inside an enclosure.</p>
+        </section>
+        <section class="qa-block">
+          <h3>2. Why does it happen?</h3>
+          <p>Sharp conductor edges concentrate electric field lines ($E \propto 1/r$). Maxwell stress exerts electrostatic tension ($T_{xx} = \frac{1}{2}\varepsilon_0 E_x^2$) pulling on the blade tip. Simultaneously, opposing electrostatic forces pull on the ground electrode, the dielectric material, and the surrounding chamber walls.</p>
+        </section>
+        <section class="qa-block">
+          <h3>3. What changes it?</h3>
+          <p>Voltage scales all electrostatic forces quadratically ($F \propto V^2$). Taper sharpness increases peak field. Dielectric permittivity alters polarization traction. Chamber wall proximity alters image-charge return coupling.</p>
+        </section>
+        <section class="qa-block">
+          <h3>4. How could we test it?</h3>
+          <p>To determine if net thrust exists, the entire closed system must be isolated on a micro-Newton balance in high vacuum ($< 10^{-5}\text{ Torr}$). Null controls must eliminate ion wind, electrostatic wall interactions, and thermal buoyancy.</p>
+        </section>
+        <section class="qa-block shortcuts-block">
+          <h3>Keyboard Shortcuts</h3>
+          <ul>
+            <li><kbd>&larr;</kbd> <kbd>&rarr;</kbd> <kbd>&uarr;</kbd> <kbd>&darr;</kbd> : Orbit camera</li>
+            <li><kbd>+</kbd> / <kbd>-</kbd> : Zoom in / out</li>
+            <li><kbd>R</kbd> : Reset camera view</li>
+            <li><kbd>1</kbd> : Toggle Geometry layer</li>
+            <li><kbd>2</kbd> : Toggle Electric Field layer</li>
+            <li><kbd>3</kbd> : Toggle Force Vectors layer</li>
+            <li><kbd>Tab</kbd> : Cycle selectable components</li>
+            <li><kbd>Esc</kbd> : Close open modal</li>
+          </ul>
+        </section>
+      </div>
+    </div>
+  </div>
+
+  <!-- Vendored Three.js and OrbitControls (100% Offline Capability) -->
+  <script src="vendor/three.min.js"></script>
+  <script src="vendor/OrbitControls.js"></script>
+  <!-- Application Core Script -->
+  <script src="explorer.js"></script>
+</body>
+</html>

@@ -1,0 +1,142 @@
+{
+  "metadata": {
+    "project": "Scalar Wave Viz",
+    "application": "Propulsion Explorer 3D (V0)",
+    "version": "0.1.0",
+    "citation": "Exodus Propulsion Technologies US11511891B2 FIGS. 4-8",
+    "scientific_disposition": "EDUCATIONAL_3D_EXPLORER_NO_UNVERIFIED_THRUST",
+    "evidence_grade": "PROVISIONAL_ILLUSTRATIVE_SCENE",
+    "date": "2026-11-01"
+  },
+  "four_questions": {
+    "what_am_i_seeing": "A 3D representation of an asymmetric electrostatic electrode pair inspired by Exodus Propulsion Technologies patent US11511891B2 (FIGS. 4–8). It features an asymmetric high-voltage blade cathode with a sharp leading edge, a planar ground counter-electrode, solid dielectric barrier potting, and an enclosing conductive boundary (vacuum chamber walls).",
+    "why_does_it_happen": "Sharp conductor geometries concentrate electric field lines (E ~ 1/r), creating high local Maxwell electrostatic tension (T_xx = 0.5 * eps_0 * E_x^2) that pulls forward on the blade edge. In a closed electrostatic system, Newton's third law and Maxwell stress surface closure require that equal and opposite forces act on the ground electrode, dielectric, and surrounding enclosure, resulting in zero net force.",
+    "what_changes_it": "Electrostatic forces scale quadratically with voltage (F ~ V^2). Sharper blade tips increase peak field gradients. Changing the dielectric material changes interface polarization. Bringing chamber walls closer alters boundary image charges and capacitive coupling.",
+    "how_could_we_test_it": "A true propellantless thruster must accelerate the center of mass of the entire closed system without expelling mass or radiating net momentum. Discriminating tests require operating in high vacuum (< 10^-5 Torr) on a calibrated micro-Newton torsion balance to eliminate corona ion wind, with polarity reversal and chamber clearance sweeps (Tajmar & Schreiber 2020)."
+  },
+  "components": [
+    {
+      "id": "blade_electrode",
+      "name": "Asymmetric High-Voltage Blade",
+      "role": "Active high-voltage cathode with tapered asymmetric cross-section",
+      "citation": "US11511891B2, FIGS. 4–8 (tapered blade cathode)",
+      "material": "High-conductivity copper / brass",
+      "default_potential_v": -20000.0,
+      "provenance_badge": "PUBLISHED HYPOTHESIS",
+      "dimensions_mm": {
+        "width": 50.8,
+        "height": 25.4,
+        "thickness": 1.27,
+        "tip_radius": 0.1
+      },
+      "force_description": "Local attractive electrostatic traction pulling forward toward ground electrode (+X direction)",
+      "nominal_force_n": 0.045,
+      "force_vector": [0.045, 0.0, 0.0],
+      "status": "LOCAL TRACTION PRESENT (DOES NOT IMPLY WHOLE-BODY THRUST)"
+    },
+    {
+      "id": "ground_electrode",
+      "name": "Ground Counter-Electrode",
+      "role": "Planar collector electrode held at reference ground potential (0 V)",
+      "citation": "US11511891B2, FIGS. 4–8; col. 6 lines 46–60",
+      "material": "Polished aluminum plate / collector mesh",
+      "default_potential_v": 0.0,
+      "provenance_badge": "ESTABLISHED MODEL",
+      "dimensions_mm": {
+        "width": 60.0,
+        "height": 40.0,
+        "thickness": 2.0
+      },
+      "force_description": "Equal and opposite reaction traction pulling backward toward blade electrode (-X direction)",
+      "nominal_force_n": -0.038,
+      "force_vector": [-0.038, 0.0, 0.0],
+      "status": "REACTION FORCE OBSERVED"
+    },
+    {
+      "id": "dielectric_block",
+      "name": "Solid Dielectric Barrier / Potting",
+      "role": "High-voltage breakdown suppression and dielectric polarization region",
+      "citation": "US11511891B2, FIG. 7 (dielectric potting)",
+      "material": "Epoxy resin / PTFE / FR-4",
+      "default_eps_r": 3.8,
+      "provenance_badge": "WHAT-IF PARAMETER",
+      "dimensions_mm": {
+        "width": 70.0,
+        "height": 45.0,
+        "depth": 50.8
+      },
+      "force_description": "Dielectric virtual-work polarization traction directed toward high-field region",
+      "nominal_force_n": -0.005,
+      "force_vector": [-0.005, 0.0, 0.0],
+      "status": "POLARIZATION STRESS BALANCED BY INTERNAL MATERIAL STRAIN"
+    },
+    {
+      "id": "support_mount",
+      "name": "Structural Support Mount",
+      "role": "Rigid non-conductive mechanical frame holding electrodes at fixed separation",
+      "citation": "Experimental apparatus mechanical requirement",
+      "material": "Delrin / PEEK non-conductive stand",
+      "default_potential_v": null,
+      "provenance_badge": "ESTABLISHED MODEL",
+      "dimensions_mm": {
+        "width": 90.0,
+        "height": 8.0,
+        "depth": 90.0
+      },
+      "force_description": "Internal mechanical constraint force holding electrodes apart against electrostatic attraction",
+      "nominal_force_n": 0.0,
+      "force_vector": [0.0, 0.0, 0.0],
+      "status": "STRUCTURAL CONSTRAINT FORCE"
+    },
+    {
+      "id": "enclosure_walls",
+      "name": "Conductive Enclosure (Chamber)",
+      "role": "Faraday shield, vacuum chamber boundary, and capacitive return wall",
+      "citation": "Standard vacuum chamber / grounded enclosure",
+      "material": "Stainless steel chamber",
+      "default_potential_v": 0.0,
+      "provenance_badge": "ESTABLISHED MODEL",
+      "dimensions_mm": {
+        "width": 160.0,
+        "height": 120.0,
+        "depth": 160.0
+      },
+      "force_description": "Wall reaction traction from image charges induced by high-voltage blade",
+      "nominal_force_n": -0.002,
+      "force_vector": [-0.002, 0.0, 0.0],
+      "status": "EXTERNAL BOUNDARY COUPLING"
+    }
+  ],
+  "whole_body_ledger": {
+    "blade_traction_n": 0.045,
+    "ground_reaction_n": -0.038,
+    "dielectric_traction_n": -0.005,
+    "enclosure_reaction_n": -0.002,
+    "net_closed_system_force_n": 0.000,
+    "whole_body_thrust_status": "NOT MEASURED / NOT ESTABLISHED",
+    "conservation_law": "Newton's Third Law & Maxwell Stress Surface Integral (sum F_x = 0)",
+    "scientific_statement": "In conventional electrodynamics, internal electrostatic forces and mechanical reactions on a closed rigid system sum identically to zero. Local asymmetry in electric field strength does NOT produce net propellantless thrust."
+  },
+  "null_controls": [
+    {
+      "name": "High-Vacuum Control (< 10^-5 Torr)",
+      "purpose": "Eliminate corona discharge, aerodynamic ion wind, and air convection",
+      "reference": "Tajmar & Schreiber (2020), J. Electrostat."
+    },
+    {
+      "name": "Polarity Inversion Control",
+      "purpose": "Reverse voltage polarity (+V to -V). Pure electrostatic force is symmetric (F ~ V^2); unipolar discharge or leakage shifts asymmetrically.",
+      "reference": "Standard electrostatic experimental methodology"
+    },
+    {
+      "name": "Enclosure Clearance Sweep",
+      "purpose": "Vary distance to conductive vacuum chamber walls to isolate image-charge coupling forces.",
+      "reference": "Exodus model contract (docs/EXODUS_MODEL_CONTRACT.md)"
+    },
+    {
+      "name": "Isolated Center-of-Mass Torsion Balance",
+      "purpose": "Measure net force on entire closed system including power source, avoiding lead-wire artifacts.",
+      "reference": "Tajmar & Schreiber (2020)"
+    }
+  ]
+}
