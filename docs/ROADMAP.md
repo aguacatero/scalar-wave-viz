@@ -39,7 +39,7 @@ Read [the product vision](PROPULSION_EXPLORER_VISION.md) and [the scientific cha
 - [ ] Validate domain-clearance, dielectric/interface, axial and full-device uncertainty estimates; export strict finite scientific evidence.
 - [ ] Independent review sign-off at the correct SHA and **separate owner-authorized merge**.
 
-**Verified as of 2026-11-01:** [Issue #7](https://github.com/aguacatero/scalar-wave-viz/issues/7), [Draft PR #11](https://github.com/aguacatero/scalar-wave-viz/pull/11); [independent R8 review](https://github.com/aguacatero/scalar-wave-viz/pull/11#issuecomment-6564571034) found **five blocking HIGH issues**. 126 passing tests do not mean P2 acceptance. No PR #11 merge, no P3 kickoff.
+**Verified as of 2026-11-01:** [Issue #7](https://github.com/aguacatero/scalar-wave-viz/issues/7), [Draft PR #11](https://github.com/aguacatero/scalar-wave-viz/pull/11); the [independent R8 review](https://github.com/aguacatero/scalar-wave-viz/pull/11#issuecomment-6564571034) identified five blocking HIGH issues. [R9 remediation](https://github.com/aguacatero/scalar-wave-viz/pull/11#issuecomment-6565425536) was submitted at SHA `661681d9a6483dea5df77b68442730e7afc18889` with [CI 126 tests passing](https://github.com/aguacatero/scalar-wave-viz/actions/runs/41360582041), **but awaits independent R9 review**. P2 is scientifically unaccepted, draft and unmerged; do not start P3 scientific work.
 
 ### P3 — physical scalar and nuclear hypotheses (PENDING)
 
