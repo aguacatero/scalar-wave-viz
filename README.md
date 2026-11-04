@@ -10,7 +10,7 @@ That is the goal of Scalar Wave Viz. We are building for curious nonspecialists 
 
 ## What we're building: a Propulsion Explorer
 
-The planned **interactive 3D lab** should let anyone:
+The planned **interactive 3D lab** lets anyone:
 
 1. **See it:** Rotate an apparatus; show electric fields, charge distribution, force arrows, and surrounding supports and walls.
 2. **Change it:** Adjust electrode geometry, spacing, voltage and documented material properties; see what the model predicts.
@@ -18,7 +18,19 @@ The planned **interactive 3D lab** should let anyone:
 4. **Test it:** Find the source and uncertainty behind each result, and learn which controls would distinguish a real effect from ion wind, nearby surfaces, wires or measurement drift.
 5. **Plan it:** Eventually export *provisional* dimensions, material requirements, electrical inputs, missing specifications, a bill-of-materials outline, and a controlled test plan — **not a proven propulsion recipe**.
 
-**The interactive 3D explorer is our product goal, not a feature already delivered.** Scientific calculations and early visual designs should advance in parallel rather than postponing the user experience until all physics research is finished.
+### Visual Explorer V0 — Available Now in Browser
+
+The first working version (**V0**) of the 3D Propulsion Explorer is runnable directly in your web browser:
+- **Interactive 3D Geometry:** Orbit, zoom, and inspect an Exodus-inspired single-stage electrode assembly (US11511891B2 FIGS. 4–8) featuring a high-voltage blade cathode (-20 kV), a planar ground counter-electrode (0 V), solid dielectric potting block, and grounded chamber walls.
+- **Occlusion-Free Interior Picking:** Click or hover directly on interior components (blade, ground plate, dielectric potting, structural mount) straight through the outer transparent chamber walls via intelligent raycasting priority, verified across default isometric and alternate camera views with real canvas pointer interactions.
+- **Dynamic Field & Force Layers:** Switch between component geometry, signed electric field streamlines ($0\text{ V} \to -20\text{ kV}$) with color-coded $|\mathbf{E}|$, zero-voltage field extinction, and bounded schematic action-reaction force vectors ($[6.0, 30.0]\text{ mm}$, $F \propto V^2$).
+- **The Four Questions Tour:** Guided plain-language walkthrough answering *What am I seeing?*, *Why does it happen?*, *What changes it?*, and *How could we test it?*, rendered with accessible HTML math notation.
+- **Action-Reaction Force Ledger:** Structured by physical system boundaries, demonstrating that internal electrostatic forces sum identically to zero across the isolated Device Under Test (Boundary A), while clearly separating external lab environment walls (Boundary B) and the closed universe (Boundary C).
+- **Honest Provenance & Disclaimers:** Explicitly marked `WHOLE-BODY THRUST: NOT MEASURED / NOT ESTABLISHED`. No unverified thrust claims, zero fabricated force numbers, explicit non-modeled tip radius metadata tag, and accurate patent citations (FIGS. 6B, 21, 23A for dielectric potting).
+- **What-If Sandbox:** Explore how voltage ($0 - 50\text{ kV}$, scaling $\propto V^2$), dielectric permittivity (visual material proxy $\varepsilon_r \in [1, 5]$), and surface-to-surface electrode gap ($d \ge 16\text{ mm}$ maintaining $\ge 5.0\text{ mm}$ positive clearance from dielectric potting) alter field gradients, with zero GPU memory leaks verified by instrumented prototype disposal.
+- **Accessible & Responsive Design:** Crash-free keyboard navigation, modal focus trapping, and responsive layout verified on mobile screens down to 375px. Tested with automated browser smoke suite.
+
+![Propulsion Explorer 3D V0 Preview](assets/propulsion_explorer_v0_preview.png)
 
 [Read the visual-first product vision](docs/PROPULSION_EXPLORER_VISION.md) and [dual-track roadmap](docs/ROADMAP.md).
 
@@ -41,19 +53,27 @@ The question driving the project is **not "How do we prove Exodus is right?"** I
 
 **Build a useful, clearly labeled educational visualizer early; never describe unverified physics as demonstrated thrust.** Passing tests and attractive plots do not replace physical measurement.
 
-## Project progress — verified November 1, 2026
+## Project progress — verified November 3, 2026
 
 ![Scientific roadmap: P0 and P1 accepted and merged; P2 active in draft review; P3 and P4 pending; 2 of 5 gates accepted](assets/research-progress.svg)
 
-**2 of 5 independently reviewed scientific phases are accepted.** This is *not* a percentage of product completion or proof of unusual propulsion.
+**2 of 5 independently reviewed scientific phases are accepted.** This is *not* a percentage of product completion or proof of unusual propulsion. Educational visual milestones (Track A) proceed in parallel with scientific remediation (Track B).
 
-- **P0 — ACCEPTED AND MERGED:** Conventional electrostatics baseline, [PR #5](https://github.com/aguacatero/scalar-wave-viz/pull/5).
-- **P1 — ACCEPTED AND MERGED:** Numerical validation and force accounting, [PR #10](https://github.com/aguacatero/scalar-wave-viz/pull/10). Accepted R11 scientific SHA `2a87abd0f8de873899f541d521d303d0f4462954`; **merged** in main commit `8e1fdb32655d073002ae5a794b08e48f19a78a0f`.
-- **P2 — ACTIVE DRAFT, NOT SCIENTIFICALLY ACCEPTED:** Exodus geometry and H0/H1 comparison in [Issue #7](https://github.com/aguacatero/scalar-wave-viz/issues/7), [Draft PR #11](https://github.com/aguacatero/scalar-wave-viz/pull/11). [Independent R8 review requested changes](https://github.com/aguacatero/scalar-wave-viz/pull/11#issuecomment-6564571034), including whole-assembly convergence and accurate uncertainty reporting. **Antigravity's R9 remediation has been submitted** at [SHA `661681d9...`](https://github.com/aguacatero/scalar-wave-viz/commit/661681d9a6483dea5df77b68442730e7afc18889) ([handoff](https://github.com/aguacatero/scalar-wave-viz/pull/11#issuecomment-6565425536), [CI: 126 tests passed](https://github.com/aguacatero/scalar-wave-viz/actions/runs/41360582041)); **independent R9 review is pending**, not accepted or merged.
-- **P3 — PENDING:** Physical scalar-field and nuclear hypotheses with traceable evidence and falsifiable predictions.
-- **P4 — PENDING SCIENTIFIC GATE:** Final validated research dashboard. **Early 3D visual-explorer development can happen in parallel**, without claiming P4 acceptance.
+- **Track A (Interactive 3D Explorer) — V0 R5 REMEDIATED & READY FOR INDEPENDENT RE-REVIEW:**
+  - **V0 — FIRST WORKING 3D EXPLORER (ROUND 5):** Complete standalone browser application delivered on branch `v0-propulsion-explorer-3d` ([Issue #13](https://github.com/aguacatero/scalar-wave-viz/issues/13), [Draft PR #14](https://github.com/aguacatero/scalar-wave-viz/pull/14)). Remediated all findings from ChatGPT independent re-review V0 R4 (`pullrequestreview-5744233825`):
+    - `V0-R4-F1`: Expanded alternate-view canvas pointer picking to cover all 5 components in both Side and Top views with real `page.mouse.move(x, y)` and `page.mouse.click(x, y)`, asserting `#banner-text` hover updates, inspector badge and title updates, and unique button selection; eliminated top view camera polar singularity (`camera.up.set(0, 0, -1)`).
+    - `V0-R4-M1`: Built runtime WebGL bounding-box regression test (`test_runtime_gap_slider_mesh_bounding_boxes`) querying `THREE.Box3().setFromObject(mesh)` directly across slider sweeps (16, 25, 50 mm), proving $x_{\text{ground,near}} - x_{\text{blade,tip}} == d$ and maintaining $\ge 5.0\text{ mm}$ physical clearance from dielectric potting ($x_{\text{diel,max}} = 11.0\text{ mm}$).
+    - `V0-R4-M2`: Formulated full vacuum Maxwell stress tensor component $T_{xx} = \varepsilon_0(E_x^2 - \frac{1}{2}|\mathbf{E}|^2) = \frac{1}{2}\varepsilon_0(E_x^2 - E_y^2 - E_z^2)$ across HTML, tour, and provenance metadata, explicitly qualifying $\frac{1}{2}\varepsilon_0 E_x^2$ as an idealized 1D approximation strictly valid only where transverse fields vanish.
+    - `V0-R4-M3`: Separated physical quadratic force scaling from visual arrow legibility encoding in `#inspector-force`: `[Physical Trend: (V/20)² = ...x | Visual Arrow: ... mm bounded legibility]`.
+    - Verification: 32 unit tests passing; 14 browser smoke tests passing; 118 total tests passing across repo.
+- **Track B (Scientific Acceptance Gates) — 2 OF 5 ACCEPTED:**
+  - **P0 — ACCEPTED AND MERGED:** Conventional electrostatics baseline, [PR #5](https://github.com/aguacatero/scalar-wave-viz/pull/5).
+  - **P1 — ACCEPTED AND MERGED:** Numerical validation and force accounting, [PR #10](https://github.com/aguacatero/scalar-wave-viz/pull/10). Accepted R11 scientific SHA `2a87abd0f8de873899f541d521d303d0f4462954`; **merged** in main commit `8e1fdb32655d073002ae5a794b08e48f19a78a0f`.
+  - **P2 — ACTIVE DRAFT, NOT SCIENTIFICALLY ACCEPTED:** Exodus geometry and H0/H1 comparison in [Issue #7](https://github.com/aguacatero/scalar-wave-viz/issues/7), [Draft PR #11](https://github.com/aguacatero/scalar-wave-viz/pull/11). The [independent R9 review](https://github.com/aguacatero/scalar-wave-viz/pull/11#issuecomment-6566089334) concluded `CHANGES REQUIRED — P2 R9 SCIENTIFIC BASELINE NOT ACCEPTED` (findings tracked for R10: full-length FIG. 21 refinement, domain sensitivity bounds, 3D dielectric virtual work benchmark, multi-body discretization extrapolation, and missing-term reporting). P2 remains separate from V0, draft and unmerged.
+  - **P3 — PENDING:** Physical scalar-field and nuclear hypotheses with traceable evidence and falsifiable predictions.
+  - **P4 — PENDING SCIENTIFIC GATE:** Final validated research dashboard.
 
-**Next user-facing milestone:** a simple 3D electric-field/force explorer, with clear reaction arrows and explanations. **Next scientific milestone:** resolve P2's independent review findings. Neither is claimed complete.
+**Next user-facing milestone:** expand V0 into V1 with direct solver-bound recalculation and scenario presets. **Next scientific milestone:** resolve P2's independent R10 findings. Neither is claimed complete.
 
 **Standing Antigravity rule:** At the start and end of every substantive implementation session, inspect and synchronize the README with live GitHub status. Any substantive repository change must carry its README update in the **same branch/PR**, including plain-English status and next steps. A no-change review should still explicitly verify the README without fabricating an update. Follow [AGENTS.md](AGENTS.md#mandatory-readme-progress-synchronization--every-project-update). This rule does not itself run a background scheduler.
 
@@ -65,7 +85,21 @@ Start with the [visual product vision](docs/PROPULSION_EXPLORER_VISION.md) and [
 
 ## What already runs
 
-## First reproducible conventional-electrostatics baseline
+### 3D Propulsion Explorer (V0) — Browser Laboratory
+
+Run the zero-friction local launcher from repository root:
+
+    python run_explorer.py
+
+This starts a lightweight local HTTP server and automatically opens `http://127.0.0.1:8000` in your default browser. No build steps, Node packages, or Jupyter notebooks required.
+
+Alternatively, serve with Python's standard library:
+
+    python -m http.server 8000 --directory explorer
+
+Or open `explorer/index.html` directly in any modern browser (offline capability with vendored Three.js).
+
+### First reproducible conventional-electrostatics baseline
 
 This new code deliberately separates an **analytic ideal parallel-plate benchmark** from a **2D field calculation for cylindrical electrodes inside a grounded outer enclosure**. The examples do **not** reproduce a particular Exodus patent embodiment, do not calculate device thrust and do not show any anomalous propulsion.
 

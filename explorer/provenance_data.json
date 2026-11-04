@@ -1,0 +1,173 @@
+{
+  "metadata": {
+    "project": "Scalar Wave Viz",
+    "application": "Propulsion Explorer 3D (V0)",
+    "version": "0.5.0-r5",
+    "citation": "Exodus Propulsion Technologies US11511891B2 FIGS. 4-8",
+    "scientific_disposition": "EDUCATIONAL_3D_EXPLORER_NO_UNVERIFIED_THRUST",
+    "evidence_grade": "PROVISIONAL_ILLUSTRATIVE_SCENE",
+    "date": "2026-11-02",
+    "note": "V0 displays qualitative schematic force directions and illustrative field paths. No quantitative force magnitudes are established or claimed."
+  },
+  "four_questions": {
+    "what_am_i_seeing": "An illustrative 3D model of an asymmetric electrostatic electrode pair inspired by Exodus Propulsion Technologies patent US11511891B2 (FIGS. 4–8). It depicts a tapered knife-edge blade cathode, an opposing planar ground counter-electrode, solid dielectric potting, and a surrounding grounded conductive test chamber.",
+    "why_does_it_happen": "Sharp conductor edges concentrate electric field lines (E &prop; 1/r), producing intense local Maxwell electrostatic tension pulling on the blade edge. In full 3D electrostatics, the vacuum Maxwell stress tensor component is T_xx = &epsilon;_0 (E_x^2 - &frac12;|E|^2) = &frac12;&epsilon;_0 (E_x^2 - E_y^2 - E_z^2); the simplified scalar form &frac12;&epsilon;_0 E_x^2 is an idealized 1D approximation where transverse fields vanish. Conventional electric field vectors E = -&nabla;&Phi; point from higher potential (ground, 0 V) toward lower potential (cathode, -20 kV). Newton's third law requires equal and opposite electrostatic reaction forces on the opposing ground electrode, dielectric material, and chamber enclosure.",
+    "what_changes_it": "Electrostatic forces scale quadratically with applied voltage (F &prop; V^2). Sharper blade geometry intensifies local peak field gradients. Dielectric choice alters polarization stress (modeled in V0 as a visual density/opacity proxy; continuous field redistribution deferred to solver-backed V1). Closer chamber walls increase capacitive coupling and image-charge reaction forces.",
+    "how_could_we_test_it": "To determine whether an asymmetric electrostatic geometry produces genuine propellantless propulsion, the entire isolated test article must be operated in high vacuum (< 10^-5 Torr) on a calibrated micro-Newton torsion pendulum (Tajmar & Schreiber 2020). Null controls must isolate corona ion wind, outgassing, electrostatic image forces on chamber walls, and thermal expansion."
+  },
+  "components": [
+    {
+      "id": "blade_electrode",
+      "name": "Asymmetric High-Voltage Blade",
+      "role": "Active cathode with sharp tapered knife-edge",
+      "citation": "US11511891B2, FIGS. 4–8; col. 6 lines 15–45 (tapered blade cathode)",
+      "material": "High-conductivity copper / brass",
+      "default_potential_v": -20000.0,
+      "provenance_badge": "PUBLISHED HYPOTHESIS",
+      "dimensions_mm": {
+        "width": 30.0,
+        "height": 25.4,
+        "thickness": 3.0,
+        "tip_radius": 0.1
+      },
+      "tip_radius_modeled_in_mesh": false,
+      "tip_geometry_note": "The V0 3D mesh models an idealized zero-radius knife-edge wedge vertex (r = 0); the cited patent specification (US11511891B2, FIG. 6 / col. 6 lines 15-45) indicates r ≈ 0.1 mm tip curvature. Tip curvature rounding is documented source metadata and is not filleted in the V0 polygonal geometry.",
+      "system_boundary": "DEVICE_UNDER_TEST",
+      "force_nature": "Attractive electrostatic traction toward ground electrode",
+      "schematic_direction": "+X (Forward traction toward ground)",
+      "force_magnitude_status": "SCHEMATIC_VECTOR_NOT_COMPUTED_IN_V0",
+      "status": "SCHEMATIC_TRACTION_DIRECTION (UNMEASURED IN V0)"
+    },
+    {
+      "id": "ground_electrode",
+      "name": "Ground Counter-Electrode",
+      "role": "Planar collector electrode held at reference ground potential (0 V)",
+      "citation": "US11511891B2, FIGS. 4–8; col. 6 lines 46–60",
+      "material": "Polished aluminum plate / collector mesh",
+      "default_potential_v": 0.0,
+      "provenance_badge": "ESTABLISHED MODEL",
+      "dimensions_mm": {
+        "width": 4.0,
+        "height": 40.0,
+        "depth": 50.8
+      },
+      "surface_gap_definition": "Surface-to-surface distance d from knife edge (x=0) to near planar face (x=d). With plate thickness 4 mm, center is at x=d+2.0 mm.",
+      "system_boundary": "DEVICE_UNDER_TEST",
+      "force_nature": "Attractive electrostatic reaction traction toward blade",
+      "schematic_direction": "-X (Reaction traction toward blade)",
+      "force_magnitude_status": "SCHEMATIC_VECTOR_NOT_COMPUTED_IN_V0",
+      "status": "SCHEMATIC_REACTION_DIRECTION (UNMEASURED IN V0)"
+    },
+    {
+      "id": "dielectric_block",
+      "name": "Solid Dielectric Barrier / Potting",
+      "role": "High-voltage breakdown suppression and dielectric polarization region",
+      "citation": "US11511891B2, FIGS. 6B, 21, 23A; col. 7 lines 30–55 (dielectric medium 600 / high-voltage epoxy potting)",
+      "material": "Epoxy resin / PTFE / FR-4",
+      "default_eps_r": 3.8,
+      "provenance_badge": "WHAT-IF PARAMETER",
+      "dimensions_mm": {
+        "width": 16.0,
+        "height": 30.0,
+        "depth": 45.0
+      },
+      "system_boundary": "DEVICE_UNDER_TEST",
+      "force_nature": "Dielectric virtual-work polarization stress toward highest field gradient",
+      "schematic_direction": "-X (Polarization stress toward blade)",
+      "force_magnitude_status": "SCHEMATIC_VECTOR_NOT_COMPUTED_IN_V0",
+      "status": "INTERNAL_MATERIAL_POLARIZATION_STRESS",
+      "permittivity_status": "VISUAL_MATERIAL_PROXY_ONLY_IN_V0",
+      "note": "Illustrative single-stage potting block in V0 representing patent dielectric medium 600 / epoxy potting. Does not reproduce the multi-blade FIG. 21 test article. Permittivity slider is a visual material proxy adjusting visual rendering/opacity only; continuous field redistribution, polarization force scaling, and capacitive coupling are not recalculated in V0 and will be introduced in solver-backed V1. Note that patent FIG. 7 depicts electrostatic pressure-force vectors, not dielectric specification."
+    },
+    {
+      "id": "support_mount",
+      "name": "Structural Support Mount",
+      "role": "Rigid non-conductive mechanical frame holding electrodes at fixed separation",
+      "citation": "Experimental apparatus mechanical requirement",
+      "material": "Delrin / PEEK non-conductive stand",
+      "default_potential_v": null,
+      "provenance_badge": "ESTABLISHED MODEL",
+      "dimensions_mm": {
+        "width": 90.0,
+        "height": 8.0,
+        "depth": 90.0
+      },
+      "system_boundary": "DEVICE_UNDER_TEST",
+      "force_nature": "Internal mechanical constraint holding electrodes apart against electrostatic attraction",
+      "schematic_direction": "+X (Structural reaction opposing ground pull)",
+      "force_magnitude_status": "SCHEMATIC_VECTOR_NOT_COMPUTED_IN_V0",
+      "status": "INTERNAL_STRUCTURAL_CONSTRAINT"
+    },
+    {
+      "id": "enclosure_walls",
+      "name": "Conductive Enclosure (Chamber)",
+      "role": "Faraday shield, vacuum chamber boundary, and capacitive return boundary",
+      "citation": "Standard vacuum chamber / grounded enclosure",
+      "material": "Stainless steel chamber",
+      "default_potential_v": 0.0,
+      "provenance_badge": "ESTABLISHED MODEL",
+      "dimensions_mm": {
+        "width": 160.0,
+        "height": 120.0,
+        "depth": 160.0
+      },
+      "system_boundary": "EXTERNAL_ENVIRONMENT",
+      "force_nature": "Wall reaction traction from image charges induced on external chamber boundary",
+      "schematic_direction": "-X (External wall image-charge coupling)",
+      "force_magnitude_status": "SCHEMATIC_VECTOR_NOT_COMPUTED_IN_V0",
+      "status": "EXTERNAL_ENVIRONMENT_COUPLING"
+    }
+  ],
+  "force_accounting_ledger": {
+    "boundary_a_isolated_dut": {
+      "name": "Isolated Device Under Test (DUT Control Volume)",
+      "description": "Suspended assembly consisting of blade cathode, ground electrode, dielectric potting, and mechanical mount.",
+      "internal_actions": [
+        {"element": "Blade Electrode", "direction": "+X (Forward traction)", "nature": "Local electrostatic attraction"},
+        {"element": "Ground Electrode", "direction": "-X (Reaction traction)", "nature": "Newton's 3rd law electrostatic partner"},
+        {"element": "Dielectric Potting", "direction": "-X (Polarization stress)", "nature": "Internal dielectric energy gradient"},
+        {"element": "Structural Mount", "direction": "+X (Constraint force)", "nature": "Rigid structural equilibrium"}
+      ],
+      "internal_stress_sum": "BALANCED (Net internal forces sum to zero)",
+      "external_environmental_coupling": "UNVERIFIED_PENDING_CHAMBER_CALIBRATION",
+      "whole_body_thrust_status": "NOT MEASURED / NOT ESTABLISHED",
+      "scientific_disclaimer": "Local force on the blade electrode is an internal electrostatic stress. A suspended test article experiences zero net propellantless thrust in conventional electrodynamics."
+    },
+    "boundary_b_external_environment": {
+      "name": "External Test Environment",
+      "description": "Surrounding chamber walls, vacuum tank, power feedthroughs, and laboratory ground.",
+      "interactions": [
+        {"element": "Chamber Enclosure Walls", "direction": "-X (Wall reaction)", "nature": "Capacitive image charges on vacuum tank walls"},
+        {"element": "Power Leads / Fixture", "direction": "Variable", "nature": "Lorentz and electrostatic lead coupling"}
+      ],
+      "environmental_momentum_exchange": "Coupling to chamber walls can transfer momentum to the external building frame, which must not be confused with propellantless thrust."
+    },
+    "boundary_c_total_universe": {
+      "name": "Total Closed System (DUT + Chamber + Environment)",
+      "conservation_law": "Newton's Third Law & Maxwell Stress Surface Integral (sum F = 0)",
+      "total_sum": "IDENTICALLY ZERO (Complete closed boundary momentum conservation)"
+    }
+  },
+  "null_controls": [
+    {
+      "name": "High-Vacuum Control (< 10^-5 Torr)",
+      "purpose": "Eliminate corona discharge, aerodynamic ion wind, and air convection",
+      "reference": "Tajmar & Schreiber (2020), J. Electrostat."
+    },
+    {
+      "name": "Polarity Inversion Control",
+      "purpose": "Reverse voltage polarity (+V to -V). Pure electrostatic force is symmetric (F ~ V^2); unipolar discharge or leakage shifts asymmetrically.",
+      "reference": "Standard electrostatic experimental methodology"
+    },
+    {
+      "name": "Enclosure Clearance Sweep",
+      "purpose": "Vary distance to conductive vacuum chamber walls to isolate image-charge coupling forces.",
+      "reference": "Exodus model contract (docs/EXODUS_MODEL_CONTRACT.md)"
+    },
+    {
+      "name": "Isolated Center-of-Mass Torsion Balance",
+      "purpose": "Measure net force on entire closed system including power source, avoiding lead-wire artifacts.",
+      "reference": "Tajmar & Schreiber (2020)"
+    }
+  ]
+}
