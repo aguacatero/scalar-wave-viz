@@ -2,9 +2,9 @@
 
 ## Summary of Changes
 
-Delivers **Milestone V0 (Round 4): The first working, beginner-friendly 3D Propulsion Explorer** on dedicated feature branch `v0-propulsion-explorer-3d`, implementing the user's visual-first north star from [Issue #13](https://github.com/aguacatero/scalar-wave-viz/issues/13) and [docs/PROPULSION_EXPLORER_VISION.md](docs/PROPULSION_EXPLORER_VISION.md).
+Delivers **Milestone V0 (Round 5): The first working, beginner-friendly 3D Propulsion Explorer** on dedicated feature branch `v0-propulsion-explorer-3d`, implementing the user's visual-first north star from [Issue #13](https://github.com/aguacatero/scalar-wave-viz/issues/13) and [docs/PROPULSION_EXPLORER_VISION.md](docs/PROPULSION_EXPLORER_VISION.md).
 
-This round remediates all 1 HIGH/BLOCKING finding (`V0-R3-F1`) and all 4 MEDIUM findings (`V0-R3-M1` through `M4`) identified in ChatGPT's independent re-review of V0 R3 ([`pullrequestreview-5742453106`](https://github.com/aguacatero/scalar-wave-viz/pull/14#pullrequestreview-5742453106)).
+This round remediates all 1 HIGH/BLOCKING finding (`V0-R4-F1`) and all 3 MEDIUM findings (`V0-R4-M1` through `M3`) identified in ChatGPT's independent re-review of V0 R4 ([`pullrequestreview-5744233825`](https://github.com/aguacatero/scalar-wave-viz/pull/14#pullrequestreview-5744233825)).
 
 The visual explorer makes the fundamental physics approachable for anyone:
 - Understand what electric fields do to an Exodus-inspired electrode arrangement.
@@ -28,7 +28,18 @@ Visual Tour & Interactivity Progression:
 
 ---
 
-## R3 Review Remediation Matrix (V0 Round 4)
+## R4 Review Remediation Matrix (V0 Round 5)
+
+| Finding | Severity | Description | Remediation in R5 | Verification |
+| --- | --- | --- | --- | --- |
+| **V0-R4-F1** | HIGH / BLOCKING | Alternate-view canvas picking test verified only 3 components and omitted hover banner, badge, and selected `data-id` checks for `support_mount` and `enclosure_walls`. Top view suffered from camera up-vector polar singularity. | 1. Fixed `setViewPreset('top')` in `explorer.js` to set `newUp = new THREE.Vector3(0, 0, -1)` and `newPos = (0, 140, 0.001)`, eliminating the polar singularity and guaranteeing standard screen orientation (-Z up, +X right).<br>2. Adjusted `support_mount` picking target to unoccluded front-left surface point `(-25, -20, 25)` and `enclosure_walls` to camera-adaptive view projections (`(0, 0, 55)` in top view, `(0, 38, 0)` in side view, `(0, 42, 45)` in isometric).<br>3. Upgraded `test_canvas_pointer_picking_alternate_camera_views` in `tests/test_v0_browser_smoke.py` to test **all 5 components in both Side and Top views** with real `page.mouse.move(x, y)` (asserting `#banner-text` hover updates), real `page.mouse.click(x, y)` (asserting exact inspector title and badge match), and asserting unique selected `.component-item-btn.selected[data-id]`. | `test_canvas_pointer_picking_alternate_camera_views` passes in headless Chromium across 10 distinct camera-component interactions (5 components × 2 views). |
+| **V0-R4-M1** | MEDIUM | Gap slider physical clearance regression was a static string/math check rather than a runtime WebGL geometry check derived from mesh transforms. | 1. Implemented `test_runtime_gap_slider_mesh_bounding_boxes` in `tests/test_v0_browser_smoke.py`.<br>2. Queries actual WebGL runtime geometry using `THREE.Box3().setFromObject(componentMeshes[id])` after `updateMatrixWorld(true)`.<br>3. Verifies across slider sweeps at 16, 25, and 50 mm that $x_{\text{ground,near}} - x_{\text{blade,tip}} == d$ identically matches the slider value and physical clearance $x_{\text{ground,near}} - x_{\text{diel,max}} \ge 5.0\text{ mm}$ is strictly maintained from dielectric potting ($x_{\text{diel,max}} = 11.0\text{ mm}$). | `test_runtime_gap_slider_mesh_bounding_boxes` passes in headless Chromium. |
+| **V0-R4-M2** | MEDIUM | Maxwell stress tensor equation was stated as general scalar $T_{xx} = \frac{1}{2}\varepsilon_0 E_x^2$ without transverse-field terms ($E_y, E_z$) or 1D limitation notice. | 1. Updated tour step 2, HTML explanation section 2, and `provenance_data.json` with the complete vacuum Maxwell stress tensor component $T_{xx} = \varepsilon_0(E_x^2 - \frac{1}{2}|\mathbf{E}|^2) = \frac{1}{2}\varepsilon_0(E_x^2 - E_y^2 - E_z^2)$.<br>2. Explicitly qualified $\frac{1}{2}\varepsilon_0 E_x^2$ as an idealized 1D approximation strictly valid only where transverse fields vanish ($E_y = E_z = 0$).<br>3. Added unit tests `test_maxwell_stress_tensor_transverse_terms_qualified` and `test_maxwell_stress_tensor_in_html_qa` in `tests/test_v0_propulsion_explorer.py`. | Unit tests and DOM structure tests pass. |
+| **V0-R4-M3** | MEDIUM | Inspector labeled vector force with `[Illustrative Scale: (V/20)^2 x]`, contradicting the bounded visual arrow lengths (e.g. 0.01x vs 6.1 mm at 2 kV). | 1. Decoupled physical force scaling from perceptual arrow encoding in `#inspector-force`: `[Physical Trend: (V/20)² = ...x | Visual Arrow: ... mm bounded legibility]`.<br>2. Added browser smoke test `test_inspector_force_separates_physical_trend_and_visual_arrow` asserting exact wording at 0, 2, 20, 50 kV. | `test_inspector_force_separates_physical_trend_and_visual_arrow` passes in headless Chromium. |
+
+---
+
+## Historical R3 Review Remediation Matrix (V0 Round 4)
 
 | Finding | Severity | Description | Remediation in R4 | Verification |
 | --- | --- | --- | --- | --- |
@@ -91,7 +102,7 @@ Visual Tour & Interactivity Progression:
 
 4. **The Four Questions Guided Tour:**
    - *1. What am I seeing?* Asymmetric high-voltage cathode opposite planar ground collector.
-   - *2. Why does it happen?* Sharp edge field concentration ($E \propto 1/r$) and Maxwell electrostatic tension ($T_{xx} = \frac{1}{2}\varepsilon_0 E_x^2$).
+   - *2. Why does it happen?* Sharp edge field concentration ($E \propto 1/r$) and Maxwell electrostatic tension ($T_{xx} = \varepsilon_0(E_x^2 - \frac{1}{2}|\mathbf{E}|^2) = \frac{1}{2}\varepsilon_0(E_x^2 - E_y^2 - E_z^2)$, with $\frac{1}{2}\varepsilon_0 E_x^2$ strictly valid only where transverse fields vanish).
    - *3. What changes it?* Quadratic voltage scaling ($F \propto V^2$), geometry sharpness, dielectric permittivity, and chamber wall distance.
    - *4. How could we test it?* Micro-Newton torsion pendulum in high vacuum ($< 10^{-5}\text{ Torr}$) with null controls for ion wind and electrostatic wall coupling.
 
@@ -110,15 +121,15 @@ Visual Tour & Interactivity Progression:
 
 7. **3D Raycaster Component Inspector:**
    - Real pointer picking on canvas across all 5 components (including interior components through transparent chamber).
-   - Shows role, citations, operating potential, material, dimensions, non-modeled tip radius note, and honest provenance badges (`ESTABLISHED MODEL`, `PUBLISHED HYPOTHESIS`, `WHAT-IF PARAMETER`).
+   - Shows role, citations, operating potential, material, dimensions, non-modeled tip radius note, honest provenance badges (`ESTABLISHED MODEL`, `PUBLISHED HYPOTHESIS`, `WHAT-IF PARAMETER`), and force breakdown separating physical trend `(V/20)²` from visual arrow legibility encoding.
 
 ---
 
 ## Verification & Integrity
 
-- **Unit Tests:** 30 tests in `tests/test_v0_propulsion_explorer.py`, all passing (`Ran 30 tests in 0.042s, OK`).
-- **Browser Smoke Suite:** 12 tests in `tests/test_v0_browser_smoke.py`, all passing in headless Chromium (`Ran 12 tests in 14.7s, OK`).
-- **Full Discovery Suite:** 114 tests total (35 P0 + 16 P1 numerics + 21 P1 wave + 12 V0 smoke + 30 V0 unit, all passing).
+- **Unit Tests:** 32 tests in `tests/test_v0_propulsion_explorer.py`, all passing (`Ran 32 tests in 0.047s, OK`).
+- **Browser Smoke Suite:** 14 tests in `tests/test_v0_browser_smoke.py`, all passing in headless Chromium (`Ran 14 tests in 15.4s, OK`).
+- **Full Discovery Suite:** 118 tests total (35 P0 + 16 P1 numerics + 21 P1 wave + 14 V0 smoke + 32 V0 unit, all passing).
 - **P0 Baseline Preservation:** `git hash-object electrostatics_baseline.py` = `97f65dfa25db7730323edd5e52c98b17371fdeaa` (byte-for-byte identical).
 - **P1 Baseline Preservation:** All P1 source and test files match base SHA `8e1fdb32655d073002ae5a794b08e48f19a78a0f` byte-for-byte.
 - **Track Separation:** Dedicated feature branch `v0-propulsion-explorer-3d` based directly on `main` after PR #12 merge. Track B (P2 PR #11) remains separate.

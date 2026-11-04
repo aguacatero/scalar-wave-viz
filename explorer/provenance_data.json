@@ -2,7 +2,7 @@
   "metadata": {
     "project": "Scalar Wave Viz",
     "application": "Propulsion Explorer 3D (V0)",
-    "version": "0.4.0-r4",
+    "version": "0.5.0-r5",
     "citation": "Exodus Propulsion Technologies US11511891B2 FIGS. 4-8",
     "scientific_disposition": "EDUCATIONAL_3D_EXPLORER_NO_UNVERIFIED_THRUST",
     "evidence_grade": "PROVISIONAL_ILLUSTRATIVE_SCENE",
@@ -11,7 +11,7 @@
   },
   "four_questions": {
     "what_am_i_seeing": "An illustrative 3D model of an asymmetric electrostatic electrode pair inspired by Exodus Propulsion Technologies patent US11511891B2 (FIGS. 4–8). It depicts a tapered knife-edge blade cathode, an opposing planar ground counter-electrode, solid dielectric potting, and a surrounding grounded conductive test chamber.",
-    "why_does_it_happen": "Sharp conductor edges concentrate electric field lines (E &prop; 1/r), producing intense local Maxwell electrostatic tension (T_xx = &frac12;&epsilon;_0 E_x^2) that pulls on the blade edge. Conventional electric field vectors E = -&nabla;&Phi; point from higher potential (ground, 0 V) toward lower potential (cathode, -20 kV). Newton's third law requires equal and opposite electrostatic reaction forces on the opposing ground electrode, dielectric material, and chamber enclosure.",
+    "why_does_it_happen": "Sharp conductor edges concentrate electric field lines (E &prop; 1/r), producing intense local Maxwell electrostatic tension pulling on the blade edge. In full 3D electrostatics, the vacuum Maxwell stress tensor component is T_xx = &epsilon;_0 (E_x^2 - &frac12;|E|^2) = &frac12;&epsilon;_0 (E_x^2 - E_y^2 - E_z^2); the simplified scalar form &frac12;&epsilon;_0 E_x^2 is an idealized 1D approximation where transverse fields vanish. Conventional electric field vectors E = -&nabla;&Phi; point from higher potential (ground, 0 V) toward lower potential (cathode, -20 kV). Newton's third law requires equal and opposite electrostatic reaction forces on the opposing ground electrode, dielectric material, and chamber enclosure.",
     "what_changes_it": "Electrostatic forces scale quadratically with applied voltage (F &prop; V^2). Sharper blade geometry intensifies local peak field gradients. Dielectric choice alters polarization stress (modeled in V0 as a visual density/opacity proxy; continuous field redistribution deferred to solver-backed V1). Closer chamber walls increase capacitive coupling and image-charge reaction forces.",
     "how_could_we_test_it": "To determine whether an asymmetric electrostatic geometry produces genuine propellantless propulsion, the entire isolated test article must be operated in high vacuum (< 10^-5 Torr) on a calibrated micro-Newton torsion pendulum (Tajmar & Schreiber 2020). Null controls must isolate corona ion wind, outgassing, electrostatic image forces on chamber walls, and thermal expansion."
   },

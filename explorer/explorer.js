@@ -22,7 +22,7 @@
     metadata: {
       project: "Scalar Wave Viz",
       application: "Propulsion Explorer 3D (V0)",
-      version: "0.4.0-r4",
+      version: "0.5.0-r5",
       citation: "Exodus Propulsion Technologies US11511891B2 FIGS. 4-8",
       scientific_disposition: "EDUCATIONAL_3D_EXPLORER_NO_UNVERIFIED_THRUST",
       evidence_grade: "PROVISIONAL_ILLUSTRATIVE_SCENE",
@@ -31,7 +31,7 @@
     },
     four_questions: {
       what_am_i_seeing: "An illustrative 3D model of an asymmetric electrostatic electrode pair inspired by Exodus Propulsion Technologies patent US11511891B2 (FIGS. 4–8). It depicts a tapered knife-edge blade cathode, an opposing planar ground counter-electrode, solid dielectric potting, and a surrounding grounded conductive test chamber.",
-      why_does_it_happen: "Sharp conductor edges concentrate electric field lines (E &prop; 1/r), producing intense local Maxwell electrostatic tension (T_xx = &frac12;&epsilon;_0 E_x^2) that pulls on the blade edge. Conventional electric field vectors E = -&nabla;&Phi; point from higher potential (ground, 0 V) toward lower potential (cathode, -20 kV). Newton's third law requires equal and opposite electrostatic reaction forces on the opposing ground electrode, dielectric material, and chamber enclosure.",
+      why_does_it_happen: "Sharp conductor edges concentrate electric field lines (E &prop; 1/r), producing intense local Maxwell electrostatic tension pulling on the blade edge. In full 3D electrostatics, the vacuum Maxwell stress tensor component is T_xx = &epsilon;_0 (E_x^2 - &frac12;|E|^2) = &frac12;&epsilon;_0 (E_x^2 - E_y^2 - E_z^2); the simplified scalar form &frac12;&epsilon;_0 E_x^2 is an idealized 1D approximation where transverse fields vanish. Conventional electric field vectors E = -&nabla;&Phi; point from higher potential (ground, 0 V) toward lower potential (cathode, -20 kV). Newton's third law requires equal and opposite electrostatic reaction forces on the opposing ground electrode, dielectric material, and chamber enclosure.",
       what_changes_it: "Electrostatic forces scale quadratically with applied voltage (F &prop; V^2). Sharper blade geometry intensifies local peak field gradients. Dielectric choice alters polarization stress (modeled in V0 as a visual density/opacity proxy; continuous field redistribution deferred to solver-backed V1). Closer chamber walls increase capacitive coupling and image-charge reaction forces.",
       how_could_we_test_it: "To determine whether an asymmetric electrostatic geometry produces genuine propellantless propulsion, the entire isolated test article must be operated in high vacuum (< 10^-5 Torr) on a calibrated micro-Newton torsion pendulum (Tajmar & Schreiber 2020). Null controls must isolate corona ion wind, outgassing, electrostatic image forces on chamber walls, and thermal expansion."
     },
@@ -176,7 +176,7 @@
       body: `
         <p><strong>Electric Field Concentration:</strong> The sharp wedge of the blade cathode concentrates electric field lines (<i>E</i> &prop; 1/<i>r</i>).</p>
         <p><strong>Field Vector Direction:</strong> Conventional electric field vectors <b>E</b> = -&nabla;&Phi; point from higher potential (ground, 0 V) toward lower potential (cathode, -20 kV).</p>
-        <p><strong>Maxwell Electrostatic Stress:</strong> Field lines exert electrostatic tension (<i>T<sub>xx</sub></i> = &frac12;&epsilon;<sub>0</sub><i>E<sub>x</sub></i><sup>2</sup>), pulling the blade forward toward the ground electrode.</p>
+        <p><strong>Maxwell Electrostatic Stress:</strong> Field lines exert electrostatic tension, pulling the blade forward toward the ground electrode. In general 3D electrostatics, the vacuum stress component is <i>T<sub>xx</sub></i> = &epsilon;<sub>0</sub>(<i>E<sub>x</sub></i><sup>2</sup> &minus; &frac12;|<b>E</b>|<sup>2</sup>) = &frac12;&epsilon;<sub>0</sub>(<i>E<sub>x</sub></i><sup>2</sup> &minus; <i>E<sub>y</sub></i><sup>2</sup> &minus; <i>E<sub>z</sub></i><sup>2</sup>). The scalar expression &frac12;&epsilon;<sub>0</sub><i>E<sub>x</sub></i><sup>2</sup> applies only in the idealized 1D limit where transverse fields vanish (<i>E<sub>y</sub></i> = <i>E<sub>z</sub></i> = 0); the nonuniform 3D scene depicts qualitative lines of action rather than an integrated stress solution.</p>
       `,
       cameraPos: { x: 30, y: 20, z: 50 },
       target: { x: 5, y: 0, z: 0 },
@@ -868,9 +868,19 @@
     }
     document.getElementById('inspector-dimensions').textContent = dimStr;
 
-    // Schematic force vector description
+    // Schematic force vector description (Remediated for V0-R4-M3)
+    // Explicitly distinguishes physical scaling trend (F ∝ V²) from the bounded perceptual visual arrow encoding (6–30 mm).
+    let arrowLenMM = 0;
+    if (currentVoltageKV > 0) {
+      if (currentVoltageKV <= 20.0) {
+        arrowLenMM = 6.0 + 10.0 * Math.pow(currentVoltageKV / 20.0, 2);
+      } else {
+        const ratioUpper = (currentVoltageKV * currentVoltageKV - 400.0) / (2500.0 - 400.0);
+        arrowLenMM = 16.0 + 14.0 * Math.min(1.0, Math.max(0.0, ratioUpper));
+      }
+    }
     const forceStr = currentVoltageKV > 0
-      ? `${comp.schematic_direction} [Illustrative Scale: ${Math.pow(currentVoltageKV/20, 2).toFixed(2)}x]`
+      ? `${comp.schematic_direction} [Physical Trend: (V/20)² = ${(Math.pow(currentVoltageKV/20, 2)).toFixed(2)}x | Visual Arrow: ${arrowLenMM.toFixed(1)} mm bounded legibility]`
       : '0.0 (Field OFF at 0 V)';
     document.getElementById('inspector-force').textContent = forceStr;
 
@@ -921,6 +931,7 @@
     const dist = 140;
     const target = new THREE.Vector3(0, 0, 0);
     let newPos;
+    let newUp = new THREE.Vector3(0, 1, 0);
 
     switch (preset) {
       case 'isometric':
@@ -933,7 +944,8 @@
         newPos = new THREE.Vector3(dist, 0, 0);
         break;
       case 'top': // X-Z
-        newPos = new THREE.Vector3(0, dist, 0);
+        newPos = new THREE.Vector3(0, dist, 0.001);
+        newUp = new THREE.Vector3(0, 0, -1);
         break;
       default:
         newPos = new THREE.Vector3(90, 60, 110);
@@ -941,10 +953,12 @@
 
     if (instant) {
       camera.position.copy(newPos);
+      camera.up.copy(newUp);
       controls.target.copy(target);
       camera.lookAt(target);
       controls.update();
     } else {
+      camera.up.copy(newUp);
       animateCameraTo(newPos, target);
     }
   }
@@ -1292,10 +1306,19 @@
         targetWorldPoint = new THREE.Vector3(currentGapMM + 2.0, 2, 12);
         break;
       case 'support_mount':
-        targetWorldPoint = new THREE.Vector3(5, -20, 25);
+        targetWorldPoint = new THREE.Vector3(-25, -20, 25);
         break;
       case 'enclosure_walls':
-        targetWorldPoint = new THREE.Vector3(0, 52, 45);
+        if (Math.abs(camera.position.y) > 100) {
+          // Top view: pick point in front of all interior components (Z = 55 > 45)
+          targetWorldPoint = new THREE.Vector3(0, 0, 55);
+        } else if (Math.abs(camera.position.z) > 100) {
+          // Side view (X-Y plane): pick point above all interior components (Y = 38 > 20)
+          targetWorldPoint = new THREE.Vector3(0, 38, 0);
+        } else {
+          // Default isometric view: pick upper chamber point above interior assembly
+          targetWorldPoint = new THREE.Vector3(0, 42, 45);
+        }
         break;
       default:
         if (componentMeshes[id]) {

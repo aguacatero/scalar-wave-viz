@@ -53,20 +53,19 @@ The question driving the project is **not "How do we prove Exodus is right?"** I
 
 **Build a useful, clearly labeled educational visualizer early; never describe unverified physics as demonstrated thrust.** Passing tests and attractive plots do not replace physical measurement.
 
-## Project progress — verified November 2, 2026
+## Project progress — verified November 3, 2026
 
 ![Scientific roadmap: P0 and P1 accepted and merged; P2 active in draft review; P3 and P4 pending; 2 of 5 gates accepted](assets/research-progress.svg)
 
 **2 of 5 independently reviewed scientific phases are accepted.** This is *not* a percentage of product completion or proof of unusual propulsion. Educational visual milestones (Track A) proceed in parallel with scientific remediation (Track B).
 
-- **Track A (Interactive 3D Explorer) — V0 R4 REMEDIATED & READY FOR INDEPENDENT RE-REVIEW:**
-  - **V0 — FIRST WORKING 3D EXPLORER (ROUND 4):** Complete standalone browser application delivered on branch `v0-propulsion-explorer-3d` ([Issue #13](https://github.com/aguacatero/scalar-wave-viz/issues/13), [Draft PR #14](https://github.com/aguacatero/scalar-wave-viz/pull/14)). Remediated all findings from ChatGPT independent re-review V0 R3 (`pullrequestreview-5742453106`):
-    - `V0-R3-F1`: Replaced sidebar accessibility button clicks with real headless Playwright canvas pointer events (`page.mouse.move`, `page.mouse.click`) projecting unoccluded 3D surface points across all 5 components in default isometric view and alternate views (Side and Top), asserting exact inspector updates, dynamic hover banner updates (`Hover: {name} — Click to inspect`), and layer-hide chamber fallback.
-    - `V0-R3-M1`: Repositioned ground mesh so its near face is identically at $x = currentGapMM$, establishing strict surface-to-surface physical gap definition $d = x_{\text{ground,near}} - 0$ guaranteeing $+5.0\text{ mm} \ge 3.0\text{ mm}$ positive physical clearance from dielectric block (right face at $x = 11.0\text{ mm}$) across the full $[16, 50]\text{ mm}$ range; tagged `blade_electrode.tip_radius_modeled_in_mesh: false` in provenance data with explanatory note on idealized knife-edge vertex in V0 mesh.
-    - `V0-R3-M2`: Replaced synthetic loop with rendered-frame multi-parameter slider stress tests driving `#slider-voltage`, `#slider-gap`, and `#slider-eps` DOM inputs; instrumented `THREE.BufferGeometry.prototype.dispose` and `THREE.Material.prototype.dispose`, proving $> 30$ active geometry disposals while `renderer.info.memory.geometries` remains tightly bounded ($\Delta \le 2$).
-    - `V0-R3-M3`: Explicitly qualified dielectric permittivity slider as `[Visual Proxy Only]` in DOM labels, legends, and provenance metadata (`permittivity_status: "VISUAL_MATERIAL_PROXY_ONLY_IN_V0"` and detailed note).
-    - `V0-R3-M4`: Implemented piecewise bounded legibility encoding ($[6.0, 30.0]\text{ mm}$) for schematic force vectors: extinguished completely at $0\text{ kV}$, scaling from $6.0\text{ mm}$ to $16.0\text{ mm}$ at $20\text{ kV}$ and $30.0\text{ mm}$ at $50\text{ kV}$, with all arrow origins and tips staying strictly inside $[-80, 80]\text{ mm}$ chamber enclosure ($> 40\text{ mm}$ wall clearance).
-    - Verification: 30 unit tests passing; 12 browser smoke tests passing; 114 total tests passing across repo.
+- **Track A (Interactive 3D Explorer) — V0 R5 REMEDIATED & READY FOR INDEPENDENT RE-REVIEW:**
+  - **V0 — FIRST WORKING 3D EXPLORER (ROUND 5):** Complete standalone browser application delivered on branch `v0-propulsion-explorer-3d` ([Issue #13](https://github.com/aguacatero/scalar-wave-viz/issues/13), [Draft PR #14](https://github.com/aguacatero/scalar-wave-viz/pull/14)). Remediated all findings from ChatGPT independent re-review V0 R4 (`pullrequestreview-5744233825`):
+    - `V0-R4-F1`: Expanded alternate-view canvas pointer picking to cover all 5 components in both Side and Top views with real `page.mouse.move(x, y)` and `page.mouse.click(x, y)`, asserting `#banner-text` hover updates, inspector badge and title updates, and unique button selection; eliminated top view camera polar singularity (`camera.up.set(0, 0, -1)`).
+    - `V0-R4-M1`: Built runtime WebGL bounding-box regression test (`test_runtime_gap_slider_mesh_bounding_boxes`) querying `THREE.Box3().setFromObject(mesh)` directly across slider sweeps (16, 25, 50 mm), proving $x_{\text{ground,near}} - x_{\text{blade,tip}} == d$ and maintaining $\ge 5.0\text{ mm}$ physical clearance from dielectric potting ($x_{\text{diel,max}} = 11.0\text{ mm}$).
+    - `V0-R4-M2`: Formulated full vacuum Maxwell stress tensor component $T_{xx} = \varepsilon_0(E_x^2 - \frac{1}{2}|\mathbf{E}|^2) = \frac{1}{2}\varepsilon_0(E_x^2 - E_y^2 - E_z^2)$ across HTML, tour, and provenance metadata, explicitly qualifying $\frac{1}{2}\varepsilon_0 E_x^2$ as an idealized 1D approximation strictly valid only where transverse fields vanish.
+    - `V0-R4-M3`: Separated physical quadratic force scaling from visual arrow legibility encoding in `#inspector-force`: `[Physical Trend: (V/20)² = ...x | Visual Arrow: ... mm bounded legibility]`.
+    - Verification: 32 unit tests passing; 14 browser smoke tests passing; 118 total tests passing across repo.
 - **Track B (Scientific Acceptance Gates) — 2 OF 5 ACCEPTED:**
   - **P0 — ACCEPTED AND MERGED:** Conventional electrostatics baseline, [PR #5](https://github.com/aguacatero/scalar-wave-viz/pull/5).
   - **P1 — ACCEPTED AND MERGED:** Numerical validation and force accounting, [PR #10](https://github.com/aguacatero/scalar-wave-viz/pull/10). Accepted R11 scientific SHA `2a87abd0f8de873899f541d521d303d0f4462954`; **merged** in main commit `8e1fdb32655d073002ae5a794b08e48f19a78a0f`.

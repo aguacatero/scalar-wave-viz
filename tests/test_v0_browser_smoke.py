@@ -276,32 +276,66 @@ class PropulsionExplorerBrowserSmokeTests(unittest.TestCase):
             self.assertEqual(name_el, expected_name, f"Inspector name mismatch for {comp_id}")
             self.assertEqual(badge_el, expected_badge, f"Inspector badge mismatch for {comp_id}")
 
+            # Verify unique selected sidebar button data-id
+            selected_btn = self.page.locator(".component-item-btn.selected")
+            self.assertEqual(selected_btn.get_attribute("data-id"), comp_id, f"Sidebar selected button mismatch for {comp_id}")
+
         self.assertEqual(len(self.page_errors), 0, f"Canvas pointer picking threw errors: {self.page_errors}")
 
     def test_canvas_pointer_picking_alternate_camera_views(self):
-        """V0-R3-F1: verify canvas pointer picking functions across alternate camera viewpoints (Side & Top)."""
+        """V0-R4-F1 [HIGH / BLOCKING]: verify canvas pointer picking across alternate camera viewpoints (Side & Top) for ALL 5 components.
+
+        In both Side and Top presets:
+        1. Projects unoccluded surface coordinates for all 5 components.
+        2. Real page.mouse.move asserts dynamic #banner-text hover updating.
+        3. Real page.mouse.click asserts #inspector-name and #inspector-badge matching.
+        4. Asserts unique selected .component-item-btn.selected[data-id].
+        5. Asserts zero page errors.
+        """
         presets = ["side", "top"]
         components = [
-            ("blade_electrode", "Asymmetric High-Voltage Blade"),
-            ("ground_electrode", "Ground Counter-Electrode"),
-            ("dielectric_block", "Solid Dielectric Barrier / Potting"),
+            ("blade_electrode", "Asymmetric High-Voltage Blade", "PUBLISHED HYPOTHESIS"),
+            ("dielectric_block", "Solid Dielectric Barrier / Potting", "WHAT-IF PARAMETER"),
+            ("ground_electrode", "Ground Counter-Electrode", "ESTABLISHED MODEL"),
+            ("support_mount", "Structural Support Mount", "ESTABLISHED MODEL"),
+            ("enclosure_walls", "Conductive Enclosure (Chamber)", "ESTABLISHED MODEL"),
         ]
 
         for preset in presets:
             self.page.evaluate(f"() => window.__explorer.setViewPreset('{preset}', true)")
             self.page.wait_for_timeout(30)
 
-            for comp_id, expected_name in components:
+            for comp_id, expected_name, expected_badge in components:
                 coords = self.page.evaluate("id => window.__explorer.getComponentScreenCoords(id)", comp_id)
                 self.assertIsNotNone(coords, f"Projection failed for {comp_id} in {preset} view")
+                cx = coords["clientX"]
+                cy = coords["clientY"]
 
-                self.page.mouse.click(coords["clientX"], coords["clientY"])
+                # Real mouse move over canvas in alternate view
+                self.page.mouse.move(cx, cy)
                 self.page.wait_for_timeout(25)
 
-                name_el = self.page.locator("#inspector-name").inner_text()
-                self.assertEqual(name_el, expected_name, f"Picking failed for {comp_id} in {preset} view; got: '{name_el}'")
+                # Assert hover banner updates with exact name
+                banner_text = self.page.locator("#banner-text").inner_text()
+                self.assertIn(expected_name, banner_text, f"Hover banner failed to show '{expected_name}' in {preset} view; got: '{banner_text}'")
 
-        # Return to default view
+                # Real mouse click on canvas in alternate view
+                self.page.mouse.click(cx, cy)
+                self.page.wait_for_timeout(25)
+
+                # Assert inspector title and badge
+                name_el = self.page.locator("#inspector-name").inner_text()
+                badge_el = self.page.locator("#inspector-badge").inner_text()
+                self.assertEqual(name_el, expected_name, f"Picking failed for {comp_id} in {preset} view; got: '{name_el}'")
+                self.assertEqual(badge_el, expected_badge, f"Badge mismatch for {comp_id} in {preset} view; got: '{badge_el}'")
+
+                # Assert unique selected sidebar button data-id
+                selected_btn = self.page.locator(".component-item-btn.selected")
+                self.assertEqual(selected_btn.get_attribute("data-id"), comp_id, f"Sidebar selected button mismatch in {preset} view; expected {comp_id}")
+
+        self.assertEqual(len(self.page_errors), 0, f"Alternate view picking threw errors: {self.page_errors}")
+
+        # Return to default isometric view
         self.page.evaluate("() => window.__explorer.setViewPreset('iso', true)")
 
     def test_layer_toggles_and_raycast_fallback(self):
@@ -521,6 +555,101 @@ class PropulsionExplorerBrowserSmokeTests(unittest.TestCase):
         self.assertLessEqual(scroll_width, client_width + 1, "Page has horizontal overflow on 375px viewport")
 
         self.assertEqual(len(self.page_errors), 0, f"Mobile rendering threw errors: {self.page_errors}")
+
+    def test_runtime_gap_slider_mesh_bounding_boxes(self):
+        """V0-R4-M1 [MED]: runtime WebGL Box3 geometry verification of gap d and dielectric clearance across slider sweeps.
+
+        Drives the actual DOM slider #slider-gap across [16, 25, 50] mm.
+        For each step, evaluates THREE.Box3().setFromObject(mesh) with updated world matrices to assert:
+        1. ground.min.x - blade.max.x == d (surface-to-surface physical clearance).
+        2. ground.min.x - dielectric.max.x >= 5.0 mm (guaranteeing physical clearance).
+        3. UI inspector retains tip radius metadata and surface gap notes.
+        """
+        self.page.click("#tab-btn-sandbox")
+
+        gap_settings = [16, 25, 50]
+        for gap in gap_settings:
+            self.page.fill("#slider-gap", str(gap))
+            self.page.dispatch_event("#slider-gap", "input")
+            self.page.wait_for_timeout(30)
+
+            val_text = self.page.locator("#val-gap").inner_text()
+            self.assertIn(f"{gap}.0 mm", val_text)
+
+            geom_stats = self.page.evaluate("""() => {
+              const exp = window.__explorer;
+              const blade = exp.componentMeshes["blade_electrode"];
+              const ground = exp.componentMeshes["ground_electrode"];
+              const diel = exp.componentMeshes["dielectric_block"];
+
+              blade.updateMatrixWorld(true);
+              ground.updateMatrixWorld(true);
+              diel.updateMatrixWorld(true);
+
+              const boxBlade = new THREE.Box3().setFromObject(blade);
+              const boxGround = new THREE.Box3().setFromObject(ground);
+              const boxDiel = new THREE.Box3().setFromObject(diel);
+
+              return {
+                blade_max_x: boxBlade.max.x,
+                ground_min_x: boxGround.min.x,
+                ground_max_x: boxGround.max.x,
+                diel_max_x: boxDiel.max.x,
+                gap_distance: boxGround.min.x - boxBlade.max.x,
+                diel_clearance: boxGround.min.x - boxDiel.max.x
+              };
+            }""")
+
+            # 1. Surface-to-surface physical distance d from blade knife-edge (x=0) to near ground face
+            self.assertAlmostEqual(geom_stats["gap_distance"], float(gap), delta=0.01,
+                                   msg=f"Ground front face does not match gap d={gap} mm")
+
+            # 2. Minimum physical clearance from dielectric block >= 5.0 mm
+            self.assertGreaterEqual(geom_stats["diel_clearance"], 5.0 - 1e-4,
+                                    msg=f"Ground plate collided or infringed clearance at gap={gap} mm: {geom_stats['diel_clearance']} mm")
+
+        # Check inspector card details
+        self.page.click("#tab-btn-layers")
+        self.page.click(".component-item-btn[data-id='blade_electrode']")
+        dim_text = self.page.locator("#inspector-dimensions").inner_text()
+        self.assertIn("Tip radius: 0.1 mm source metadata; idealized knife-edge vertex in V0 mesh", dim_text)
+
+    def test_inspector_force_separates_physical_trend_and_visual_arrow(self):
+        """V0-R4-M3 [MED]: inspector explicitly separates physical scaling trend (F ∝ V²) from bounded visual arrow encoding.
+
+        Tests that inspector displays:
+        - At 0 kV: '0.0 (Field OFF at 0 V)'
+        - At 2 kV: 'Physical Trend: (V/20)² = 0.01x' and 'Visual Arrow: 6.1 mm bounded legibility'
+        - At 20 kV: 'Physical Trend: (V/20)² = 1.00x' and 'Visual Arrow: 16.0 mm bounded legibility'
+        - At 50 kV: 'Physical Trend: (V/20)² = 6.25x' and 'Visual Arrow: 30.0 mm bounded legibility'
+        """
+        # Select blade electrode
+        self.page.click("#tab-btn-layers")
+        self.page.click(".component-item-btn[data-id='blade_electrode']")
+
+        test_voltages = [
+            (0, "0.0 (Field OFF at 0 V)", None),
+            (2, "Physical Trend: (V/20)² = 0.01x", "Visual Arrow: 6.1 mm bounded legibility"),
+            (20, "Physical Trend: (V/20)² = 1.00x", "Visual Arrow: 16.0 mm bounded legibility"),
+            (50, "Physical Trend: (V/20)² = 6.25x", "Visual Arrow: 30.0 mm bounded legibility"),
+        ]
+
+        self.page.click("#tab-btn-sandbox")
+        for v, expected_trend, expected_arrow in test_voltages:
+            self.page.fill("#slider-voltage", str(v))
+            self.page.dispatch_event("#slider-voltage", "input")
+            self.page.wait_for_timeout(25)
+
+            # Check inspector text
+            self.page.click("#tab-btn-inspector")
+            force_text = self.page.locator("#inspector-force").inner_text()
+
+            if expected_arrow is None:
+                self.assertIn(expected_trend, force_text)
+            else:
+                self.assertIn(expected_trend, force_text, f"Expected '{expected_trend}' at V={v} kV; got: '{force_text}'")
+                self.assertIn(expected_arrow, force_text, f"Expected '{expected_arrow}' at V={v} kV; got: '{force_text}'")
+            self.page.click("#tab-btn-sandbox")
 
 
 if __name__ == "__main__":

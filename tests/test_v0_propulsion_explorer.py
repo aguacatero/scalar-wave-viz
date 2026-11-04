@@ -108,6 +108,12 @@ class PropulsionExplorerProvenanceSchemaTests(unittest.TestCase):
         self.assertIn("Tajmar", test_text)
         self.assertIn("< 10^-5 Torr", test_text)
 
+    def test_maxwell_stress_tensor_transverse_terms_qualified(self):
+        """V0-R4-M2 regression: verify Maxwell stress tensor includes full 3D terms and marks 1/2 eps0 Ex^2 as 1D limit."""
+        why_text = self.data["four_questions"]["why_does_it_happen"]
+        self.assertIn("T_xx = &epsilon;_0 (E_x^2 - &frac12;|E|^2)", why_text)
+        self.assertIn("transverse fields vanish", why_text)
+
     def test_system_boundaries_in_ledger(self):
         """V0-R1-F4 regression: distinguish DUT control volume from external chamber environment."""
         ledger = self.data["force_accounting_ledger"]
@@ -214,6 +220,11 @@ class PropulsionExplorerHTMLStructureTests(unittest.TestCase):
         self.assertIn("visual/material proxy in V0", self.html)
         # V0-R3-M1: gap slider labels physical surface gap d
         self.assertIn("Electrode Surface Gap", self.html)
+
+    def test_maxwell_stress_tensor_in_html_qa(self):
+        """V0-R4-M2 regression: verify HTML QA modal includes full vacuum stress tensor expression and 1D qualification."""
+        self.assertIn("<i>T<sub>xx</sub></i> = &epsilon;<sub>0</sub>(<i>E<sub>x</sub></i><sup>2</sup> &minus; &frac12;|<b>E</b>|<sup>2</sup>)", self.html)
+        self.assertIn("transverse fields vanish", self.html)
 
     def test_dynamic_legend_elements_present(self):
         """V0-R1-M1 regression: legends have IDs for dynamic binding."""
