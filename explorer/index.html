@@ -3,8 +3,8 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Propulsion Explorer 3D (V0) — Scalar Wave Viz</title>
-  <meta name="description" content="A beginner-friendly 3D visual laboratory for exploring electric fields, local Maxwell stress, and whole-body force accounting in an Exodus-inspired electrode assembly.">
+  <title>Propulsion Explorer 3D (V0) — V0.1 Visual Experience &amp; UX Polish — Scalar Wave Viz</title>
+  <meta name="description" content="A polished, beginner-friendly 3D visual laboratory for exploring electric fields, local Maxwell stress, and whole-body force accounting in an Exodus-inspired electrode assembly.">
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⚡</text></svg>">
   <link rel="stylesheet" href="explorer.css">
 </head>
@@ -12,7 +12,7 @@
   <!-- Header / Navigation Bar -->
   <header class="app-header" role="banner">
     <div class="header-left">
-      <h1 class="app-title">Propulsion Explorer <span class="badge-version">V0</span></h1>
+      <h1 class="app-title">Propulsion Explorer <span class="badge-version">V0.1</span></h1>
       <p class="app-subtitle">Scalar Wave Viz — 3D Laboratory for Field &amp; Force Understanding</p>
     </div>
     <div class="header-center">
@@ -46,12 +46,37 @@
       </div>
 
       <!-- View Preset HUD Overlay -->
-      <div class="view-preset-hud" role="toolbar" aria-label="Camera view angle presets">
-        <button class="hud-btn" data-view="isometric" title="Isometric 3D Perspective (Key: I)">Isometric</button>
+      <div class="view-preset-hud" role="toolbar" aria-label="Camera view angle presets and display tools">
+        <button class="hud-btn active" data-view="isometric" title="Isometric 3D Perspective (Key: I)">Isometric</button>
         <button class="hud-btn" data-view="side" title="Side Elevation View X-Y (Key: X)">Side (X-Y)</button>
         <button class="hud-btn" data-view="front" title="Front Cross-Section Y-Z (Key: Y)">Front (Y-Z)</button>
         <button class="hud-btn" data-view="top" title="Top Plan View X-Z (Key: Z)">Top (X-Z)</button>
+        <span class="hud-separator" aria-hidden="true"></span>
+        <button class="hud-btn hud-btn-action" id="btn-toggle-labels" title="Toggle 3D Component Labels (Key: L)" aria-pressed="true">🏷️ Labels</button>
+        <button class="hud-btn hud-btn-action" id="btn-toggle-sidebar" title="Toggle Sidebar Panel (Key: S)" aria-pressed="false">◨ Sidebar</button>
       </div>
+
+      <!-- Component Quick-Select Bar (Accessible 1-Click Selection & Mobile Touch Friendly) -->
+      <nav class="component-chip-bar" role="toolbar" aria-label="Quick Component Selection" id="component-chip-bar">
+        <button class="chip-btn" data-id="blade_electrode" title="Inspect Asymmetric Blade Cathode">
+          <span class="chip-dot swatch-blade"></span> Blade (-20 kV)
+        </button>
+        <button class="chip-btn" data-id="ground_electrode" title="Inspect Ground Counter-Electrode">
+          <span class="chip-dot swatch-ground"></span> Ground (0 V)
+        </button>
+        <button class="chip-btn" data-id="dielectric_block" title="Inspect Dielectric Potting Block">
+          <span class="chip-dot swatch-dielectric"></span> Dielectric
+        </button>
+        <button class="chip-btn" data-id="support_mount" title="Inspect Structural Support Mount">
+          <span class="chip-dot swatch-mount"></span> Mount
+        </button>
+        <button class="chip-btn" data-id="enclosure_walls" title="Inspect Chamber Enclosure Walls">
+          <span class="chip-dot swatch-enclosure"></span> Chamber
+        </button>
+      </nav>
+
+      <!-- 3D Component Labels Overlay Container -->
+      <div id="labels-container" class="labels-container" aria-hidden="true"></div>
 
       <!-- Scene Notification / Tooltip Banner -->
       <div id="scene-banner" class="scene-banner" role="status" aria-live="polite">
@@ -352,6 +377,8 @@
             <li><kbd>&uarr;</kbd> <kbd>&darr;</kbd> : Orbit camera vertically (Polar angle)</li>
             <li><kbd>+</kbd> / <kbd>-</kbd> : Zoom in / out (Dolly)</li>
             <li><kbd>R</kbd> : Reset camera to isometric view</li>
+            <li><kbd>L</kbd> : Toggle 3D component labels</li>
+            <li><kbd>S</kbd> : Toggle sidebar (Full-screen canvas mode)</li>
             <li><kbd>1</kbd> : Toggle Geometry layer</li>
             <li><kbd>2</kbd> : Toggle Electric Field layer</li>
             <li><kbd>3</kbd> : Toggle Action &amp; Reaction Vectors layer</li>

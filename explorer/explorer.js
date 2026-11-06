@@ -232,7 +232,7 @@
     // Hide loading screen
     const loader = document.getElementById('loading-overlay');
     if (loader) {
-      setTimeout(() => loader.classList.add('hidden'), 200);
+      setTimeout(() => loader.classList.add('hidden'), 50);
     }
   }
 
@@ -242,7 +242,7 @@
     const canvas = document.getElementById('webgl-canvas');
 
     scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x0a0e14);
+    scene.background = new THREE.Color(0x070a0f);
 
     const width = container.clientWidth || window.innerWidth;
     const height = container.clientHeight || 500;
@@ -270,25 +270,35 @@
     raycaster = new THREE.Raycaster();
     mouse = new THREE.Vector2();
 
-    // Lighting
-    const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
+    // Studio Laboratory Lighting
+    const ambientLight = new THREE.AmbientLight(0xdbeafe, 0.55);
     scene.add(ambientLight);
 
-    const mainLight = new THREE.DirectionalLight(0xffffff, 0.9);
-    mainLight.position.set(80, 120, 90);
+    const mainLight = new THREE.DirectionalLight(0xffffff, 1.1);
+    mainLight.position.set(90, 130, 90);
     mainLight.castShadow = true;
     mainLight.shadow.mapSize.width = 1024;
     mainLight.shadow.mapSize.height = 1024;
     scene.add(mainLight);
 
-    const fillLight = new THREE.DirectionalLight(0x38bdf8, 0.4);
-    fillLight.position.set(-80, -40, -60);
+    // Cool cyan fill light for electrode underside & shadow contrast
+    const fillLight = new THREE.DirectionalLight(0x38bdf8, 0.65);
+    fillLight.position.set(-90, -30, -70);
     scene.add(fillLight);
 
-    // Subtle coordinate ground grid
+    // Warm specular accent rim light
+    const rimLight = new THREE.DirectionalLight(0xfef08a, 0.40);
+    rimLight.position.set(-40, 60, -80);
+    scene.add(rimLight);
+
+    // Dual coordinate ground grid (outer reference + inner focal grid)
     const gridHelper = new THREE.GridHelper(160, 32, 0x273545, 0x16202c);
     gridHelper.position.y = -25;
     scene.add(gridHelper);
+
+    const innerGrid = new THREE.GridHelper(60, 20, 0x0284c7, 0x1e293b);
+    innerGrid.position.y = -24.9;
+    scene.add(innerGrid);
 
     // Groups
     geometryGroup = new THREE.Group();
@@ -340,9 +350,9 @@
     const bladeGeo = createBladeWedgeGeometry(30, 25.4, 3);
     const bladeMat = new THREE.MeshStandardMaterial({
       color: 0xf43f5e,
-      roughness: 0.35,
-      metalness: 0.85,
-      emissive: 0x881337,
+      roughness: 0.28,
+      metalness: 0.88,
+      emissive: 0x9f1239,
       emissiveIntensity: 0.25
     });
     const bladeMesh = new THREE.Mesh(bladeGeo, bladeMat);
@@ -350,6 +360,21 @@
     bladeMesh.castShadow = true;
     bladeMesh.receiveShadow = true;
     bladeMesh.userData = { id: "blade_electrode", name: "Asymmetric High-Voltage Blade" };
+
+    // Knife-edge apex highlight along x = +15 in local coordinates (world x = 0)
+    const edgeGeo = new THREE.BufferGeometry().setFromPoints([
+      new THREE.Vector3(15, 12.7, 0),
+      new THREE.Vector3(15, -12.7, 0)
+    ]);
+    const edgeMat = new THREE.LineBasicMaterial({
+      color: 0xff6b8b,
+      transparent: true,
+      opacity: 0.95
+    });
+    const edgeLine = new THREE.Line(edgeGeo, edgeMat);
+    edgeLine.userData = { isKnifeEdgeLine: true };
+    bladeMesh.add(edgeLine);
+
     geometryGroup.add(bladeMesh);
     componentMeshes["blade_electrode"] = bladeMesh;
     pickableObjects.push(bladeMesh);
@@ -363,10 +388,10 @@
     const groundGeo = new THREE.BoxGeometry(4, 40, 50.8);
     const groundMat = new THREE.MeshStandardMaterial({
       color: 0x10b981,
-      roughness: 0.25,
-      metalness: 0.9,
+      roughness: 0.20,
+      metalness: 0.92,
       emissive: 0x064e3b,
-      emissiveIntensity: 0.2
+      emissiveIntensity: 0.20
     });
     const groundMesh = new THREE.Mesh(groundGeo, groundMat);
     groundMesh.position.set(currentGapMM + 2.0, 0, 0);
@@ -384,12 +409,13 @@
     const dielGeo = new THREE.BoxGeometry(16, 30, 45);
     const dielMat = new THREE.MeshPhysicalMaterial({
       color: 0x818cf8,
-      roughness: 0.15,
+      roughness: 0.12,
       metalness: 0.05,
-      transmission: 0.75,
+      transmission: 0.82,
       transparent: true,
-      opacity: 0.55,
-      ior: 1.55
+      opacity: 0.50,
+      ior: 1.52,
+      specularIntensity: 0.8
     });
     const dielMesh = new THREE.Mesh(dielGeo, dielMat);
     dielMesh.position.set(3, 0, 0);
@@ -402,11 +428,11 @@
     // 4. Structural Support Stand (Delrin/PEEK Insulating Base)
     const mountGeo = new THREE.BoxGeometry(90, 8, 90);
     const mountMat = new THREE.MeshStandardMaterial({
-      color: 0x475569,
-      roughness: 0.7,
-      metalness: 0.1,
-      emissive: 0x1e293b,
-      emissiveIntensity: 0.1
+      color: 0x334155,
+      roughness: 0.65,
+      metalness: 0.20,
+      emissive: 0x0f172a,
+      emissiveIntensity: 0.12
     });
     const mountMesh = new THREE.Mesh(mountGeo, mountMat);
     mountMesh.position.set(5, -20, 0);
@@ -420,15 +446,15 @@
     const chamberGeo = new THREE.BoxGeometry(160, 120, 160);
     const chamberWire = new THREE.WireframeGeometry(chamberGeo);
     const chamberLine = new THREE.LineSegments(chamberWire);
-    chamberLine.material.color.setHex(0x334155);
+    chamberLine.material.color.setHex(0x475569);
     chamberLine.material.transparent = true;
-    chamberLine.material.opacity = 0.45;
+    chamberLine.material.opacity = 0.55;
 
     // Pickable chamber mesh with transparent double-sided faces
     const chamberMat = new THREE.MeshBasicMaterial({
-      color: 0x1e293b,
+      color: 0x18222d,
       transparent: true,
-      opacity: 0.06,
+      opacity: 0.04,
       side: THREE.DoubleSide
     });
     const chamberMesh = new THREE.Mesh(chamberGeo, chamberMat);
@@ -438,9 +464,10 @@
     componentMeshes["enclosure_walls"] = chamberMesh;
     pickableObjects.push(chamberMesh);
 
-    // Build Electric Field Streamlines & Force Vectors
+    // Build Electric Field Streamlines, Force Vectors, and Gap Indicator
     updateFieldLines();
     updateForceVectors();
+    updateGapIndicator();
   }
 
   // --- Helper: Tapered Blade Wedge Geometry ---
@@ -520,6 +547,7 @@
 
     // Streamlines flowing from ground plate (0 V) to sharp blade cathode (-V)
     const numLines = 28;
+    const curvesList = [];
     for (let i = 0; i < numLines; i++) {
       const angle = (i / numLines) * Math.PI * 2;
       const spreadY = Math.sin(angle) * (6 + (i % 3) * 5);
@@ -531,6 +559,7 @@
       const p2 = new THREE.Vector3(bladeTipX, 0, 0);
 
       const curve = new THREE.QuadraticBezierCurve3(p0, p1, p2);
+      curvesList.push(curve);
       const points = curve.getPoints(24);
       const geom = new THREE.BufferGeometry().setFromPoints(points);
 
@@ -556,6 +585,31 @@
       line.userData = { isFieldLine: true, baseOpacity: opacity };
       fieldGroup.add(line);
     }
+
+    // Directional traveling pulses along streamlines (E points ground -> cathode)
+    const pulsePositions = new Float32Array(numLines * 3);
+    const pulseColors = new Float32Array(numLines * 3);
+    for (let i = 0; i < numLines; i++) {
+      pulsePositions[i * 3] = groundX;
+      pulsePositions[i * 3 + 1] = 0;
+      pulsePositions[i * 3 + 2] = 0;
+      pulseColors[i * 3] = 0.22;
+      pulseColors[i * 3 + 1] = 0.74;
+      pulseColors[i * 3 + 2] = 0.97;
+    }
+    const pulseGeom = new THREE.BufferGeometry();
+    pulseGeom.setAttribute('position', new THREE.BufferAttribute(pulsePositions, 3));
+    pulseGeom.setAttribute('color', new THREE.BufferAttribute(pulseColors, 3));
+    const pulseMat = new THREE.PointsMaterial({
+      size: 4.0,
+      vertexColors: true,
+      transparent: true,
+      opacity: Math.min(1.0, 0.45 + voltageRatio * 0.45),
+      blending: THREE.AdditiveBlending
+    });
+    const pulsePoints = new THREE.Points(pulseGeom, pulseMat);
+    pulsePoints.userData = { isPulsePoints: true, curves: curvesList };
+    fieldGroup.add(pulsePoints);
 
     // Equipotential contour rings near the blade tip
     const ringRadii = [4, 8, 14, 22];
@@ -815,9 +869,15 @@
   function selectComponent(id) {
     selectedComponentId = id;
 
-    // Highlight in component list
+    // Highlight in component list (sidebar)
     const items = document.querySelectorAll('.component-item-btn');
     items.forEach(el => {
+      el.classList.toggle('selected', el.dataset.id === id);
+    });
+
+    // Highlight in quick-select chip bar (mobile & desktop)
+    const chips = document.querySelectorAll('.chip-btn');
+    chips.forEach(el => {
       el.classList.toggle('selected', el.dataset.id === id);
     });
 
@@ -840,7 +900,16 @@
     badge.textContent = comp.provenance_badge;
     badge.className = `provenance-pill ${getPillClass(comp.provenance_badge)}`;
 
-    document.getElementById('inspector-role').textContent = comp.role;
+    // Beginner-friendly role explanation
+    const beginnerRoleMap = {
+      "blade_electrode": "Active high-voltage cathode. The razor-sharp edge concentrates electric fields, pulling the blade toward the ground plate.",
+      "ground_electrode": "Planar counter-electrode held at zero volts (ground). Experiences an equal and opposite electrostatic pull toward the blade.",
+      "dielectric_block": "High-voltage potting block between electrodes to prevent electrical arcing, experiencing internal polarization stress.",
+      "support_mount": "Rigid insulating structural frame holding the electrodes firmly at fixed distance, canceling internal forces.",
+      "enclosure_walls": "Grounded laboratory chamber enclosure acting as a Faraday shield and vacuum envelope."
+    };
+    document.getElementById('inspector-role').textContent = beginnerRoleMap[comp.id] || comp.role;
+
     document.getElementById('inspector-citation').textContent = comp.citation || '—';
     document.getElementById('inspector-boundary').textContent = comp.system_boundary === "DEVICE_UNDER_TEST"
       ? "Boundary A: Suspended Test Article (DUT)"
@@ -884,7 +953,16 @@
       : '0.0 (Field OFF at 0 V)';
     document.getElementById('inspector-force').textContent = forceStr;
 
-    document.getElementById('inspector-status').textContent = comp.status || '—';
+    // Readable scientific status replacing raw internal string
+    const statusReadable = {
+      "blade_electrode": "Schematic Electrostatic Traction — Unmeasured in V0 (physical magnitude requires solver simulation)",
+      "ground_electrode": "Schematic Opposing Reaction — Unmeasured in V0 (Newton's 3rd law partner)",
+      "dielectric_block": "Internal Dielectric Polarization Stress (Virtual Work Gradient)",
+      "support_mount": "Internal Structural Equilibrium (Mechanical Constraint)",
+      "enclosure_walls": "External Chamber Wall Coupling (Capacitive Image Charges)"
+    };
+    document.getElementById('inspector-status').textContent = statusReadable[comp.id] || comp.status || '—';
+
     document.getElementById('inspector-explanation').innerHTML = `
       <strong>Physical Context:</strong> ${comp.force_nature}.<br>
       <em>Note: V0 displays schematic directions only. Quantitative force magnitudes require qualified mesh-converged simulation.</em>
@@ -1117,15 +1195,52 @@
     window.addEventListener('resize', onWindowResize);
 
     const container = document.getElementById('viewport-container');
-    container.addEventListener('pointerdown', onPointerDown);
     container.addEventListener('pointermove', onPointerMove);
+    if (renderer && renderer.domElement) {
+      renderer.domElement.addEventListener('pointerdown', onPointerDown);
+    }
 
     // Preset HUD Buttons
-    document.querySelectorAll('.view-preset-hud .hud-btn').forEach(btn => {
+    document.querySelectorAll('.view-preset-hud .hud-btn[data-view]').forEach(btn => {
       btn.addEventListener('click', (e) => {
-        document.querySelectorAll('.view-preset-hud .hud-btn').forEach(b => b.classList.remove('active'));
+        document.querySelectorAll('.view-preset-hud .hud-btn[data-view]').forEach(b => b.classList.remove('active'));
         e.target.classList.add('active');
         setViewPreset(e.target.dataset.view);
+      });
+    });
+
+    // 3D Labels Toggle
+    const btnToggleLabels = document.getElementById('btn-toggle-labels');
+    if (btnToggleLabels) {
+      btnToggleLabels.classList.add('active');
+      btnToggleLabels.addEventListener('click', () => {
+        const labelsContainer = document.getElementById('labels-container');
+        if (labelsContainer) {
+          const isHidden = labelsContainer.classList.toggle('hidden');
+          btnToggleLabels.classList.toggle('active', !isHidden);
+          btnToggleLabels.setAttribute('aria-pressed', !isHidden ? 'true' : 'false');
+          showBanner(!isHidden ? "3D Component Labels enabled." : "3D Component Labels hidden.");
+        }
+      });
+    }
+
+    // Sidebar Toggle
+    const btnToggleSidebar = document.getElementById('btn-toggle-sidebar');
+    if (btnToggleSidebar) {
+      btnToggleSidebar.addEventListener('click', () => {
+        const layout = document.querySelector('.app-layout');
+        const isCollapsed = layout.classList.toggle('sidebar-collapsed');
+        btnToggleSidebar.classList.toggle('active', isCollapsed);
+        btnToggleSidebar.setAttribute('aria-pressed', isCollapsed ? 'true' : 'false');
+        showBanner(isCollapsed ? "Sidebar collapsed — full-screen laboratory mode." : "Sidebar expanded.");
+        setTimeout(onWindowResize, 280);
+      });
+    }
+
+    // Component Chip Bar Buttons (Quick-Select)
+    document.querySelectorAll('.chip-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        selectComponent(btn.dataset.id);
       });
     });
 
@@ -1214,6 +1329,7 @@
       }
       updateFieldLines();
       updateForceVectors();
+      updateGapIndicator();
       updateUIState();
     });
 
@@ -1261,6 +1377,14 @@
         case 'r':
         case 'R':
           setViewPreset('isometric');
+          break;
+        case 'l':
+        case 'L':
+          if (btnToggleLabels) btnToggleLabels.click();
+          break;
+        case 's':
+        case 'S':
+          if (btnToggleSidebar) btnToggleSidebar.click();
           break;
         case '1':
           const tGeom = document.getElementById('toggle-geometry');
@@ -1391,7 +1515,8 @@
     const picked = getPickedObject(event);
 
     if (picked && picked.userData && picked.userData.id) {
-      container.style.cursor = 'pointer';
+      if (renderer && renderer.domElement) renderer.domElement.style.cursor = 'pointer';
+      if (container) container.style.cursor = 'pointer';
       if (hoveredObject !== picked) {
         hoveredObject = picked;
         showBanner(`Hover: ${picked.userData.name} — Click to inspect`);
@@ -1399,7 +1524,8 @@
       return;
     }
 
-    container.style.cursor = 'default';
+    if (renderer && renderer.domElement) renderer.domElement.style.cursor = 'default';
+    if (container) container.style.cursor = 'default';
     hoveredObject = null;
   }
 
@@ -1415,21 +1541,125 @@
     renderer.setSize(width, height);
   }
 
+  // --- 3D Gap Dimension Indicator ---
+  let annotationGroup = null;
+
+  function updateGapIndicator() {
+    if (!annotationGroup) {
+      annotationGroup = new THREE.Group();
+      annotationGroup.userData = { isAnnotationGroup: true };
+      scene.add(annotationGroup);
+    }
+    while (annotationGroup.children.length > 0) {
+      const obj = annotationGroup.children[0];
+      annotationGroup.remove(obj);
+      disposeHierarchy(obj);
+    }
+
+    const y = -15;
+    const z = 0;
+    // Dimension line with end ticks: from blade knife-edge (x=0) to ground plate near face (x=currentGapMM)
+    const points = [
+      new THREE.Vector3(0, y - 2.5, z),
+      new THREE.Vector3(0, y + 2.5, z),
+      new THREE.Vector3(0, y, z),
+      new THREE.Vector3(currentGapMM, y, z),
+      new THREE.Vector3(currentGapMM, y - 2.5, z),
+      new THREE.Vector3(currentGapMM, y + 2.5, z)
+    ];
+    const geom = new THREE.BufferGeometry().setFromPoints(points);
+    const mat = new THREE.LineBasicMaterial({
+      color: 0x38bdf8,
+      transparent: true,
+      opacity: 0.65,
+      linewidth: 1.5
+    });
+    const line = new THREE.Line(geom, mat);
+    line.userData = { isGapLine: true };
+    annotationGroup.add(line);
+  }
+
+  // --- 3D Floating Component Labels Tracking ---
+  function update3DLabels() {
+    const labelsContainer = document.getElementById('labels-container');
+    if (!labelsContainer || labelsContainer.classList.contains('hidden')) return;
+    if (!renderer || !camera) return;
+
+    const rect = renderer.domElement.getBoundingClientRect();
+    const labelDefs = [
+      { id: "blade_electrode", name: "Blade (-20 kV)", worldPos: new THREE.Vector3(-15, 16, 0), dotColor: "#f43f5e" },
+      { id: "ground_electrode", name: "Ground (0 V)", worldPos: new THREE.Vector3(currentGapMM + 2.0, 24, 0), dotColor: "#10b981" },
+      { id: "dielectric_block", name: "Dielectric Potting", worldPos: new THREE.Vector3(3, 18, 24), dotColor: "#818cf8" },
+      { id: "support_mount", name: "Support Mount", worldPos: new THREE.Vector3(5, -26, 35), dotColor: "#64748b" },
+      { id: "enclosure_walls", name: "Chamber (0 V)", worldPos: new THREE.Vector3(0, 62, 0), dotColor: "#475569" }
+    ];
+
+    labelDefs.forEach(def => {
+      let pin = document.getElementById(`label-pin-${def.id}`);
+      if (!pin) {
+        pin = document.createElement('button');
+        pin.id = `label-pin-${def.id}`;
+        pin.className = 'label-pin';
+        pin.innerHTML = `<span class="label-pin-dot" style="background:${def.dotColor}"></span><span>${def.name}</span>`;
+        pin.addEventListener('click', (e) => {
+          e.stopPropagation();
+          selectComponent(def.id);
+        });
+        labelsContainer.appendChild(pin);
+      }
+
+      if (def.id === 'blade_electrode') {
+        const vText = currentVoltageKV > 0 ? `Blade (-${currentVoltageKV.toFixed(0)} kV)` : 'Blade (0 V OFF)';
+        pin.querySelector('span:last-child').textContent = vText;
+      }
+
+      const v = def.worldPos.clone().project(camera);
+      if (v.z > 1.0 || v.z < -1.0) {
+        pin.style.display = 'none';
+      } else {
+        pin.style.display = 'flex';
+        const x = ((v.x + 1) / 2) * rect.width;
+        const y = ((-v.y + 1) / 2) * rect.height;
+        pin.style.left = `${x}px`;
+        pin.style.top = `${y}px`;
+        pin.classList.toggle('selected', selectedComponentId === def.id);
+      }
+    });
+  }
+
   // --- Animation Loop ---
   function animate() {
     requestAnimationFrame(animate);
 
     controls.update();
 
-    // Subtle flux oscillation only when energized (currentVoltageKV > 0)
+    // Subtle flux oscillation and traveling pulse particles only when energized (currentVoltageKV > 0)
     if (currentVoltageKV > 0 && fieldGroup && fieldGroup.visible) {
       const time = performance.now() * 0.0015;
       fieldGroup.children.forEach((child, idx) => {
         if (child.isLine && child.userData.baseOpacity) {
           child.material.opacity = Math.max(0.1, child.userData.baseOpacity + Math.sin(time * 2 + idx) * 0.1);
+        } else if (child.userData && child.userData.isPulsePoints && child.userData.curves) {
+          const posAttr = child.geometry.attributes.position;
+          const colAttr = child.geometry.attributes.color;
+          const curves = child.userData.curves;
+          const cStart = new THREE.Color(0x38bdf8); // ground 0 V
+          const cEnd = new THREE.Color(0xf43f5e);   // blade -V
+          for (let i = 0; i < curves.length; i++) {
+            const t = (time * 0.5 + i / curves.length) % 1.0;
+            const pt = curves[i].getPoint(t);
+            posAttr.setXYZ(i, pt.x, pt.y, pt.z);
+            const c = cStart.clone().lerp(cEnd, t);
+            colAttr.setXYZ(i, c.r, c.g, c.b);
+          }
+          posAttr.needsUpdate = true;
+          colAttr.needsUpdate = true;
         }
       });
     }
+
+    // Dynamic 3D component labels tracking
+    update3DLabels();
 
     renderer.render(scene, camera);
   }

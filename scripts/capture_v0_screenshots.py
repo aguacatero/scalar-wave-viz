@@ -96,6 +96,7 @@ def capture_all():
         page.goto(base_url)
         page.wait_for_selector("#webgl-canvas")
         page.wait_for_selector(".component-item-btn")
+        page.wait_for_selector("#loading-overlay.hidden")
         # Give WebGL and animations 1000ms to settle
         time.sleep(1.0)
 
@@ -148,17 +149,29 @@ def capture_all():
 
         context.close()
 
-        # 6. Mobile context (375x667)
+        # 6. Mobile context (375x667 - iPhone SE / standard narrow)
         mobile_context = browser.new_context(viewport={"width": 375, "height": 667}, device_scale_factor=2)
         mobile_page = mobile_context.new_page()
         mobile_page.goto(base_url)
         mobile_page.wait_for_selector("#webgl-canvas")
+        mobile_page.wait_for_selector("#loading-overlay.hidden")
         time.sleep(1.0)
         mobile_path = ASSETS_DIR / "propulsion_explorer_v0_mobile.png"
         mobile_page.screenshot(path=str(mobile_path), full_page=False)
         print(f"Captured: {mobile_path} ({mobile_path.stat().st_size} bytes)")
-
         mobile_context.close()
+
+        # 7. Mobile context (390x844 - iPhone 12/13/14)
+        mobile_390_context = browser.new_context(viewport={"width": 390, "height": 844}, device_scale_factor=2)
+        mobile_390_page = mobile_390_context.new_page()
+        mobile_390_page.goto(base_url)
+        mobile_390_page.wait_for_selector("#webgl-canvas")
+        mobile_390_page.wait_for_selector("#loading-overlay.hidden")
+        time.sleep(1.0)
+        mobile_390_path = ASSETS_DIR / "propulsion_explorer_v0_mobile_390.png"
+        mobile_390_page.screenshot(path=str(mobile_390_path), full_page=False)
+        print(f"Captured: {mobile_390_path} ({mobile_390_path.stat().st_size} bytes)")
+        mobile_390_context.close()
         browser.close()
 
     server.shutdown()

@@ -144,6 +144,7 @@ class PropulsionExplorerBrowserSmokeTests(unittest.TestCase):
         self.page.goto(self.base_url)
         self.page.wait_for_selector("#webgl-canvas")
         self.page.wait_for_selector(".component-item-btn")
+        self.page.wait_for_selector("#loading-overlay.hidden")
 
     def tearDown(self):
         try:
@@ -650,6 +651,95 @@ class PropulsionExplorerBrowserSmokeTests(unittest.TestCase):
                 self.assertIn(expected_trend, force_text, f"Expected '{expected_trend}' at V={v} kV; got: '{force_text}'")
                 self.assertIn(expected_arrow, force_text, f"Expected '{expected_arrow}' at V={v} kV; got: '{force_text}'")
             self.page.click("#tab-btn-sandbox")
+
+    def test_chip_bar_component_quick_select(self):
+        """V0.1 regression: verify accessible component quick-select chip bar selects all 5 components."""
+        components = [
+            ("blade_electrode", "Asymmetric High-Voltage Blade", "PUBLISHED HYPOTHESIS"),
+            ("ground_electrode", "Ground Counter-Electrode", "ESTABLISHED MODEL"),
+            ("dielectric_block", "Solid Dielectric Barrier / Potting", "WHAT-IF PARAMETER"),
+            ("support_mount", "Structural Support Mount", "ESTABLISHED MODEL"),
+            ("enclosure_walls", "Conductive Enclosure (Chamber)", "ESTABLISHED MODEL"),
+        ]
+
+        for comp_id, expected_name, expected_badge in components:
+            chip = self.page.locator(f".chip-btn[data-id='{comp_id}']")
+            self.assertTrue(chip.is_visible())
+            chip.click()
+            self.page.wait_for_timeout(25)
+
+            name_el = self.page.locator("#inspector-name").inner_text()
+            badge_el = self.page.locator("#inspector-badge").inner_text()
+            self.assertEqual(name_el, expected_name)
+            self.assertEqual(badge_el, expected_badge)
+
+            # Selected chip class
+            self.assertTrue("selected" in (chip.get_attribute("class") or ""))
+
+        self.assertEqual(len(self.page_errors), 0, f"Chip bar operations threw errors: {self.page_errors}")
+
+    def test_3d_labels_toggle(self):
+        """V0.1 regression: verify 3D component labels HUD toggle button updates visibility and ARIA."""
+        btn = self.page.locator("#btn-toggle-labels")
+        self.assertTrue(btn.is_visible())
+        labels_container = self.page.locator("#labels-container")
+
+        # Initially active (visible)
+        self.assertEqual(btn.get_attribute("aria-pressed"), "true")
+        self.assertFalse("hidden" in (labels_container.get_attribute("class") or ""))
+
+        # Click to toggle off
+        btn.click()
+        self.page.wait_for_timeout(25)
+        self.assertEqual(btn.get_attribute("aria-pressed"), "false")
+        self.assertTrue("hidden" in (labels_container.get_attribute("class") or ""))
+
+        # Click to toggle back on
+        btn.click()
+        self.page.wait_for_timeout(25)
+        self.assertEqual(btn.get_attribute("aria-pressed"), "true")
+        self.assertFalse("hidden" in (labels_container.get_attribute("class") or ""))
+
+        self.assertEqual(len(self.page_errors), 0, f"Labels toggle threw errors: {self.page_errors}")
+
+    def test_sidebar_collapse_toggle(self):
+        """V0.1 regression: verify sidebar collapse toggle expands viewport to full width."""
+        btn = self.page.locator("#btn-toggle-sidebar")
+        self.assertTrue(btn.is_visible())
+        layout = self.page.locator(".app-layout")
+
+        # Initially open
+        self.assertEqual(btn.get_attribute("aria-pressed"), "false")
+        self.assertFalse("sidebar-collapsed" in (layout.get_attribute("class") or ""))
+
+        # Click to collapse
+        btn.click()
+        self.page.wait_for_timeout(50)
+        self.assertEqual(btn.get_attribute("aria-pressed"), "true")
+        self.assertTrue("sidebar-collapsed" in (layout.get_attribute("class") or ""))
+
+        # Click to expand
+        btn.click()
+        self.page.wait_for_timeout(50)
+        self.assertEqual(btn.get_attribute("aria-pressed"), "false")
+        self.assertFalse("sidebar-collapsed" in (layout.get_attribute("class") or ""))
+
+        self.assertEqual(len(self.page_errors), 0, f"Sidebar toggle threw errors: {self.page_errors}")
+
+    def test_mobile_390_viewport_layout(self):
+        """V0.1 regression: verify 390x844 mobile viewport (iPhone 12/13/14) renders cleanly without horizontal overflow."""
+        self.page.set_viewport_size({"width": 390, "height": 844})
+        self.page.wait_for_timeout(100)
+
+        scroll_width = self.page.evaluate("document.documentElement.scrollWidth")
+        client_width = self.page.evaluate("document.documentElement.clientWidth")
+        self.assertLessEqual(scroll_width, client_width + 1, "Page has horizontal overflow on 390px viewport")
+
+        # Verify chip bar and canvas are visible
+        self.assertTrue(self.page.locator("#webgl-canvas").is_visible())
+        self.assertTrue(self.page.locator("#component-chip-bar").is_visible())
+
+        self.assertEqual(len(self.page_errors), 0, f"Mobile 390px rendering threw errors: {self.page_errors}")
 
 
 if __name__ == "__main__":
