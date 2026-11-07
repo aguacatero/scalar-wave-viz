@@ -383,6 +383,30 @@ class PropulsionExplorerJSLogicTests(unittest.TestCase):
         self.assertIn("Pairwise equality between these two electrodes alone is not assumed", self.js)
         self.assertIn("not isolated pairwise equal", self.js)
 
+    def test_v0_1_r2_f1_legend_hud_non_overlapping_placement_and_max_width(self):
+        """V0.1-R2-F1 regression: legend HUD positioned below preset toolbar with constrained max-width."""
+        self.assertIn("top: 4.5rem;", self.css)
+        self.assertIn("max-width: 290px;", self.css)
+
+    def test_v0_1_r2_f2_collision_avoidance_algorithm_and_pointer_events_in_js_and_css(self):
+        """V0.1-R2-F2 regression: billboard label pins have 2D collision avoidance and transparent child pointer events."""
+        # CSS transparent pointer events on child spans
+        self.assertIn(".label-pin *", self.css)
+        self.assertIn("pointer-events: none;", self.css)
+
+        # JS 2D Screen-Space collision avoidance logic
+        self.assertIn("function resolveLabelCollisions", self.js)
+        self.assertIn("overlapX > 0 && overlapY > 0", self.js)
+        self.assertIn("shiftY", self.js)
+        self.assertIn("shiftX", self.js)
+
+    def test_v0_1_r2_f2_distinct_3d_anchor_coordinates(self):
+        """V0.1-R2-F2 regression: distinct 3D anchor points prevent overlapping baseline projections."""
+        self.assertIn("THREE.Vector3(-24, 14, 8)", self.js)
+        self.assertIn("THREE.Vector3(currentGapMM + 14, 20, -8)", self.js)
+        self.assertIn("THREE.Vector3(0, 36, 14)", self.js)
+
+
 
 class PropulsionExplorerLauncherTests(unittest.TestCase):
     """Verify run_explorer.py port detection and argument parsing."""

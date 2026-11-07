@@ -845,6 +845,135 @@ class PropulsionExplorerBrowserSmokeTests(unittest.TestCase):
 
         self.assertEqual(len(self.page_errors), 0, f"Field legend check threw errors: {self.page_errors}")
 
+    def test_v0_1_r2_f1_hud_and_legend_bounding_boxes_do_not_overlap(self):
+        """V0.1-R2-F1 regression: view preset HUD toolbar and layer legend HUD must never overlap."""
+        hud = self.page.locator(".view-preset-hud")
+        legend = self.page.locator(".layer-legend-hud")
+
+        self.assertTrue(hud.is_visible())
+        self.assertTrue(legend.is_visible())
+
+        # Test across desktop and tablet viewports
+        for vp in [(1280, 800), (1024, 768), (800, 600)]:
+            self.page.set_viewport_size({"width": vp[0], "height": vp[1]})
+            self.page.wait_for_timeout(40)
+
+            box_hud = hud.bounding_box()
+            box_legend = legend.bounding_box()
+
+            self.assertIsNotNone(box_hud)
+            self.assertIsNotNone(box_legend)
+
+            # Check for non-overlap either horizontally or vertically
+            horiz_sep = (box_hud["x"] + box_hud["width"] <= box_legend["x"]) or (box_legend["x"] + box_legend["width"] <= box_hud["x"])
+            vert_sep = (box_hud["y"] + box_hud["height"] <= box_legend["y"]) or (box_legend["y"] + box_legend["height"] <= box_hud["y"])
+
+            self.assertTrue(
+                horiz_sep or vert_sep,
+                f"HUD box {box_hud} overlaps with Legend box {box_legend} at viewport {vp}"
+            )
+
+        # Restore default desktop viewport
+        self.page.set_viewport_size({"width": 1280, "height": 800})
+        self.page.wait_for_timeout(40)
+        self.assertEqual(len(self.page_errors), 0, f"HUD non-overlap check threw errors: {self.page_errors}")
+
+    def test_v0_1_r2_f2_billboard_label_pins_never_overlap_across_viewports_and_presets(self):
+        """V0.1-R2-F2 regression: all visible 3D billboard pins have zero bounding box overlap across presets and mobile."""
+        viewports = [
+            (1280, 800, "Desktop"),
+            (390, 844, "iPhone 12/13/14"),
+            (375, 812, "iPhone SE")
+        ]
+        presets = ["isometric", "side", "top"]
+
+        for width, height, vp_name in viewports:
+            self.page.set_viewport_size({"width": width, "height": height})
+            self.page.wait_for_timeout(60)
+
+            for preset in presets:
+                # Trigger camera preset and wait for 500ms transition to settle
+                self.page.click(f".view-preset-hud .hud-btn[data-view='{preset}']")
+                self.page.wait_for_timeout(550)
+
+                # Query all visible label pins
+                pins = self.page.locator(".label-pin:visible").all()
+                self.assertGreaterEqual(len(pins), 4, f"Expected at least 4 visible pins in {preset} at {vp_name}")
+
+                boxes = []
+                for pin in pins:
+                    b = pin.bounding_box()
+                    self.assertIsNotNone(b)
+                    boxes.append((pin.get_attribute("id"), b))
+
+                # Pairwise non-overlap check
+                for i in range(len(boxes)):
+                    for j in range(i + 1, len(boxes)):
+                        id_a, box_a = boxes[i]
+                        id_b, box_b = boxes[j]
+
+                        horiz_sep = (box_a["x"] + box_a["width"] <= box_b["x"]) or (box_b["x"] + box_b["width"] <= box_a["x"])
+                        vert_sep = (box_a["y"] + box_a["height"] <= box_b["y"]) or (box_b["y"] + box_b["height"] <= box_a["y"])
+
+                        self.assertTrue(
+                            horiz_sep or vert_sep,
+                            f"Label collision detected between {id_a} {box_a} and {id_b} {box_b} in preset '{preset}' at viewport {vp_name}"
+                        )
+
+        # Restore default desktop viewport and view
+        self.page.set_viewport_size({"width": 1280, "height": 800})
+        self.page.click(".view-preset-hud .hud-btn[data-view='isometric']")
+        self.page.wait_for_timeout(60)
+        self.assertEqual(len(self.page_errors), 0, f"Label collision check threw errors: {self.page_errors}")
+
+    def test_v0_1_r2_f2_all_five_billboard_pins_clickable_via_real_pointer_and_element_from_point(self):
+        """V0.1-R2-F2 regression: document.elementFromPoint and real pointer click reliably select ALL 5 components."""
+        components = [
+            ("blade_electrode", "Asymmetric High-Voltage Blade"),
+            ("ground_electrode", "Ground Counter-Electrode"),
+            ("dielectric_block", "Solid Dielectric Barrier / Potting"),
+            ("support_mount", "Structural Support Mount"),
+            ("enclosure_walls", "Conductive Enclosure (Chamber)")
+        ]
+
+        # Verify on desktop and mobile viewports
+        for vp in [(1280, 800), (390, 844), (375, 812)]:
+            self.page.set_viewport_size({"width": vp[0], "height": vp[1]})
+            self.page.wait_for_timeout(60)
+
+            for comp_id, expected_title in components:
+                pin = self.page.locator(f"#label-pin-{comp_id}")
+                self.assertTrue(pin.is_visible(), f"Pin {comp_id} must be visible at viewport {vp}")
+
+                bb = pin.bounding_box()
+                self.assertIsNotNone(bb)
+
+                cx = bb["x"] + bb["width"] / 2
+                cy = bb["y"] + bb["height"] / 2
+
+                # 1. Verify elementFromPoint resolves to this exact pin button
+                hit_target = self.page.evaluate(
+                    "([x, y]) => document.elementFromPoint(x, y)?.closest('.label-pin')?.dataset.id",
+                    [cx, cy]
+                )
+                self.assertEqual(hit_target, comp_id, f"Center of pin {comp_id} resolves to {hit_target} at {vp}")
+
+                # 2. Real mouse click on pin button center
+                self.page.mouse.click(cx, cy)
+                self.page.wait_for_timeout(40)
+
+                # 3. Assert component selection and inspector state
+                self.assertEqual(pin.get_attribute("aria-pressed"), "true")
+                self.assertTrue("selected" in (pin.get_attribute("class") or ""))
+
+                name_text = self.page.locator("#inspector-name").inner_text()
+                self.assertEqual(name_text, expected_title, f"Inspector name mismatch after clicking {comp_id}")
+
+        # Restore default desktop viewport
+        self.page.set_viewport_size({"width": 1280, "height": 800})
+        self.page.wait_for_timeout(40)
+        self.assertEqual(len(self.page_errors), 0, f"Pointer hit-testing threw errors: {self.page_errors}")
+
 
 if __name__ == "__main__":
     unittest.main()

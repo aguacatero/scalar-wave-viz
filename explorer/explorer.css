@@ -406,12 +406,15 @@ body {
   box-shadow: 0 4px 14px rgba(0, 0, 0, 0.55);
   white-space: nowrap;
   user-select: none;
-  transition: transform 0.12s ease, border-color 0.12s ease, box-shadow 0.12s ease;
+  transition: border-color 0.12s ease, box-shadow 0.12s ease;
+}
+
+.label-pin * {
+  pointer-events: none;
 }
 
 .label-pin:hover,
 .label-pin:focus-visible {
-  transform: translate(-50%, -108%) scale(1.05);
   border-color: #38bdf8;
   box-shadow: 0 0 14px rgba(56, 189, 248, 0.55);
   outline: 2px solid #38bdf8;
@@ -419,7 +422,7 @@ body {
 }
 
 .label-pin:active {
-  transform: translate(-50%, -96%) scale(0.98);
+  transform: translate(-50%, -100%) scale(0.98);
 }
 
 .label-pin.selected {
@@ -460,20 +463,22 @@ body {
   font-size: 0.95rem;
 }
 
-/* Layer Legend HUD */
+/* Layer Legend HUD - Remediated for V0.1-R2-F1: non-overlapping placement below HUD preset toolbar */
 .layer-legend-hud {
   position: absolute;
-  top: 1rem;
+  top: 4.5rem;
   right: 1rem;
-  background: rgba(18, 24, 32, 0.85);
+  max-width: 290px;
+  background: rgba(18, 24, 32, 0.88);
   backdrop-filter: blur(8px);
   border: 1px solid var(--border-color);
   padding: 0.5rem 0.75rem;
   border-radius: 6px;
   display: flex;
   flex-direction: column;
-  gap: 0.3rem;
+  gap: 0.35rem;
   font-size: 0.7rem;
+  line-height: 1.35;
   color: var(--text-secondary);
   z-index: 5;
   pointer-events: none;

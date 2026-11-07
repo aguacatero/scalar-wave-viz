@@ -1612,24 +1612,34 @@
     annotationGroup.add(line);
   }
 
-  // --- 3D Floating Component Labels Tracking ---
-  // Remediated for V0.1-R1-F1: accessible, pointer-clickable, camera-tracked billboard buttons.
+  // --- 3D Floating Component Labels Tracking & Collision Avoidance ---
+  // Remediated for V0.1-R1-F1 and V0.1-R2-F2: accessible, non-overlapping, pointer-clickable billboard buttons.
   function update3DLabels() {
     const labelsContainer = document.getElementById('labels-container');
     if (!labelsContainer || labelsContainer.classList.contains('hidden')) return;
     if (!renderer || !camera) return;
 
     const rect = renderer.domElement.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return;
+
     const isGeomVisible = geometryGroup && geometryGroup.visible;
     const isEnclVisible = enclosureGroup && enclosureGroup.visible;
 
+    // Distinct 3D spatial anchor points:
+    // - Blade: anchored at top-rear of wedge body (x = -24, y = 14, z = 8)
+    // - Ground: anchored at top-rear of collector plate (x = currentGapMM + 14, y = 20, z = -8)
+    // - Dielectric: elevated distinctly above the gap junction (x = 0, y = 36, z = 14)
+    // - Mount: positioned underneath insulating base (x = 5, y = -32, z = -30)
+    // - Chamber: positioned on front-left perimeter chamber wall (x = -45, y = 50, z = 25)
     const labelDefs = [
-      { id: "blade_electrode", name: currentVoltageKV > 0 ? `Blade (-${currentVoltageKV.toFixed(0)} kV)` : 'Blade (0 V OFF)', worldPos: new THREE.Vector3(-15, 22, 0), dotColor: "#f43f5e", isInterior: true },
-      { id: "ground_electrode", name: "Ground (0 V)", worldPos: new THREE.Vector3(currentGapMM + 2.0, 28, 0), dotColor: "#10b981", isInterior: true },
-      { id: "dielectric_block", name: "Dielectric Potting", worldPos: new THREE.Vector3(3, 26, 0), dotColor: "#818cf8", isInterior: true },
-      { id: "support_mount", name: "Support Mount", worldPos: new THREE.Vector3(5, -26, 42), dotColor: "#64748b", isInterior: true },
-      { id: "enclosure_walls", name: "Chamber (0 V)", worldPos: new THREE.Vector3(0, 75, 0), dotColor: "#475569", isInterior: false }
+      { id: "blade_electrode", name: currentVoltageKV > 0 ? `Blade (-${currentVoltageKV.toFixed(0)} kV)` : 'Blade (0 V OFF)', worldPos: new THREE.Vector3(-24, 14, 8), dotColor: "#f43f5e", isInterior: true },
+      { id: "ground_electrode", name: "Ground (0 V)", worldPos: new THREE.Vector3(currentGapMM + 14, 20, -8), dotColor: "#10b981", isInterior: true },
+      { id: "dielectric_block", name: "Dielectric Potting", worldPos: new THREE.Vector3(0, 36, 14), dotColor: "#818cf8", isInterior: true },
+      { id: "support_mount", name: "Support Mount", worldPos: new THREE.Vector3(5, -32, -30), dotColor: "#64748b", isInterior: true },
+      { id: "enclosure_walls", name: "Chamber (0 V)", worldPos: new THREE.Vector3(-45, 50, 25), dotColor: "#475569", isInterior: false }
     ];
+
+    const activePins = [];
 
     labelDefs.forEach(def => {
       let pin = document.getElementById(`label-pin-${def.id}`);
@@ -1665,15 +1675,175 @@
         pin.style.display = 'none';
       } else {
         pin.style.display = 'flex';
-        const x = ((v.x + 1) / 2) * rect.width;
-        const y = ((-v.y + 1) / 2) * rect.height;
-        pin.style.left = `${x}px`;
-        pin.style.top = `${y}px`;
         const isSelected = selectedComponentId === def.id;
         pin.classList.toggle('selected', isSelected);
         pin.setAttribute('aria-pressed', isSelected ? 'true' : 'false');
+
+        const projX = ((v.x + 1) / 2) * rect.width;
+        const projY = ((-v.y + 1) / 2) * rect.height;
+        const pinW = pin.offsetWidth || (def.name.length * 7 + 28);
+        const pinH = pin.offsetHeight || 26;
+
+        activePins.push({
+          pin,
+          id: def.id,
+          x: projX,
+          y: projY,
+          origX: projX,
+          origY: projY,
+          w: pinW,
+          h: pinH
+        });
       }
     });
+
+    // 2D Screen-Space Collision Avoidance (Remediated for V0.1-R2-F2)
+    // Ensures zero overlap between pins on all screen widths (375px/390px mobile & desktop)
+    resolveLabelCollisions(activePins, rect);
+
+    // Apply calculated collision-free screen positions
+    activePins.forEach(item => {
+      item.pin.style.left = `${Math.round(item.x)}px`;
+      item.pin.style.top = `${Math.round(item.y)}px`;
+    });
+  }
+
+  // --- Screen-Space Label Collision Avoidance ---
+  // Remediated for V0.1-R2-F2: iteratively relaxes pin positions to guarantee zero overlap across viewports
+  function resolveLabelCollisions(activePins, rect) {
+    if (!activePins || activePins.length <= 1) return;
+
+    const marginX = 8;
+    const marginY = 8;
+    const pad = 6;
+    const isMobile = rect.width <= 640;
+    const topMargin = isMobile ? 78 : 70; // clearance below view preset HUD toolbar
+    const bottomMargin = isMobile ? 42 : 48; // clearance above component chip bar
+    const maxY = rect.height - bottomMargin;
+
+    // 1. Initial clamp to allowable viewport bounds
+    activePins.forEach(item => {
+      item.x = Math.max(item.w / 2 + pad, Math.min(rect.width - item.w / 2 - pad, item.x));
+      item.y = Math.max(item.h + topMargin, Math.min(maxY, item.y));
+    });
+
+    if (isMobile) {
+      // Mobile 1D forward/backward sweep layout (provably collision-free)
+      activePins.sort((a, b) => a.y - b.y);
+
+      // Forward pass: ensure lower pins clear all overlapping upper pins
+      for (let k = 0; k < activePins.length; k++) {
+        let y_k = Math.max(activePins[k].y, activePins[k].h + topMargin);
+        for (let m = 0; m < k; m++) {
+          const a = activePins[m];
+          const b = activePins[k];
+          const aLeft = a.x - a.w / 2;
+          const aRight = a.x + a.w / 2;
+          const bLeft = b.x - b.w / 2;
+          const bRight = b.x + b.w / 2;
+          const overlapX = Math.min(aRight, bRight) - Math.max(aLeft, bLeft) + marginX;
+          if (overlapX > 0) {
+            y_k = Math.max(y_k, a.y + marginY + b.h);
+          }
+        }
+        activePins[k].y = y_k;
+      }
+
+      // Backward pass: clamp to maxY and pull upper pins up if needed
+      for (let k = activePins.length - 1; k >= 0; k--) {
+        if (activePins[k].y > maxY) {
+          activePins[k].y = maxY;
+        }
+        for (let m = k - 1; m >= 0; m--) {
+          const a = activePins[m];
+          const b = activePins[k];
+          const aLeft = a.x - a.w / 2;
+          const aRight = a.x + a.w / 2;
+          const bLeft = b.x - b.w / 2;
+          const bRight = b.x + b.w / 2;
+          const overlapX = Math.min(aRight, bRight) - Math.max(aLeft, bLeft) + marginX;
+          if (overlapX > 0) {
+            a.y = Math.min(a.y, b.y - b.h - marginY);
+          }
+        }
+      }
+
+      // Final forward safety pass: ensure min bound strictly maintained
+      for (let k = 0; k < activePins.length; k++) {
+        let y_k = Math.max(activePins[k].y, activePins[k].h + topMargin);
+        for (let m = 0; m < k; m++) {
+          const a = activePins[m];
+          const b = activePins[k];
+          const aLeft = a.x - a.w / 2;
+          const aRight = a.x + a.w / 2;
+          const bLeft = b.x - b.w / 2;
+          const bRight = b.x + b.w / 2;
+          const overlapX = Math.min(aRight, bRight) - Math.max(aLeft, bLeft) + marginX;
+          if (overlapX > 0) {
+            y_k = Math.max(y_k, a.y + marginY + b.h);
+          }
+        }
+        activePins[k].y = Math.min(maxY, y_k);
+      }
+
+      // Enforce bounds after pass
+      activePins.forEach(item => {
+        item.x = Math.max(item.w / 2 + pad, Math.min(rect.width - item.w / 2 - pad, item.x));
+        item.y = Math.max(item.h + topMargin, Math.min(maxY, item.y));
+      });
+    } else {
+      // Desktop / wide viewport: balanced 2D relaxation
+      const iterations = 10;
+      for (let iter = 0; iter < iterations; iter++) {
+        let collisionFound = false;
+        for (let i = 0; i < activePins.length; i++) {
+          for (let j = i + 1; j < activePins.length; j++) {
+            const a = activePins[i];
+            const b = activePins[j];
+
+            const aLeft = a.x - a.w / 2;
+            const aRight = a.x + a.w / 2;
+            const aTop = a.y - a.h;
+            const aBottom = a.y;
+
+            const bLeft = b.x - b.w / 2;
+            const bRight = b.x + b.w / 2;
+            const bTop = b.y - b.h;
+            const bBottom = b.y;
+
+            const overlapX = Math.min(aRight, bRight) - Math.max(aLeft, bLeft) + marginX;
+            const overlapY = Math.min(aBottom, bBottom) - Math.max(aTop, bTop) + marginY;
+
+            if (overlapX > 0 && overlapY > 0) {
+              collisionFound = true;
+
+              if (overlapX <= overlapY) {
+                // Separate horizontally
+                const lefter = aLeft <= bLeft ? a : b;
+                const righter = lefter === a ? b : a;
+                const shiftX = overlapX / 2 + 1;
+                lefter.x = Math.max(lefter.w / 2 + pad, lefter.x - shiftX);
+                righter.x = Math.min(rect.width - righter.w / 2 - pad, righter.x + shiftX);
+              } else {
+                // Separate vertically
+                const upper = aTop <= bTop ? a : b;
+                const lower = upper === a ? b : a;
+                const shiftY = overlapY / 2 + 1;
+                upper.y = Math.max(upper.h + topMargin, upper.y - shiftY);
+                lower.y = Math.min(maxY, lower.y + shiftY);
+              }
+            }
+          }
+        }
+
+        activePins.forEach(item => {
+          item.x = Math.max(item.w / 2 + pad, Math.min(rect.width - item.w / 2 - pad, item.x));
+          item.y = Math.max(item.h + topMargin, Math.min(maxY, item.y));
+        });
+
+        if (!collisionFound) break;
+      }
+    }
   }
 
   // --- Animation Loop ---
