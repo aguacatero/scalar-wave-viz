@@ -586,7 +586,8 @@
       fieldGroup.add(line);
     }
 
-    // Directional traveling pulses along streamlines (E points ground -> cathode)
+    // Animated schematic direction markers along streamlines illustrating E = -grad Phi (ground 0 V -> cathode -V).
+    // NOTE (V0.1-R1-F2): strictly schematic orientation markers, NOT charge transport, physical particles, wave propagation, or computed |E| magnitude.
     const pulsePositions = new Float32Array(numLines * 3);
     const pulseColors = new Float32Array(numLines * 3);
     for (let i = 0; i < numLines; i++) {
@@ -608,7 +609,7 @@
       blending: THREE.AdditiveBlending
     });
     const pulsePoints = new THREE.Points(pulseGeom, pulseMat);
-    pulsePoints.userData = { isPulsePoints: true, curves: curvesList };
+    pulsePoints.userData = { isFieldDirectionMarkers: true, isPulsePoints: true, curves: curvesList };
     fieldGroup.add(pulsePoints);
 
     // Equipotential contour rings near the blade tip
@@ -850,8 +851,8 @@
     if (lDiel) lDiel.textContent = `Dielectric (ε_r = ${currentEpsR.toFixed(1)} — Visual Proxy Only)`;
     if (lField) {
       lField.textContent = currentVoltageKV > 0
-        ? `Electric Field E (Ground 0 V → Blade -${currentVoltageKV.toFixed(0)} kV)`
-        : `Electric Field E (OFF at 0 V)`;
+        ? `Electric Field Direction (Ground 0 V → Blade -${currentVoltageKV.toFixed(0)} kV; Schematic Orientation Only, Not Computed |E| Magnitude or Charge Flow)`
+        : `Electric Field Direction (OFF at 0 V — Zero Field)`;
     }
     if (lForce) {
       lForce.textContent = currentVoltageKV > 0
@@ -859,7 +860,15 @@
         : `Schematic Vectors (0 at 0 V)`;
     }
 
-    // 2. Update Inspector if currently selected
+    // 2. Quick-Select Chip Bar dynamic state update (Remediated for V0.1-R1-M1)
+    const chipBlade = document.getElementById('chip-blade-label');
+    if (chipBlade) {
+      chipBlade.textContent = currentVoltageKV > 0
+        ? `Blade (-${currentVoltageKV.toFixed(0)} kV)`
+        : 'Blade (0 V OFF)';
+    }
+
+    // 3. Update Inspector if currently selected
     if (selectedComponentId) {
       renderInspectorCard(selectedComponentId);
     }
@@ -900,15 +909,42 @@
     badge.textContent = comp.provenance_badge;
     badge.className = `provenance-pill ${getPillClass(comp.provenance_badge)}`;
 
-    // Beginner-friendly role explanation
-    const beginnerRoleMap = {
-      "blade_electrode": "Active high-voltage cathode. The razor-sharp edge concentrates electric fields, pulling the blade toward the ground plate.",
-      "ground_electrode": "Planar counter-electrode held at zero volts (ground). Experiences an equal and opposite electrostatic pull toward the blade.",
-      "dielectric_block": "High-voltage potting block between electrodes to prevent electrical arcing, experiencing internal polarization stress.",
-      "support_mount": "Rigid insulating structural frame holding the electrodes firmly at fixed distance, canceling internal forces.",
-      "enclosure_walls": "Grounded laboratory chamber enclosure acting as a Faraday shield and vacuum envelope."
-    };
-    document.getElementById('inspector-role').textContent = beginnerRoleMap[comp.id] || comp.role;
+    // Beginner-friendly role and force status descriptions (Remediated for V0.1-R1-M2)
+    // Avoids unsupported pairwise equality claims; explicitly handles 0 V unenergized state.
+    let roleText = '';
+    let statusText = '';
+
+    if (currentVoltageKV <= 0.0) {
+      const zeroVoltRoleMap = {
+        "blade_electrode": "Active high-voltage cathode (unenergized at 0 V). When energized, the sharp edge concentrates electric fields toward the counter-electrode; at 0 V, electrostatic traction is identically zero.",
+        "ground_electrode": "Planar counter-electrode held at reference ground (0 V). Unenergized at 0 V: electrostatic forces are identically zero.",
+        "dielectric_block": "Insulating potting block between electrodes to prevent electrical arcing. Unenergized at 0 V: zero dielectric polarization stress.",
+        "support_mount": "Rigid insulating structural frame holding electrodes at fixed distance. Passive mechanical support; zero electrostatic stress at 0 V.",
+        "enclosure_walls": "Grounded laboratory chamber enclosure (Faraday shield). Unenergized at 0 V: zero capacitive image-charge coupling."
+      };
+      roleText = zeroVoltRoleMap[comp.id] || comp.role;
+      statusText = "Field OFF at 0 V — Zero Electrostatic Traction (Unenergized)";
+    } else {
+      const energizedRoleMap = {
+        "blade_electrode": `Active high-voltage cathode (-${currentVoltageKV.toFixed(1)} kV). The knife-edge geometry concentrates electric fields, producing schematic traction toward the ground plate. Quantitative magnitude unmeasured in V0.1.`,
+        "ground_electrode": "Planar counter-electrode held at zero volts (reference ground). Experiences schematic electrostatic attraction toward the cathode. Pairwise equality between these two electrodes alone is not assumed in multi-body geometry with dielectric and chamber coupling; whole-system equilibrium requires full closed-boundary integration.",
+        "dielectric_block": "Insulating potting block between electrodes. Experiences internal polarization stress gradients when energized. Mechanical forces are internal to the test article (Boundary A).",
+        "support_mount": "Rigid insulating structural frame holding electrodes firmly at fixed distance, transmitting internal mechanical constraint forces.",
+        "enclosure_walls": "Grounded laboratory chamber enclosure (Boundary B). Capacitively couples to interior electrodes via image charges across the surrounding vacuum."
+      };
+      roleText = energizedRoleMap[comp.id] || comp.role;
+
+      const energizedStatusMap = {
+        "blade_electrode": "Schematic Electrostatic Traction — Unmeasured in V0.1 (physical magnitude requires solver simulation)",
+        "ground_electrode": "Schematic Electrostatic Attraction — Unmeasured in V0.1 (multi-body traction partner; not isolated pairwise equal)",
+        "dielectric_block": "Internal Dielectric Polarization Stress (Virtual Work Gradient)",
+        "support_mount": "Internal Structural Equilibrium (Mechanical Constraint)",
+        "enclosure_walls": "External Chamber Wall Coupling (Capacitive Image Charges)"
+      };
+      statusText = energizedStatusMap[comp.id] || comp.status || '—';
+    }
+
+    document.getElementById('inspector-role').textContent = roleText;
 
     document.getElementById('inspector-citation').textContent = comp.citation || '—';
     document.getElementById('inspector-boundary').textContent = comp.system_boundary === "DEVICE_UNDER_TEST"
@@ -953,15 +989,7 @@
       : '0.0 (Field OFF at 0 V)';
     document.getElementById('inspector-force').textContent = forceStr;
 
-    // Readable scientific status replacing raw internal string
-    const statusReadable = {
-      "blade_electrode": "Schematic Electrostatic Traction — Unmeasured in V0 (physical magnitude requires solver simulation)",
-      "ground_electrode": "Schematic Opposing Reaction — Unmeasured in V0 (Newton's 3rd law partner)",
-      "dielectric_block": "Internal Dielectric Polarization Stress (Virtual Work Gradient)",
-      "support_mount": "Internal Structural Equilibrium (Mechanical Constraint)",
-      "enclosure_walls": "External Chamber Wall Coupling (Capacitive Image Charges)"
-    };
-    document.getElementById('inspector-status').textContent = statusReadable[comp.id] || comp.status || '—';
+    document.getElementById('inspector-status').textContent = statusText;
 
     document.getElementById('inspector-explanation').innerHTML = `
       <strong>Physical Context:</strong> ${comp.force_nature}.<br>
@@ -1275,6 +1303,7 @@
     // Layer Toggles
     document.getElementById('toggle-geometry').addEventListener('change', (e) => {
       geometryGroup.visible = e.target.checked;
+      if (annotationGroup) annotationGroup.visible = e.target.checked;
     });
     document.getElementById('toggle-fields').addEventListener('change', (e) => {
       if (currentVoltageKV > 0) {
@@ -1556,6 +1585,10 @@
       disposeHierarchy(obj);
     }
 
+    if (geometryGroup) {
+      annotationGroup.visible = geometryGroup.visible;
+    }
+
     const y = -15;
     const z = 0;
     // Dimension line with end ticks: from blade knife-edge (x=0) to ground plate near face (x=currentGapMM)
@@ -1580,18 +1613,22 @@
   }
 
   // --- 3D Floating Component Labels Tracking ---
+  // Remediated for V0.1-R1-F1: accessible, pointer-clickable, camera-tracked billboard buttons.
   function update3DLabels() {
     const labelsContainer = document.getElementById('labels-container');
     if (!labelsContainer || labelsContainer.classList.contains('hidden')) return;
     if (!renderer || !camera) return;
 
     const rect = renderer.domElement.getBoundingClientRect();
+    const isGeomVisible = geometryGroup && geometryGroup.visible;
+    const isEnclVisible = enclosureGroup && enclosureGroup.visible;
+
     const labelDefs = [
-      { id: "blade_electrode", name: "Blade (-20 kV)", worldPos: new THREE.Vector3(-15, 16, 0), dotColor: "#f43f5e" },
-      { id: "ground_electrode", name: "Ground (0 V)", worldPos: new THREE.Vector3(currentGapMM + 2.0, 24, 0), dotColor: "#10b981" },
-      { id: "dielectric_block", name: "Dielectric Potting", worldPos: new THREE.Vector3(3, 18, 24), dotColor: "#818cf8" },
-      { id: "support_mount", name: "Support Mount", worldPos: new THREE.Vector3(5, -26, 35), dotColor: "#64748b" },
-      { id: "enclosure_walls", name: "Chamber (0 V)", worldPos: new THREE.Vector3(0, 62, 0), dotColor: "#475569" }
+      { id: "blade_electrode", name: currentVoltageKV > 0 ? `Blade (-${currentVoltageKV.toFixed(0)} kV)` : 'Blade (0 V OFF)', worldPos: new THREE.Vector3(-15, 22, 0), dotColor: "#f43f5e", isInterior: true },
+      { id: "ground_electrode", name: "Ground (0 V)", worldPos: new THREE.Vector3(currentGapMM + 2.0, 28, 0), dotColor: "#10b981", isInterior: true },
+      { id: "dielectric_block", name: "Dielectric Potting", worldPos: new THREE.Vector3(3, 26, 0), dotColor: "#818cf8", isInterior: true },
+      { id: "support_mount", name: "Support Mount", worldPos: new THREE.Vector3(5, -26, 42), dotColor: "#64748b", isInterior: true },
+      { id: "enclosure_walls", name: "Chamber (0 V)", worldPos: new THREE.Vector3(0, 75, 0), dotColor: "#475569", isInterior: false }
     ];
 
     labelDefs.forEach(def => {
@@ -1600,7 +1637,10 @@
         pin = document.createElement('button');
         pin.id = `label-pin-${def.id}`;
         pin.className = 'label-pin';
-        pin.innerHTML = `<span class="label-pin-dot" style="background:${def.dotColor}"></span><span>${def.name}</span>`;
+        pin.type = 'button';
+        pin.dataset.id = def.id;
+        pin.setAttribute('aria-label', `Select ${def.name}`);
+        pin.innerHTML = `<span class="label-pin-dot" style="background:${def.dotColor}" aria-hidden="true"></span><span class="label-pin-text">${def.name}</span>`;
         pin.addEventListener('click', (e) => {
           e.stopPropagation();
           selectComponent(def.id);
@@ -1608,9 +1648,16 @@
         labelsContainer.appendChild(pin);
       }
 
-      if (def.id === 'blade_electrode') {
-        const vText = currentVoltageKV > 0 ? `Blade (-${currentVoltageKV.toFixed(0)} kV)` : 'Blade (0 V OFF)';
-        pin.querySelector('span:last-child').textContent = vText;
+      // Check layer visibility (hide interior pins when geometry is toggled off)
+      if ((def.isInterior && !isGeomVisible) || (!def.isInterior && !isEnclVisible)) {
+        pin.style.display = 'none';
+        return;
+      }
+
+      const textEl = pin.querySelector('.label-pin-text');
+      if (textEl && textEl.textContent !== def.name) {
+        textEl.textContent = def.name;
+        pin.setAttribute('aria-label', `Select ${def.name}`);
       }
 
       const v = def.worldPos.clone().project(camera);
@@ -1622,7 +1669,9 @@
         const y = ((-v.y + 1) / 2) * rect.height;
         pin.style.left = `${x}px`;
         pin.style.top = `${y}px`;
-        pin.classList.toggle('selected', selectedComponentId === def.id);
+        const isSelected = selectedComponentId === def.id;
+        pin.classList.toggle('selected', isSelected);
+        pin.setAttribute('aria-pressed', isSelected ? 'true' : 'false');
       }
     });
   }

@@ -741,6 +741,110 @@ class PropulsionExplorerBrowserSmokeTests(unittest.TestCase):
 
         self.assertEqual(len(self.page_errors), 0, f"Mobile 390px rendering threw errors: {self.page_errors}")
 
+    def test_billboard_label_pin_mouse_and_keyboard_selection(self):
+        """V0.1-R1-F1 regression: real mouse pointer click and keyboard Enter on billboard label pins selects components."""
+        # 1. Real pointer click on dielectric label pin
+        pin_diel = self.page.locator("#label-pin-dielectric_block")
+        self.assertTrue(pin_diel.is_visible())
+        bb = pin_diel.bounding_box()
+        self.assertIsNotNone(bb)
+
+        # Real page.mouse.click at the center of the billboard pin button
+        self.page.mouse.click(bb["x"] + bb["width"] / 2, bb["y"] + bb["height"] / 2)
+        self.page.wait_for_timeout(50)
+
+        # Assert inspector updated to dielectric
+        name_el = self.page.locator("#inspector-name").inner_text()
+        self.assertEqual(name_el, "Solid Dielectric Barrier / Potting")
+        self.assertEqual(pin_diel.get_attribute("aria-pressed"), "true")
+        self.assertTrue("selected" in (pin_diel.get_attribute("class") or ""))
+
+        # 2. Keyboard focus and Enter key activation on blade label pin
+        pin_blade = self.page.locator("#label-pin-blade_electrode")
+        self.assertTrue(pin_blade.is_visible())
+        pin_blade.focus()
+        self.page.keyboard.press("Enter")
+        self.page.wait_for_timeout(50)
+
+        # Assert inspector updated to blade
+        name_el = self.page.locator("#inspector-name").inner_text()
+        self.assertEqual(name_el, "Asymmetric High-Voltage Blade")
+        self.assertEqual(pin_blade.get_attribute("aria-pressed"), "true")
+        self.assertTrue("selected" in (pin_blade.get_attribute("class") or ""))
+
+        self.assertEqual(len(self.page_errors), 0, f"Billboard pin interactions threw errors: {self.page_errors}")
+
+    def test_chip_bar_and_pin_voltage_slider_synchronization(self):
+        """V0.1-R1-M1 regression: chip bar and 3D billboard pin blade labels update dynamically across voltage slider sweep."""
+        chip_label = self.page.locator("#chip-blade-label")
+        pin_label = self.page.locator("#label-pin-blade_electrode .label-pin-text")
+
+        self.page.click("#tab-btn-sandbox")
+
+        test_voltages = [
+            ("0", "Blade (0 V OFF)"),
+            ("20", "Blade (-20 kV)"),
+            ("50", "Blade (-50 kV)"),
+        ]
+
+        for v_str, expected_label in test_voltages:
+            self.page.fill("#slider-voltage", v_str)
+            self.page.dispatch_event("#slider-voltage", "input")
+            self.page.wait_for_timeout(30)
+
+            self.assertEqual(chip_label.inner_text(), expected_label,
+                             f"Chip label mismatch at V={v_str} kV")
+            self.assertEqual(pin_label.inner_text(), expected_label,
+                             f"Billboard pin label mismatch at V={v_str} kV")
+
+        self.assertEqual(len(self.page_errors), 0, f"Chip voltage sweep threw errors: {self.page_errors}")
+
+    def test_inspector_role_and_status_at_zero_and_energized_voltage(self):
+        """V0.1-R1-M2 regression: inspector card qualifies multi-body forces and specifies unenergized 0 V state."""
+        # Select ground electrode at nominal 20 kV
+        self.page.click("#tab-btn-layers")
+        self.page.click(".component-item-btn[data-id='ground_electrode']")
+
+        role_text_20k = self.page.locator("#inspector-role").inner_text()
+        status_text_20k = self.page.locator("#inspector-status").inner_text()
+
+        self.assertIn("Pairwise equality between these two electrodes alone is not assumed", role_text_20k)
+        self.assertIn("not isolated pairwise equal", status_text_20k)
+
+        # Sweep voltage slider to 0 kV
+        self.page.click("#tab-btn-sandbox")
+        self.page.fill("#slider-voltage", "0")
+        self.page.dispatch_event("#slider-voltage", "input")
+        self.page.wait_for_timeout(30)
+
+        # Check inspector updated to 0 V unenergized state
+        self.page.click("#tab-btn-inspector")
+        role_text_0k = self.page.locator("#inspector-role").inner_text()
+        status_text_0k = self.page.locator("#inspector-status").inner_text()
+
+        self.assertIn("unenergized at 0 v", role_text_0k.lower())
+        self.assertIn("electrostatic forces are identically zero", role_text_0k.lower())
+        self.assertIn("Field OFF at 0 V — Zero Electrostatic Traction (Unenergized)", status_text_0k)
+
+        self.assertEqual(len(self.page_errors), 0, f"Inspector voltage state check threw errors: {self.page_errors}")
+
+    def test_electric_field_legend_and_marker_semantics(self):
+        """V0.1-R1-F2 regression: electric field legend qualifies schematic orientation and distinguishes 0 V extinction."""
+        legend_field = self.page.locator("#legend-field-label")
+
+        # At default 20 kV
+        self.assertIn("Schematic Orientation Only, Not Computed |E| Magnitude or Charge Flow", legend_field.inner_text())
+
+        # At 0 kV
+        self.page.click("#tab-btn-sandbox")
+        self.page.fill("#slider-voltage", "0")
+        self.page.dispatch_event("#slider-voltage", "input")
+        self.page.wait_for_timeout(30)
+
+        self.assertIn("Electric Field Direction (OFF at 0 V — Zero Field)", legend_field.inner_text())
+
+        self.assertEqual(len(self.page_errors), 0, f"Field legend check threw errors: {self.page_errors}")
+
 
 if __name__ == "__main__":
     unittest.main()

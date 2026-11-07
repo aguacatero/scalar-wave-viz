@@ -381,6 +381,7 @@ body {
 }
 
 .labels-container.hidden {
+  display: none !important;
   opacity: 0;
   pointer-events: none;
   visibility: hidden;
@@ -389,7 +390,8 @@ body {
 .label-pin {
   position: absolute;
   transform: translate(-50%, -100%);
-  pointer-events: none;
+  pointer-events: auto;
+  cursor: pointer;
   display: flex;
   align-items: center;
   gap: 0.35rem;
@@ -407,10 +409,17 @@ body {
   transition: transform 0.12s ease, border-color 0.12s ease, box-shadow 0.12s ease;
 }
 
-.label-pin:hover {
+.label-pin:hover,
+.label-pin:focus-visible {
   transform: translate(-50%, -108%) scale(1.05);
   border-color: #38bdf8;
   box-shadow: 0 0 14px rgba(56, 189, 248, 0.55);
+  outline: 2px solid #38bdf8;
+  outline-offset: 2px;
+}
+
+.label-pin:active {
+  transform: translate(-50%, -96%) scale(0.98);
 }
 
 .label-pin.selected {

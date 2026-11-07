@@ -58,25 +58,25 @@
 
       <!-- Component Quick-Select Bar (Accessible 1-Click Selection & Mobile Touch Friendly) -->
       <nav class="component-chip-bar" role="toolbar" aria-label="Quick Component Selection" id="component-chip-bar">
-        <button class="chip-btn" data-id="blade_electrode" title="Inspect Asymmetric Blade Cathode">
-          <span class="chip-dot swatch-blade"></span> Blade (-20 kV)
+        <button class="chip-btn" data-id="blade_electrode" id="chip-blade-electrode" title="Inspect Asymmetric Blade Cathode">
+          <span class="chip-dot swatch-blade" aria-hidden="true"></span> <span class="chip-label" id="chip-blade-label">Blade (-20 kV)</span>
         </button>
-        <button class="chip-btn" data-id="ground_electrode" title="Inspect Ground Counter-Electrode">
-          <span class="chip-dot swatch-ground"></span> Ground (0 V)
+        <button class="chip-btn" data-id="ground_electrode" id="chip-ground-electrode" title="Inspect Ground Counter-Electrode">
+          <span class="chip-dot swatch-ground" aria-hidden="true"></span> <span class="chip-label">Ground (0 V)</span>
         </button>
-        <button class="chip-btn" data-id="dielectric_block" title="Inspect Dielectric Potting Block">
-          <span class="chip-dot swatch-dielectric"></span> Dielectric
+        <button class="chip-btn" data-id="dielectric_block" id="chip-dielectric-block" title="Inspect Dielectric Potting Block">
+          <span class="chip-dot swatch-dielectric" aria-hidden="true"></span> <span class="chip-label">Dielectric</span>
         </button>
-        <button class="chip-btn" data-id="support_mount" title="Inspect Structural Support Mount">
-          <span class="chip-dot swatch-mount"></span> Mount
+        <button class="chip-btn" data-id="support_mount" id="chip-support-mount" title="Inspect Structural Support Mount">
+          <span class="chip-dot swatch-mount" aria-hidden="true"></span> <span class="chip-label">Mount</span>
         </button>
-        <button class="chip-btn" data-id="enclosure_walls" title="Inspect Chamber Enclosure Walls">
-          <span class="chip-dot swatch-enclosure"></span> Chamber
+        <button class="chip-btn" data-id="enclosure_walls" id="chip-enclosure-walls" title="Inspect Chamber Enclosure Walls">
+          <span class="chip-dot swatch-enclosure" aria-hidden="true"></span> <span class="chip-label">Chamber</span>
         </button>
       </nav>
 
-      <!-- 3D Component Labels Overlay Container -->
-      <div id="labels-container" class="labels-container" aria-hidden="true"></div>
+      <!-- 3D Component Labels Overlay Container (Accessible Billboard Callouts) -->
+      <div id="labels-container" class="labels-container" role="region" aria-label="3D Component Labels"></div>
 
       <!-- Scene Notification / Tooltip Banner -->
       <div id="scene-banner" class="scene-banner" role="status" aria-live="polite">
@@ -89,7 +89,7 @@
         <div class="legend-item"><span class="legend-swatch swatch-blade"></span> <span id="legend-blade-label">Blade (-20.0 kV)</span></div>
         <div class="legend-item"><span class="legend-swatch swatch-ground"></span> <span id="legend-ground-label">Ground (0.0 V)</span></div>
         <div class="legend-item"><span class="legend-swatch swatch-dielectric"></span> <span id="legend-dielectric-label">Dielectric (&epsilon;<sub>r</sub> = 3.8 — Visual Proxy Only)</span></div>
-        <div class="legend-item"><span class="legend-swatch swatch-field"></span> <span id="legend-field-label">Electric Field E (&plusmn;0 V &rarr; -V)</span></div>
+        <div class="legend-item"><span class="legend-swatch swatch-field"></span> <span id="legend-field-label">Electric Field Direction (Ground 0 V &rarr; Blade -20 kV; Schematic Orientation Only, Not Computed |E| Magnitude or Charge Flow)</span></div>
         <div class="legend-item"><span class="legend-swatch swatch-force"></span> <span id="legend-force-label">Schematic Vectors (Bounded 6–30 mm; F &prop; V<sup>2</sup>)</span></div>
       </div>
     </div>
@@ -141,7 +141,7 @@
           <div class="disclaimer-box">
             <strong>Layer Notation:</strong>
             <span class="badge-disclaimer">QUALITATIVE SCHEMATIC FLUX &amp; DIRECTIONS</span>
-            <p>Field lines depict qualitative flux density between electrodes. Arrow lengths illustrate relative voltage scaling (&prop; <i>V</i><sup>2</sup>) bounded to [6, 30] mm for viewport legibility, showing physical line of action and direction only; lengths do not imply component-to-component force ratios or uncalculated newton quantities. Completely extinguished at 0 kV.</p>
+            <p>Field lines depict qualitative flux density between electrodes. Animated direction markers along streamlines illustrate electrostatic field orientation (<b>E</b> = -&nabla;&Phi;) pointing from Ground (0 V) to Blade (-<i>V</i>); they are schematic orientation indicators only—not physical particles, charge transport, wave propagation, or computed |<b>E</b>| magnitude. Arrow lengths illustrate relative voltage scaling (&prop; <i>V</i><sup>2</sup>) bounded to [6, 30] mm for viewport legibility, showing physical line of action and direction only; lengths do not imply component-to-component force ratios or uncalculated newton quantities. Completely extinguished at 0 kV.</p>
           </div>
         </div>
 

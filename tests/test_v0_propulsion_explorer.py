@@ -261,6 +261,12 @@ class PropulsionExplorerJSLogicTests(unittest.TestCase):
         js_path = EXPLORER_DIR / "explorer.js"
         with open(js_path, "r", encoding="utf-8") as f:
             self.js = f.read()
+        html_path = EXPLORER_DIR / "index.html"
+        with open(html_path, "r", encoding="utf-8") as f:
+            self.html = f.read()
+        css_path = EXPLORER_DIR / "explorer.css"
+        with open(css_path, "r", encoding="utf-8") as f:
+            self.css = f.read()
 
     def test_no_invalid_orbit_controls_method_calls(self):
         """V0-R1-F3 regression: verify nonexistent rotateLeft/rotateUp/dollyIn are NOT called."""
@@ -337,6 +343,45 @@ class PropulsionExplorerJSLogicTests(unittest.TestCase):
         """V0-R3-F1 regression: verify getComponentScreenCoords is implemented and exposed for real pointer testing."""
         self.assertIn("function getComponentScreenCoords(id)", self.js)
         self.assertIn("getComponentScreenCoords: getComponentScreenCoords", self.js)
+
+    def test_v0_1_r1_f1_billboard_label_pins_interactive_and_accessible(self):
+        """V0.1-R1-F1 regression: billboard label pins have interactive pointer events, type='button', and ARIA."""
+        # Container is an accessible region without contradictory aria-hidden
+        self.assertIn('id="labels-container" class="labels-container" role="region" aria-label="3D Component Labels"', self.html)
+        self.assertNotIn('id="labels-container" class="labels-container" aria-hidden="true"', self.html)
+
+        # Pin buttons in JS
+        self.assertIn("pin.type = 'button';", self.js)
+        self.assertIn("pin.setAttribute('aria-label', `Select ${def.name}`);", self.js)
+        self.assertIn("pin.setAttribute('aria-pressed', isSelected ? 'true' : 'false');", self.js)
+        self.assertIn("e.stopPropagation();", self.js)
+
+        # CSS has pointer-events: auto on .label-pin
+        self.assertIn("pointer-events: auto;", self.css)
+
+    def test_v0_1_r1_f2_streamline_markers_qualified_not_particles_or_field_magnitude(self):
+        """V0.1-R1-F2 regression: streamline markers qualified as schematic orientation only, not particles or |E|."""
+        self.assertIn("isFieldDirectionMarkers: true", self.js)
+        self.assertIn("Schematic Orientation Only, Not Computed |E| Magnitude or Charge Flow", self.js)
+        self.assertIn("Schematic Orientation Only, Not Computed |E| Magnitude or Charge Flow", self.html)
+        self.assertIn("Electric Field Direction (OFF at 0 V — Zero Field)", self.js)
+
+    def test_v0_1_r1_m1_chip_bar_synchronizes_with_voltage(self):
+        """V0.1-R1-M1 regression: chip bar blade label dynamically updates from voltage state."""
+        self.assertIn("id=\"chip-blade-label\"", self.html)
+        self.assertIn("const chipBlade = document.getElementById('chip-blade-label');", self.js)
+        self.assertIn("chipBlade.textContent = currentVoltageKV > 0", self.js)
+        self.assertIn("'Blade (0 V OFF)'", self.js)
+
+    def test_v0_1_r1_m2_inspector_role_and_status_qualified(self):
+        """V0.1-R1-M2 regression: inspector card qualifies multi-body forces and specifies 0 V null state."""
+        # 0 V null state
+        self.assertIn("Field OFF at 0 V — Zero Electrostatic Traction (Unenergized)", self.js)
+        self.assertIn("electrostatic forces are identically zero", self.js)
+
+        # Energized multi-body qualification (no unconditional pairwise equality)
+        self.assertIn("Pairwise equality between these two electrodes alone is not assumed", self.js)
+        self.assertIn("not isolated pairwise equal", self.js)
 
 
 class PropulsionExplorerLauncherTests(unittest.TestCase):
