@@ -232,7 +232,7 @@
     // Hide loading screen
     const loader = document.getElementById('loading-overlay');
     if (loader) {
-      setTimeout(() => loader.classList.add('hidden'), 200);
+      setTimeout(() => loader.classList.add('hidden'), 50);
     }
   }
 
@@ -242,7 +242,7 @@
     const canvas = document.getElementById('webgl-canvas');
 
     scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x0a0e14);
+    scene.background = new THREE.Color(0x070a0f);
 
     const width = container.clientWidth || window.innerWidth;
     const height = container.clientHeight || 500;
@@ -270,25 +270,35 @@
     raycaster = new THREE.Raycaster();
     mouse = new THREE.Vector2();
 
-    // Lighting
-    const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
+    // Studio Laboratory Lighting
+    const ambientLight = new THREE.AmbientLight(0xdbeafe, 0.55);
     scene.add(ambientLight);
 
-    const mainLight = new THREE.DirectionalLight(0xffffff, 0.9);
-    mainLight.position.set(80, 120, 90);
+    const mainLight = new THREE.DirectionalLight(0xffffff, 1.1);
+    mainLight.position.set(90, 130, 90);
     mainLight.castShadow = true;
     mainLight.shadow.mapSize.width = 1024;
     mainLight.shadow.mapSize.height = 1024;
     scene.add(mainLight);
 
-    const fillLight = new THREE.DirectionalLight(0x38bdf8, 0.4);
-    fillLight.position.set(-80, -40, -60);
+    // Cool cyan fill light for electrode underside & shadow contrast
+    const fillLight = new THREE.DirectionalLight(0x38bdf8, 0.65);
+    fillLight.position.set(-90, -30, -70);
     scene.add(fillLight);
 
-    // Subtle coordinate ground grid
+    // Warm specular accent rim light
+    const rimLight = new THREE.DirectionalLight(0xfef08a, 0.40);
+    rimLight.position.set(-40, 60, -80);
+    scene.add(rimLight);
+
+    // Dual coordinate ground grid (outer reference + inner focal grid)
     const gridHelper = new THREE.GridHelper(160, 32, 0x273545, 0x16202c);
     gridHelper.position.y = -25;
     scene.add(gridHelper);
+
+    const innerGrid = new THREE.GridHelper(60, 20, 0x0284c7, 0x1e293b);
+    innerGrid.position.y = -24.9;
+    scene.add(innerGrid);
 
     // Groups
     geometryGroup = new THREE.Group();
@@ -340,9 +350,9 @@
     const bladeGeo = createBladeWedgeGeometry(30, 25.4, 3);
     const bladeMat = new THREE.MeshStandardMaterial({
       color: 0xf43f5e,
-      roughness: 0.35,
-      metalness: 0.85,
-      emissive: 0x881337,
+      roughness: 0.28,
+      metalness: 0.88,
+      emissive: 0x9f1239,
       emissiveIntensity: 0.25
     });
     const bladeMesh = new THREE.Mesh(bladeGeo, bladeMat);
@@ -350,6 +360,21 @@
     bladeMesh.castShadow = true;
     bladeMesh.receiveShadow = true;
     bladeMesh.userData = { id: "blade_electrode", name: "Asymmetric High-Voltage Blade" };
+
+    // Knife-edge apex highlight along x = +15 in local coordinates (world x = 0)
+    const edgeGeo = new THREE.BufferGeometry().setFromPoints([
+      new THREE.Vector3(15, 12.7, 0),
+      new THREE.Vector3(15, -12.7, 0)
+    ]);
+    const edgeMat = new THREE.LineBasicMaterial({
+      color: 0xff6b8b,
+      transparent: true,
+      opacity: 0.95
+    });
+    const edgeLine = new THREE.Line(edgeGeo, edgeMat);
+    edgeLine.userData = { isKnifeEdgeLine: true };
+    bladeMesh.add(edgeLine);
+
     geometryGroup.add(bladeMesh);
     componentMeshes["blade_electrode"] = bladeMesh;
     pickableObjects.push(bladeMesh);
@@ -363,10 +388,10 @@
     const groundGeo = new THREE.BoxGeometry(4, 40, 50.8);
     const groundMat = new THREE.MeshStandardMaterial({
       color: 0x10b981,
-      roughness: 0.25,
-      metalness: 0.9,
+      roughness: 0.20,
+      metalness: 0.92,
       emissive: 0x064e3b,
-      emissiveIntensity: 0.2
+      emissiveIntensity: 0.20
     });
     const groundMesh = new THREE.Mesh(groundGeo, groundMat);
     groundMesh.position.set(currentGapMM + 2.0, 0, 0);
@@ -384,12 +409,13 @@
     const dielGeo = new THREE.BoxGeometry(16, 30, 45);
     const dielMat = new THREE.MeshPhysicalMaterial({
       color: 0x818cf8,
-      roughness: 0.15,
+      roughness: 0.12,
       metalness: 0.05,
-      transmission: 0.75,
+      transmission: 0.82,
       transparent: true,
-      opacity: 0.55,
-      ior: 1.55
+      opacity: 0.50,
+      ior: 1.52,
+      specularIntensity: 0.8
     });
     const dielMesh = new THREE.Mesh(dielGeo, dielMat);
     dielMesh.position.set(3, 0, 0);
@@ -402,11 +428,11 @@
     // 4. Structural Support Stand (Delrin/PEEK Insulating Base)
     const mountGeo = new THREE.BoxGeometry(90, 8, 90);
     const mountMat = new THREE.MeshStandardMaterial({
-      color: 0x475569,
-      roughness: 0.7,
-      metalness: 0.1,
-      emissive: 0x1e293b,
-      emissiveIntensity: 0.1
+      color: 0x334155,
+      roughness: 0.65,
+      metalness: 0.20,
+      emissive: 0x0f172a,
+      emissiveIntensity: 0.12
     });
     const mountMesh = new THREE.Mesh(mountGeo, mountMat);
     mountMesh.position.set(5, -20, 0);
@@ -420,15 +446,15 @@
     const chamberGeo = new THREE.BoxGeometry(160, 120, 160);
     const chamberWire = new THREE.WireframeGeometry(chamberGeo);
     const chamberLine = new THREE.LineSegments(chamberWire);
-    chamberLine.material.color.setHex(0x334155);
+    chamberLine.material.color.setHex(0x475569);
     chamberLine.material.transparent = true;
-    chamberLine.material.opacity = 0.45;
+    chamberLine.material.opacity = 0.55;
 
     // Pickable chamber mesh with transparent double-sided faces
     const chamberMat = new THREE.MeshBasicMaterial({
-      color: 0x1e293b,
+      color: 0x18222d,
       transparent: true,
-      opacity: 0.06,
+      opacity: 0.04,
       side: THREE.DoubleSide
     });
     const chamberMesh = new THREE.Mesh(chamberGeo, chamberMat);
@@ -438,9 +464,10 @@
     componentMeshes["enclosure_walls"] = chamberMesh;
     pickableObjects.push(chamberMesh);
 
-    // Build Electric Field Streamlines & Force Vectors
+    // Build Electric Field Streamlines, Force Vectors, and Gap Indicator
     updateFieldLines();
     updateForceVectors();
+    updateGapIndicator();
   }
 
   // --- Helper: Tapered Blade Wedge Geometry ---
@@ -520,6 +547,7 @@
 
     // Streamlines flowing from ground plate (0 V) to sharp blade cathode (-V)
     const numLines = 28;
+    const curvesList = [];
     for (let i = 0; i < numLines; i++) {
       const angle = (i / numLines) * Math.PI * 2;
       const spreadY = Math.sin(angle) * (6 + (i % 3) * 5);
@@ -531,6 +559,7 @@
       const p2 = new THREE.Vector3(bladeTipX, 0, 0);
 
       const curve = new THREE.QuadraticBezierCurve3(p0, p1, p2);
+      curvesList.push(curve);
       const points = curve.getPoints(24);
       const geom = new THREE.BufferGeometry().setFromPoints(points);
 
@@ -556,6 +585,32 @@
       line.userData = { isFieldLine: true, baseOpacity: opacity };
       fieldGroup.add(line);
     }
+
+    // Animated schematic direction markers along streamlines illustrating E = -grad Phi (ground 0 V -> cathode -V).
+    // NOTE (V0.1-R1-F2): strictly schematic orientation markers, NOT charge transport, physical particles, wave propagation, or computed |E| magnitude.
+    const pulsePositions = new Float32Array(numLines * 3);
+    const pulseColors = new Float32Array(numLines * 3);
+    for (let i = 0; i < numLines; i++) {
+      pulsePositions[i * 3] = groundX;
+      pulsePositions[i * 3 + 1] = 0;
+      pulsePositions[i * 3 + 2] = 0;
+      pulseColors[i * 3] = 0.22;
+      pulseColors[i * 3 + 1] = 0.74;
+      pulseColors[i * 3 + 2] = 0.97;
+    }
+    const pulseGeom = new THREE.BufferGeometry();
+    pulseGeom.setAttribute('position', new THREE.BufferAttribute(pulsePositions, 3));
+    pulseGeom.setAttribute('color', new THREE.BufferAttribute(pulseColors, 3));
+    const pulseMat = new THREE.PointsMaterial({
+      size: 4.0,
+      vertexColors: true,
+      transparent: true,
+      opacity: Math.min(1.0, 0.45 + voltageRatio * 0.45),
+      blending: THREE.AdditiveBlending
+    });
+    const pulsePoints = new THREE.Points(pulseGeom, pulseMat);
+    pulsePoints.userData = { isFieldDirectionMarkers: true, isPulsePoints: true, curves: curvesList };
+    fieldGroup.add(pulsePoints);
 
     // Equipotential contour rings near the blade tip
     const ringRadii = [4, 8, 14, 22];
@@ -796,8 +851,8 @@
     if (lDiel) lDiel.textContent = `Dielectric (ε_r = ${currentEpsR.toFixed(1)} — Visual Proxy Only)`;
     if (lField) {
       lField.textContent = currentVoltageKV > 0
-        ? `Electric Field E (Ground 0 V → Blade -${currentVoltageKV.toFixed(0)} kV)`
-        : `Electric Field E (OFF at 0 V)`;
+        ? `Electric Field Direction (Ground 0 V → Blade -${currentVoltageKV.toFixed(0)} kV; Schematic Orientation Only, Not Computed |E| Magnitude or Charge Flow)`
+        : `Electric Field Direction (OFF at 0 V — Zero Field)`;
     }
     if (lForce) {
       lForce.textContent = currentVoltageKV > 0
@@ -805,7 +860,15 @@
         : `Schematic Vectors (0 at 0 V)`;
     }
 
-    // 2. Update Inspector if currently selected
+    // 2. Quick-Select Chip Bar dynamic state update (Remediated for V0.1-R1-M1)
+    const chipBlade = document.getElementById('chip-blade-label');
+    if (chipBlade) {
+      chipBlade.textContent = currentVoltageKV > 0
+        ? `Blade (-${currentVoltageKV.toFixed(0)} kV)`
+        : 'Blade (0 V OFF)';
+    }
+
+    // 3. Update Inspector if currently selected
     if (selectedComponentId) {
       renderInspectorCard(selectedComponentId);
     }
@@ -815,9 +878,15 @@
   function selectComponent(id) {
     selectedComponentId = id;
 
-    // Highlight in component list
+    // Highlight in component list (sidebar)
     const items = document.querySelectorAll('.component-item-btn');
     items.forEach(el => {
+      el.classList.toggle('selected', el.dataset.id === id);
+    });
+
+    // Highlight in quick-select chip bar (mobile & desktop)
+    const chips = document.querySelectorAll('.chip-btn');
+    chips.forEach(el => {
       el.classList.toggle('selected', el.dataset.id === id);
     });
 
@@ -840,7 +909,43 @@
     badge.textContent = comp.provenance_badge;
     badge.className = `provenance-pill ${getPillClass(comp.provenance_badge)}`;
 
-    document.getElementById('inspector-role').textContent = comp.role;
+    // Beginner-friendly role and force status descriptions (Remediated for V0.1-R1-M2)
+    // Avoids unsupported pairwise equality claims; explicitly handles 0 V unenergized state.
+    let roleText = '';
+    let statusText = '';
+
+    if (currentVoltageKV <= 0.0) {
+      const zeroVoltRoleMap = {
+        "blade_electrode": "Active high-voltage cathode (unenergized at 0 V). When energized, the sharp edge concentrates electric fields toward the counter-electrode; at 0 V, electrostatic traction is identically zero.",
+        "ground_electrode": "Planar counter-electrode held at reference ground (0 V). Unenergized at 0 V: electrostatic forces are identically zero.",
+        "dielectric_block": "Insulating potting block between electrodes to prevent electrical arcing. Unenergized at 0 V: zero dielectric polarization stress.",
+        "support_mount": "Rigid insulating structural frame holding electrodes at fixed distance. Passive mechanical support; zero electrostatic stress at 0 V.",
+        "enclosure_walls": "Grounded laboratory chamber enclosure (Faraday shield). Unenergized at 0 V: zero capacitive image-charge coupling."
+      };
+      roleText = zeroVoltRoleMap[comp.id] || comp.role;
+      statusText = "Field OFF at 0 V — Zero Electrostatic Traction (Unenergized)";
+    } else {
+      const energizedRoleMap = {
+        "blade_electrode": `Active high-voltage cathode (-${currentVoltageKV.toFixed(1)} kV). The knife-edge geometry concentrates electric fields, producing schematic traction toward the ground plate. Quantitative magnitude unmeasured in V0.1.`,
+        "ground_electrode": "Planar counter-electrode held at zero volts (reference ground). Experiences schematic electrostatic attraction toward the cathode. Pairwise equality between these two electrodes alone is not assumed in multi-body geometry with dielectric and chamber coupling; whole-system equilibrium requires full closed-boundary integration.",
+        "dielectric_block": "Insulating potting block between electrodes. Experiences internal polarization stress gradients when energized. Mechanical forces are internal to the test article (Boundary A).",
+        "support_mount": "Rigid insulating structural frame holding electrodes firmly at fixed distance, transmitting internal mechanical constraint forces.",
+        "enclosure_walls": "Grounded laboratory chamber enclosure (Boundary B). Capacitively couples to interior electrodes via image charges across the surrounding vacuum."
+      };
+      roleText = energizedRoleMap[comp.id] || comp.role;
+
+      const energizedStatusMap = {
+        "blade_electrode": "Schematic Electrostatic Traction — Unmeasured in V0.1 (physical magnitude requires solver simulation)",
+        "ground_electrode": "Schematic Electrostatic Attraction — Unmeasured in V0.1 (multi-body traction partner; not isolated pairwise equal)",
+        "dielectric_block": "Internal Dielectric Polarization Stress (Virtual Work Gradient)",
+        "support_mount": "Internal Structural Equilibrium (Mechanical Constraint)",
+        "enclosure_walls": "External Chamber Wall Coupling (Capacitive Image Charges)"
+      };
+      statusText = energizedStatusMap[comp.id] || comp.status || '—';
+    }
+
+    document.getElementById('inspector-role').textContent = roleText;
+
     document.getElementById('inspector-citation').textContent = comp.citation || '—';
     document.getElementById('inspector-boundary').textContent = comp.system_boundary === "DEVICE_UNDER_TEST"
       ? "Boundary A: Suspended Test Article (DUT)"
@@ -884,7 +989,8 @@
       : '0.0 (Field OFF at 0 V)';
     document.getElementById('inspector-force').textContent = forceStr;
 
-    document.getElementById('inspector-status').textContent = comp.status || '—';
+    document.getElementById('inspector-status').textContent = statusText;
+
     document.getElementById('inspector-explanation').innerHTML = `
       <strong>Physical Context:</strong> ${comp.force_nature}.<br>
       <em>Note: V0 displays schematic directions only. Quantitative force magnitudes require qualified mesh-converged simulation.</em>
@@ -1117,15 +1223,52 @@
     window.addEventListener('resize', onWindowResize);
 
     const container = document.getElementById('viewport-container');
-    container.addEventListener('pointerdown', onPointerDown);
     container.addEventListener('pointermove', onPointerMove);
+    if (renderer && renderer.domElement) {
+      renderer.domElement.addEventListener('pointerdown', onPointerDown);
+    }
 
     // Preset HUD Buttons
-    document.querySelectorAll('.view-preset-hud .hud-btn').forEach(btn => {
+    document.querySelectorAll('.view-preset-hud .hud-btn[data-view]').forEach(btn => {
       btn.addEventListener('click', (e) => {
-        document.querySelectorAll('.view-preset-hud .hud-btn').forEach(b => b.classList.remove('active'));
+        document.querySelectorAll('.view-preset-hud .hud-btn[data-view]').forEach(b => b.classList.remove('active'));
         e.target.classList.add('active');
         setViewPreset(e.target.dataset.view);
+      });
+    });
+
+    // 3D Labels Toggle
+    const btnToggleLabels = document.getElementById('btn-toggle-labels');
+    if (btnToggleLabels) {
+      btnToggleLabels.classList.add('active');
+      btnToggleLabels.addEventListener('click', () => {
+        const labelsContainer = document.getElementById('labels-container');
+        if (labelsContainer) {
+          const isHidden = labelsContainer.classList.toggle('hidden');
+          btnToggleLabels.classList.toggle('active', !isHidden);
+          btnToggleLabels.setAttribute('aria-pressed', !isHidden ? 'true' : 'false');
+          showBanner(!isHidden ? "3D Component Labels enabled." : "3D Component Labels hidden.");
+        }
+      });
+    }
+
+    // Sidebar Toggle
+    const btnToggleSidebar = document.getElementById('btn-toggle-sidebar');
+    if (btnToggleSidebar) {
+      btnToggleSidebar.addEventListener('click', () => {
+        const layout = document.querySelector('.app-layout');
+        const isCollapsed = layout.classList.toggle('sidebar-collapsed');
+        btnToggleSidebar.classList.toggle('active', isCollapsed);
+        btnToggleSidebar.setAttribute('aria-pressed', isCollapsed ? 'true' : 'false');
+        showBanner(isCollapsed ? "Sidebar collapsed — full-screen laboratory mode." : "Sidebar expanded.");
+        setTimeout(onWindowResize, 280);
+      });
+    }
+
+    // Component Chip Bar Buttons (Quick-Select)
+    document.querySelectorAll('.chip-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        selectComponent(btn.dataset.id);
       });
     });
 
@@ -1160,6 +1303,7 @@
     // Layer Toggles
     document.getElementById('toggle-geometry').addEventListener('change', (e) => {
       geometryGroup.visible = e.target.checked;
+      if (annotationGroup) annotationGroup.visible = e.target.checked;
     });
     document.getElementById('toggle-fields').addEventListener('change', (e) => {
       if (currentVoltageKV > 0) {
@@ -1214,6 +1358,7 @@
       }
       updateFieldLines();
       updateForceVectors();
+      updateGapIndicator();
       updateUIState();
     });
 
@@ -1261,6 +1406,14 @@
         case 'r':
         case 'R':
           setViewPreset('isometric');
+          break;
+        case 'l':
+        case 'L':
+          if (btnToggleLabels) btnToggleLabels.click();
+          break;
+        case 's':
+        case 'S':
+          if (btnToggleSidebar) btnToggleSidebar.click();
           break;
         case '1':
           const tGeom = document.getElementById('toggle-geometry');
@@ -1391,7 +1544,8 @@
     const picked = getPickedObject(event);
 
     if (picked && picked.userData && picked.userData.id) {
-      container.style.cursor = 'pointer';
+      if (renderer && renderer.domElement) renderer.domElement.style.cursor = 'pointer';
+      if (container) container.style.cursor = 'pointer';
       if (hoveredObject !== picked) {
         hoveredObject = picked;
         showBanner(`Hover: ${picked.userData.name} — Click to inspect`);
@@ -1399,7 +1553,8 @@
       return;
     }
 
-    container.style.cursor = 'default';
+    if (renderer && renderer.domElement) renderer.domElement.style.cursor = 'default';
+    if (container) container.style.cursor = 'default';
     hoveredObject = null;
   }
 
@@ -1415,21 +1570,375 @@
     renderer.setSize(width, height);
   }
 
+  // --- 3D Gap Dimension Indicator ---
+  let annotationGroup = null;
+
+  function updateGapIndicator() {
+    if (!annotationGroup) {
+      annotationGroup = new THREE.Group();
+      annotationGroup.userData = { isAnnotationGroup: true };
+      scene.add(annotationGroup);
+    }
+    while (annotationGroup.children.length > 0) {
+      const obj = annotationGroup.children[0];
+      annotationGroup.remove(obj);
+      disposeHierarchy(obj);
+    }
+
+    if (geometryGroup) {
+      annotationGroup.visible = geometryGroup.visible;
+    }
+
+    const y = -15;
+    const z = 0;
+    // Dimension line with end ticks: from blade knife-edge (x=0) to ground plate near face (x=currentGapMM)
+    const points = [
+      new THREE.Vector3(0, y - 2.5, z),
+      new THREE.Vector3(0, y + 2.5, z),
+      new THREE.Vector3(0, y, z),
+      new THREE.Vector3(currentGapMM, y, z),
+      new THREE.Vector3(currentGapMM, y - 2.5, z),
+      new THREE.Vector3(currentGapMM, y + 2.5, z)
+    ];
+    const geom = new THREE.BufferGeometry().setFromPoints(points);
+    const mat = new THREE.LineBasicMaterial({
+      color: 0x38bdf8,
+      transparent: true,
+      opacity: 0.65,
+      linewidth: 1.5
+    });
+    const line = new THREE.Line(geom, mat);
+    line.userData = { isGapLine: true };
+    annotationGroup.add(line);
+  }
+
+  // --- 3D Floating Component Labels Tracking & Collision Avoidance ---
+  // Remediated for V0.1-R1-F1 and V0.1-R2-F2: accessible, non-overlapping, pointer-clickable billboard buttons.
+  function update3DLabels() {
+    const labelsContainer = document.getElementById('labels-container');
+    if (!labelsContainer || labelsContainer.classList.contains('hidden')) return;
+    if (!renderer || !camera) return;
+
+    const rect = renderer.domElement.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return;
+
+    const isGeomVisible = geometryGroup && geometryGroup.visible;
+    const isEnclVisible = enclosureGroup && enclosureGroup.visible;
+
+    // Distinct 3D spatial anchor points:
+    // - Blade: anchored at top-rear of wedge body (x = -24, y = 14, z = 8)
+    // - Ground: anchored at top-rear of collector plate (x = currentGapMM + 14, y = 20, z = -8)
+    // - Dielectric: elevated distinctly above the gap junction (x = 0, y = 36, z = 14)
+    // - Mount: positioned underneath insulating base (x = 5, y = -32, z = -30)
+    // - Chamber: positioned on front-left perimeter chamber wall (x = -45, y = 50, z = 25)
+    const labelDefs = [
+      { id: "blade_electrode", name: currentVoltageKV > 0 ? `Blade (-${currentVoltageKV.toFixed(0)} kV)` : 'Blade (0 V OFF)', worldPos: new THREE.Vector3(-24, 14, 8), dotColor: "#f43f5e", isInterior: true },
+      { id: "ground_electrode", name: "Ground (0 V)", worldPos: new THREE.Vector3(currentGapMM + 14, 20, -8), dotColor: "#10b981", isInterior: true },
+      { id: "dielectric_block", name: "Dielectric Potting", worldPos: new THREE.Vector3(0, 36, 14), dotColor: "#818cf8", isInterior: true },
+      { id: "support_mount", name: "Support Mount", worldPos: new THREE.Vector3(5, -32, -30), dotColor: "#64748b", isInterior: true },
+      { id: "enclosure_walls", name: "Chamber (0 V)", worldPos: new THREE.Vector3(-45, 50, 25), dotColor: "#475569", isInterior: false }
+    ];
+
+    const activePins = [];
+
+    labelDefs.forEach(def => {
+      let pin = document.getElementById(`label-pin-${def.id}`);
+      if (!pin) {
+        pin = document.createElement('button');
+        pin.id = `label-pin-${def.id}`;
+        pin.className = 'label-pin';
+        pin.type = 'button';
+        pin.dataset.id = def.id;
+        pin.setAttribute('aria-label', `Select ${def.name}`);
+        pin.innerHTML = `<span class="label-pin-dot" style="background:${def.dotColor}" aria-hidden="true"></span><span class="label-pin-text">${def.name}</span>`;
+        pin.addEventListener('click', (e) => {
+          e.stopPropagation();
+          selectComponent(def.id);
+        });
+        labelsContainer.appendChild(pin);
+      }
+
+      // Check layer visibility (hide interior pins when geometry is toggled off)
+      if ((def.isInterior && !isGeomVisible) || (!def.isInterior && !isEnclVisible)) {
+        pin.style.display = 'none';
+        return;
+      }
+
+      const textEl = pin.querySelector('.label-pin-text');
+      if (textEl && textEl.textContent !== def.name) {
+        textEl.textContent = def.name;
+        pin.setAttribute('aria-label', `Select ${def.name}`);
+      }
+
+      const v = def.worldPos.clone().project(camera);
+      if (v.z > 1.0 || v.z < -1.0) {
+        pin.style.display = 'none';
+      } else {
+        pin.style.display = 'flex';
+        const isSelected = selectedComponentId === def.id;
+        pin.classList.toggle('selected', isSelected);
+        pin.setAttribute('aria-pressed', isSelected ? 'true' : 'false');
+
+        const projX = ((v.x + 1) / 2) * rect.width;
+        const projY = ((-v.y + 1) / 2) * rect.height;
+        const pinW = pin.offsetWidth || (def.name.length * 7 + 28);
+        const pinH = pin.offsetHeight || 26;
+
+        activePins.push({
+          pin,
+          id: def.id,
+          x: projX,
+          y: projY,
+          origX: projX,
+          origY: projY,
+          w: pinW,
+          h: pinH
+        });
+      }
+    });
+
+    // 2D Screen-Space Collision Avoidance (Remediated for V0.1-R2-F2 & V0.1-R3-M2)
+    // Relaxes pin positions and clamps bounds across mobile (375px/390px) and desktop viewports
+    resolveLabelCollisions(activePins, rect);
+
+    // Apply calculated collision-relaxed screen positions
+    activePins.forEach(item => {
+      item.pin.style.left = `${Math.round(item.x)}px`;
+      item.pin.style.top = `${Math.round(item.y)}px`;
+    });
+  }
+
+  // --- Screen-Space Label Collision Avoidance ---
+  // Remediated for V0.1-R2-F2, V0.1-R3-F1 & V0.1-R3-M2: multi-pass screen-space collision relaxation
+  // with vertical staggering, viewport boundary clamping, and bounded clearance fallback.
+  function resolveLabelCollisions(activePins, rect) {
+    if (!activePins || activePins.length === 0) return;
+
+    let marginX = 8;
+    let marginY = 8;
+    const pad = 6;
+    const isMobile = rect.width <= 640;
+    let topMargin = isMobile ? 78 : 70; // clearance below view preset HUD toolbar
+    let bottomMargin = isMobile ? 88 : 50; // clearance above component chip bar
+
+    const hudEl = document.querySelector('.view-preset-hud');
+    const chipBarEl = document.querySelector('.component-chip-bar');
+    const containerEl = document.getElementById('viewport-container');
+
+    if (containerEl && chipBarEl) {
+      const cBox = containerEl.getBoundingClientRect();
+      const bBox = chipBarEl.getBoundingClientRect();
+      if (bBox.top < cBox.bottom) {
+        bottomMargin = Math.max(bottomMargin, Math.ceil(cBox.bottom - bBox.top) + 6);
+      }
+    }
+    if (containerEl && hudEl) {
+      const cBox = containerEl.getBoundingClientRect();
+      const hBox = hudEl.getBoundingClientRect();
+      if (hBox.bottom > cBox.top) {
+        topMargin = Math.max(topMargin, Math.ceil(hBox.bottom - cBox.top) + 6);
+      }
+    }
+
+    const maxY = rect.height - bottomMargin;
+
+    // 1. Initial clamp to allowable viewport bounds (applies to single pin or multiple pins)
+    activePins.forEach(item => {
+      item.x = Math.max(item.w / 2 + pad, Math.min(rect.width - item.w / 2 - pad, item.x));
+      item.y = Math.max(item.h + topMargin, Math.min(maxY, item.y));
+    });
+
+    if (activePins.length <= 1) return;
+
+    // Capacity shortfall check: calculate vertical budget and dynamically compress margin if tight
+    const totalPinHeight = activePins.reduce((sum, p) => sum + p.h, 0);
+    const availableSpan = Math.max(0, maxY - topMargin);
+    const neededSpan = totalPinHeight + (activePins.length - 1) * marginY;
+    if (neededSpan > availableSpan) {
+      marginY = Math.max(2, Math.floor((availableSpan - totalPinHeight) / Math.max(1, activePins.length - 1)));
+    }
+
+    if (isMobile) {
+      // Mobile 1D forward/backward sweep layout with vertical staggering
+      activePins.sort((a, b) => a.y - b.y);
+
+      // Forward pass: ensure lower pins clear all overlapping upper pins
+      for (let k = 0; k < activePins.length; k++) {
+        let y_k = Math.max(activePins[k].y, activePins[k].h + topMargin);
+        for (let m = 0; m < k; m++) {
+          const a = activePins[m];
+          const b = activePins[k];
+          const aLeft = a.x - a.w / 2;
+          const aRight = a.x + a.w / 2;
+          const bLeft = b.x - b.w / 2;
+          const bRight = b.x + b.w / 2;
+          const overlapX = Math.min(aRight, bRight) - Math.max(aLeft, bLeft) + marginX;
+          if (overlapX > 0) {
+            y_k = Math.max(y_k, a.y + marginY + b.h);
+          }
+        }
+        activePins[k].y = y_k;
+      }
+
+      // Backward pass: clamp to maxY and pull upper pins up if needed
+      for (let k = activePins.length - 1; k >= 0; k--) {
+        if (activePins[k].y > maxY) {
+          activePins[k].y = maxY;
+        }
+        for (let m = k - 1; m >= 0; m--) {
+          const a = activePins[m];
+          const b = activePins[k];
+          const aLeft = a.x - a.w / 2;
+          const aRight = a.x + a.w / 2;
+          const bLeft = b.x - b.w / 2;
+          const bRight = b.x + b.w / 2;
+          const overlapX = Math.min(aRight, bRight) - Math.max(aLeft, bLeft) + marginX;
+          if (overlapX > 0) {
+            a.y = Math.min(a.y, b.y - b.h - marginY);
+          }
+        }
+      }
+
+      // Final forward safety pass: ensure min bound strictly maintained
+      for (let k = 0; k < activePins.length; k++) {
+        let y_k = Math.max(activePins[k].y, activePins[k].h + topMargin);
+        for (let m = 0; m < k; m++) {
+          const a = activePins[m];
+          const b = activePins[k];
+          const aLeft = a.x - a.w / 2;
+          const aRight = a.x + a.w / 2;
+          const bLeft = b.x - b.w / 2;
+          const bRight = b.x + b.w / 2;
+          const overlapX = Math.min(aRight, bRight) - Math.max(aLeft, bLeft) + marginX;
+          if (overlapX > 0) {
+            y_k = Math.max(y_k, a.y + marginY + b.h);
+          }
+        }
+        activePins[k].y = Math.min(maxY, y_k);
+      }
+
+      // Fallback secondary horizontal staggering if any vertical overlap remains due to tight vertical clamping
+      for (let i = 0; i < activePins.length; i++) {
+        for (let j = i + 1; j < activePins.length; j++) {
+          const a = activePins[i];
+          const b = activePins[j];
+          const aTop = a.y - a.h;
+          const aBottom = a.y;
+          const bTop = b.y - b.h;
+          const bBottom = b.y;
+          const overlapY = Math.min(aBottom, bBottom) - Math.max(aTop, bTop) + marginY;
+          if (overlapY > 0) {
+            const aLeft = a.x - a.w / 2;
+            const aRight = a.x + a.w / 2;
+            const bLeft = b.x - b.w / 2;
+            const bRight = b.x + b.w / 2;
+            const overlapX = Math.min(aRight, bRight) - Math.max(aLeft, bLeft) + marginX;
+            if (overlapX > 0) {
+              if (a.x <= b.x) {
+                a.x = Math.max(a.w / 2 + pad, a.x - (overlapX / 2 + 2));
+                b.x = Math.min(rect.width - b.w / 2 - pad, b.x + (overlapX / 2 + 2));
+              } else {
+                b.x = Math.max(b.w / 2 + pad, b.x - (overlapX / 2 + 2));
+                a.x = Math.min(rect.width - a.w / 2 - pad, a.x + (overlapX / 2 + 2));
+              }
+            }
+          }
+        }
+      }
+
+      // Enforce bounds after pass
+      activePins.forEach(item => {
+        item.x = Math.max(item.w / 2 + pad, Math.min(rect.width - item.w / 2 - pad, item.x));
+        item.y = Math.max(item.h + topMargin, Math.min(maxY, item.y));
+      });
+    } else {
+      // Desktop / wide viewport: balanced 2D relaxation
+      const iterations = 10;
+      for (let iter = 0; iter < iterations; iter++) {
+        let collisionFound = false;
+        for (let i = 0; i < activePins.length; i++) {
+          for (let j = i + 1; j < activePins.length; j++) {
+            const a = activePins[i];
+            const b = activePins[j];
+
+            const aLeft = a.x - a.w / 2;
+            const aRight = a.x + a.w / 2;
+            const aTop = a.y - a.h;
+            const aBottom = a.y;
+
+            const bLeft = b.x - b.w / 2;
+            const bRight = b.x + b.w / 2;
+            const bTop = b.y - b.h;
+            const bBottom = b.y;
+
+            const overlapX = Math.min(aRight, bRight) - Math.max(aLeft, bLeft) + marginX;
+            const overlapY = Math.min(aBottom, bBottom) - Math.max(aTop, bTop) + marginY;
+
+            if (overlapX > 0 && overlapY > 0) {
+              collisionFound = true;
+
+              if (overlapX <= overlapY) {
+                // Separate horizontally
+                const lefter = aLeft <= bLeft ? a : b;
+                const righter = lefter === a ? b : a;
+                const shiftX = overlapX / 2 + 1;
+                lefter.x = Math.max(lefter.w / 2 + pad, lefter.x - shiftX);
+                righter.x = Math.min(rect.width - righter.w / 2 - pad, righter.x + shiftX);
+              } else {
+                // Separate vertically
+                const upper = aTop <= bTop ? a : b;
+                const lower = upper === a ? b : a;
+                const shiftY = overlapY / 2 + 1;
+                upper.y = Math.max(upper.h + topMargin, upper.y - shiftY);
+                lower.y = Math.min(maxY, lower.y + shiftY);
+              }
+            }
+          }
+        }
+
+        activePins.forEach(item => {
+          item.x = Math.max(item.w / 2 + pad, Math.min(rect.width - item.w / 2 - pad, item.x));
+          item.y = Math.max(item.h + topMargin, Math.min(maxY, item.y));
+        });
+
+        if (!collisionFound) break;
+      }
+    }
+  }
+
   // --- Animation Loop ---
   function animate() {
     requestAnimationFrame(animate);
 
     controls.update();
 
-    // Subtle flux oscillation only when energized (currentVoltageKV > 0)
+    // Subtle flux oscillation and traveling pulse particles only when energized (currentVoltageKV > 0)
     if (currentVoltageKV > 0 && fieldGroup && fieldGroup.visible) {
       const time = performance.now() * 0.0015;
       fieldGroup.children.forEach((child, idx) => {
         if (child.isLine && child.userData.baseOpacity) {
           child.material.opacity = Math.max(0.1, child.userData.baseOpacity + Math.sin(time * 2 + idx) * 0.1);
+        } else if (child.userData && child.userData.isPulsePoints && child.userData.curves) {
+          const posAttr = child.geometry.attributes.position;
+          const colAttr = child.geometry.attributes.color;
+          const curves = child.userData.curves;
+          const cStart = new THREE.Color(0x38bdf8); // ground 0 V
+          const cEnd = new THREE.Color(0xf43f5e);   // blade -V
+          for (let i = 0; i < curves.length; i++) {
+            const t = (time * 0.5 + i / curves.length) % 1.0;
+            const pt = curves[i].getPoint(t);
+            posAttr.setXYZ(i, pt.x, pt.y, pt.z);
+            const c = cStart.clone().lerp(cEnd, t);
+            colAttr.setXYZ(i, c.r, c.g, c.b);
+          }
+          posAttr.needsUpdate = true;
+          colAttr.needsUpdate = true;
         }
       });
     }
+
+    // Dynamic 3D component labels tracking
+    update3DLabels();
 
     renderer.render(scene, camera);
   }

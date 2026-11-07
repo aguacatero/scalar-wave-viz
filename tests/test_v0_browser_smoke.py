@@ -144,6 +144,7 @@ class PropulsionExplorerBrowserSmokeTests(unittest.TestCase):
         self.page.goto(self.base_url)
         self.page.wait_for_selector("#webgl-canvas")
         self.page.wait_for_selector(".component-item-btn")
+        self.page.wait_for_selector("#loading-overlay.hidden")
 
     def tearDown(self):
         try:
@@ -650,6 +651,435 @@ class PropulsionExplorerBrowserSmokeTests(unittest.TestCase):
                 self.assertIn(expected_trend, force_text, f"Expected '{expected_trend}' at V={v} kV; got: '{force_text}'")
                 self.assertIn(expected_arrow, force_text, f"Expected '{expected_arrow}' at V={v} kV; got: '{force_text}'")
             self.page.click("#tab-btn-sandbox")
+
+    def test_chip_bar_component_quick_select(self):
+        """V0.1 regression: verify accessible component quick-select chip bar selects all 5 components."""
+        components = [
+            ("blade_electrode", "Asymmetric High-Voltage Blade", "PUBLISHED HYPOTHESIS"),
+            ("ground_electrode", "Ground Counter-Electrode", "ESTABLISHED MODEL"),
+            ("dielectric_block", "Solid Dielectric Barrier / Potting", "WHAT-IF PARAMETER"),
+            ("support_mount", "Structural Support Mount", "ESTABLISHED MODEL"),
+            ("enclosure_walls", "Conductive Enclosure (Chamber)", "ESTABLISHED MODEL"),
+        ]
+
+        for comp_id, expected_name, expected_badge in components:
+            chip = self.page.locator(f".chip-btn[data-id='{comp_id}']")
+            self.assertTrue(chip.is_visible())
+            chip.click()
+            self.page.wait_for_timeout(25)
+
+            name_el = self.page.locator("#inspector-name").inner_text()
+            badge_el = self.page.locator("#inspector-badge").inner_text()
+            self.assertEqual(name_el, expected_name)
+            self.assertEqual(badge_el, expected_badge)
+
+            # Selected chip class
+            self.assertTrue("selected" in (chip.get_attribute("class") or ""))
+
+        self.assertEqual(len(self.page_errors), 0, f"Chip bar operations threw errors: {self.page_errors}")
+
+    def test_3d_labels_toggle(self):
+        """V0.1 regression: verify 3D component labels HUD toggle button updates visibility and ARIA."""
+        btn = self.page.locator("#btn-toggle-labels")
+        self.assertTrue(btn.is_visible())
+        labels_container = self.page.locator("#labels-container")
+
+        # Initially active (visible)
+        self.assertEqual(btn.get_attribute("aria-pressed"), "true")
+        self.assertFalse("hidden" in (labels_container.get_attribute("class") or ""))
+
+        # Click to toggle off
+        btn.click()
+        self.page.wait_for_timeout(25)
+        self.assertEqual(btn.get_attribute("aria-pressed"), "false")
+        self.assertTrue("hidden" in (labels_container.get_attribute("class") or ""))
+
+        # Click to toggle back on
+        btn.click()
+        self.page.wait_for_timeout(25)
+        self.assertEqual(btn.get_attribute("aria-pressed"), "true")
+        self.assertFalse("hidden" in (labels_container.get_attribute("class") or ""))
+
+        self.assertEqual(len(self.page_errors), 0, f"Labels toggle threw errors: {self.page_errors}")
+
+    def test_sidebar_collapse_toggle(self):
+        """V0.1 regression: verify sidebar collapse toggle expands viewport to full width."""
+        btn = self.page.locator("#btn-toggle-sidebar")
+        self.assertTrue(btn.is_visible())
+        layout = self.page.locator(".app-layout")
+
+        # Initially open
+        self.assertEqual(btn.get_attribute("aria-pressed"), "false")
+        self.assertFalse("sidebar-collapsed" in (layout.get_attribute("class") or ""))
+
+        # Click to collapse
+        btn.click()
+        self.page.wait_for_timeout(50)
+        self.assertEqual(btn.get_attribute("aria-pressed"), "true")
+        self.assertTrue("sidebar-collapsed" in (layout.get_attribute("class") or ""))
+
+        # Click to expand
+        btn.click()
+        self.page.wait_for_timeout(50)
+        self.assertEqual(btn.get_attribute("aria-pressed"), "false")
+        self.assertFalse("sidebar-collapsed" in (layout.get_attribute("class") or ""))
+
+        self.assertEqual(len(self.page_errors), 0, f"Sidebar toggle threw errors: {self.page_errors}")
+
+    def test_mobile_390_viewport_layout(self):
+        """V0.1 regression: verify 390x844 mobile viewport (iPhone 12/13/14) renders cleanly without horizontal overflow."""
+        self.page.set_viewport_size({"width": 390, "height": 844})
+        self.page.wait_for_timeout(100)
+
+        scroll_width = self.page.evaluate("document.documentElement.scrollWidth")
+        client_width = self.page.evaluate("document.documentElement.clientWidth")
+        self.assertLessEqual(scroll_width, client_width + 1, "Page has horizontal overflow on 390px viewport")
+
+        # Verify chip bar and canvas are visible
+        self.assertTrue(self.page.locator("#webgl-canvas").is_visible())
+        self.assertTrue(self.page.locator("#component-chip-bar").is_visible())
+
+        self.assertEqual(len(self.page_errors), 0, f"Mobile 390px rendering threw errors: {self.page_errors}")
+
+    def test_billboard_label_pin_mouse_and_keyboard_selection(self):
+        """V0.1-R1-F1 regression: real mouse pointer click and keyboard Enter on billboard label pins selects components."""
+        # 1. Real pointer click on dielectric label pin
+        pin_diel = self.page.locator("#label-pin-dielectric_block")
+        self.assertTrue(pin_diel.is_visible())
+        bb = pin_diel.bounding_box()
+        self.assertIsNotNone(bb)
+
+        # Real page.mouse.click at the center of the billboard pin button
+        self.page.mouse.click(bb["x"] + bb["width"] / 2, bb["y"] + bb["height"] / 2)
+        self.page.wait_for_timeout(50)
+
+        # Assert inspector updated to dielectric
+        name_el = self.page.locator("#inspector-name").inner_text()
+        self.assertEqual(name_el, "Solid Dielectric Barrier / Potting")
+        self.assertEqual(pin_diel.get_attribute("aria-pressed"), "true")
+        self.assertTrue("selected" in (pin_diel.get_attribute("class") or ""))
+
+        # 2. Keyboard focus and Enter key activation on blade label pin
+        pin_blade = self.page.locator("#label-pin-blade_electrode")
+        self.assertTrue(pin_blade.is_visible())
+        pin_blade.focus()
+        self.page.keyboard.press("Enter")
+        self.page.wait_for_timeout(50)
+
+        # Assert inspector updated to blade
+        name_el = self.page.locator("#inspector-name").inner_text()
+        self.assertEqual(name_el, "Asymmetric High-Voltage Blade")
+        self.assertEqual(pin_blade.get_attribute("aria-pressed"), "true")
+        self.assertTrue("selected" in (pin_blade.get_attribute("class") or ""))
+
+        self.assertEqual(len(self.page_errors), 0, f"Billboard pin interactions threw errors: {self.page_errors}")
+
+    def test_chip_bar_and_pin_voltage_slider_synchronization(self):
+        """V0.1-R1-M1 regression: chip bar and 3D billboard pin blade labels update dynamically across voltage slider sweep."""
+        chip_label = self.page.locator("#chip-blade-label")
+        pin_label = self.page.locator("#label-pin-blade_electrode .label-pin-text")
+
+        self.page.click("#tab-btn-sandbox")
+
+        test_voltages = [
+            ("0", "Blade (0 V OFF)"),
+            ("20", "Blade (-20 kV)"),
+            ("50", "Blade (-50 kV)"),
+        ]
+
+        for v_str, expected_label in test_voltages:
+            self.page.fill("#slider-voltage", v_str)
+            self.page.dispatch_event("#slider-voltage", "input")
+            self.page.wait_for_timeout(30)
+
+            self.assertEqual(chip_label.inner_text(), expected_label,
+                             f"Chip label mismatch at V={v_str} kV")
+            self.assertEqual(pin_label.inner_text(), expected_label,
+                             f"Billboard pin label mismatch at V={v_str} kV")
+
+        self.assertEqual(len(self.page_errors), 0, f"Chip voltage sweep threw errors: {self.page_errors}")
+
+    def test_inspector_role_and_status_at_zero_and_energized_voltage(self):
+        """V0.1-R1-M2 regression: inspector card qualifies multi-body forces and specifies unenergized 0 V state."""
+        # Select ground electrode at nominal 20 kV
+        self.page.click("#tab-btn-layers")
+        self.page.click(".component-item-btn[data-id='ground_electrode']")
+
+        role_text_20k = self.page.locator("#inspector-role").inner_text()
+        status_text_20k = self.page.locator("#inspector-status").inner_text()
+
+        self.assertIn("Pairwise equality between these two electrodes alone is not assumed", role_text_20k)
+        self.assertIn("not isolated pairwise equal", status_text_20k)
+
+        # Sweep voltage slider to 0 kV
+        self.page.click("#tab-btn-sandbox")
+        self.page.fill("#slider-voltage", "0")
+        self.page.dispatch_event("#slider-voltage", "input")
+        self.page.wait_for_timeout(30)
+
+        # Check inspector updated to 0 V unenergized state
+        self.page.click("#tab-btn-inspector")
+        role_text_0k = self.page.locator("#inspector-role").inner_text()
+        status_text_0k = self.page.locator("#inspector-status").inner_text()
+
+        self.assertIn("unenergized at 0 v", role_text_0k.lower())
+        self.assertIn("electrostatic forces are identically zero", role_text_0k.lower())
+        self.assertIn("Field OFF at 0 V — Zero Electrostatic Traction (Unenergized)", status_text_0k)
+
+        self.assertEqual(len(self.page_errors), 0, f"Inspector voltage state check threw errors: {self.page_errors}")
+
+    def test_electric_field_legend_and_marker_semantics(self):
+        """V0.1-R1-F2 regression: electric field legend qualifies schematic orientation and distinguishes 0 V extinction."""
+        legend_field = self.page.locator("#legend-field-label")
+
+        # At default 20 kV
+        self.assertIn("Schematic Orientation Only, Not Computed |E| Magnitude or Charge Flow", legend_field.inner_text())
+
+        # At 0 kV
+        self.page.click("#tab-btn-sandbox")
+        self.page.fill("#slider-voltage", "0")
+        self.page.dispatch_event("#slider-voltage", "input")
+        self.page.wait_for_timeout(30)
+
+        self.assertIn("Electric Field Direction (OFF at 0 V — Zero Field)", legend_field.inner_text())
+
+        self.assertEqual(len(self.page_errors), 0, f"Field legend check threw errors: {self.page_errors}")
+
+    def test_v0_1_r2_f1_hud_and_legend_bounding_boxes_do_not_overlap(self):
+        """V0.1-R2-F1 regression: view preset HUD toolbar and layer legend HUD must never overlap."""
+        hud = self.page.locator(".view-preset-hud")
+        legend = self.page.locator(".layer-legend-hud")
+
+        self.assertTrue(hud.is_visible())
+        self.assertTrue(legend.is_visible())
+
+        # Test across desktop and tablet viewports
+        for vp in [(1280, 800), (1024, 768), (800, 600)]:
+            self.page.set_viewport_size({"width": vp[0], "height": vp[1]})
+            self.page.wait_for_timeout(40)
+
+            box_hud = hud.bounding_box()
+            box_legend = legend.bounding_box()
+
+            self.assertIsNotNone(box_hud)
+            self.assertIsNotNone(box_legend)
+
+            # Check for non-overlap either horizontally or vertically
+            horiz_sep = (box_hud["x"] + box_hud["width"] <= box_legend["x"]) or (box_legend["x"] + box_legend["width"] <= box_hud["x"])
+            vert_sep = (box_hud["y"] + box_hud["height"] <= box_legend["y"]) or (box_legend["y"] + box_legend["height"] <= box_hud["y"])
+
+            self.assertTrue(
+                horiz_sep or vert_sep,
+                f"HUD box {box_hud} overlaps with Legend box {box_legend} at viewport {vp}"
+            )
+
+        # Restore default desktop viewport
+        self.page.set_viewport_size({"width": 1280, "height": 800})
+        self.page.wait_for_timeout(40)
+        self.assertEqual(len(self.page_errors), 0, f"HUD non-overlap check threw errors: {self.page_errors}")
+
+    def test_v0_1_r2_f2_billboard_label_pins_never_overlap_across_viewports_and_presets(self):
+        """V0.1-R2-F2 & V0.1-R3-M1 regression: all visible 3D billboard pins have zero bounding box overlap across all 4 presets and mobile."""
+        viewports = [
+            (1280, 800, "Desktop"),
+            (390, 844, "iPhone 12/13/14"),
+            (375, 812, "iPhone SE")
+        ]
+        presets = ["isometric", "side", "front", "top"]
+        expected_pin_ids = {
+            "label-pin-blade_electrode",
+            "label-pin-ground_electrode",
+            "label-pin-dielectric_block",
+            "label-pin-support_mount",
+            "label-pin-enclosure_walls"
+        }
+
+        for width, height, vp_name in viewports:
+            self.page.set_viewport_size({"width": width, "height": height})
+            self.page.wait_for_timeout(60)
+
+            for preset in presets:
+                # Trigger camera preset and wait for 500ms transition to settle
+                self.page.click(f".view-preset-hud .hud-btn[data-view='{preset}']")
+                self.page.wait_for_timeout(550)
+
+                # Query all visible label pins
+                pins = self.page.locator(".label-pin:visible").all()
+                self.assertEqual(len(pins), 5, f"Expected exactly 5 visible pins in {preset} at {vp_name}")
+
+                pin_ids = {p.get_attribute("id") for p in pins}
+                self.assertEqual(pin_ids, expected_pin_ids, f"Visible pin IDs mismatch in {preset} at {vp_name}")
+
+                boxes = []
+                for pin in pins:
+                    b = pin.bounding_box()
+                    self.assertIsNotNone(b)
+                    boxes.append((pin.get_attribute("id"), b))
+
+                # Pairwise non-overlap check
+                for i in range(len(boxes)):
+                    for j in range(i + 1, len(boxes)):
+                        id_a, box_a = boxes[i]
+                        id_b, box_b = boxes[j]
+
+                        horiz_sep = (box_a["x"] + box_a["width"] <= box_b["x"]) or (box_b["x"] + box_b["width"] <= box_a["x"])
+                        vert_sep = (box_a["y"] + box_a["height"] <= box_b["y"]) or (box_b["y"] + box_b["height"] <= box_a["y"])
+
+                        self.assertTrue(
+                            horiz_sep or vert_sep,
+                            f"Label collision detected between {id_a} {box_a} and {id_b} {box_b} in preset '{preset}' at viewport {vp_name}"
+                        )
+
+        # Restore default desktop viewport and view
+        self.page.set_viewport_size({"width": 1280, "height": 800})
+        self.page.click(".view-preset-hud .hud-btn[data-view='isometric']")
+        self.page.wait_for_timeout(60)
+        self.assertEqual(len(self.page_errors), 0, f"Label collision check threw errors: {self.page_errors}")
+
+    def test_v0_1_r2_f2_all_five_billboard_pins_clickable_via_real_pointer_and_element_from_point(self):
+        """V0.1-R2-F2 & V0.1-R3-M1 regression: exact elementFromPoint equality and real pointer click select ALL 5 components across viewports and presets."""
+        components = [
+            ("blade_electrode", "Asymmetric High-Voltage Blade"),
+            ("ground_electrode", "Ground Counter-Electrode"),
+            ("dielectric_block", "Solid Dielectric Barrier / Potting"),
+            ("support_mount", "Structural Support Mount"),
+            ("enclosure_walls", "Conductive Enclosure (Chamber)")
+        ]
+        viewports = [
+            (1280, 800, "Desktop"),
+            (390, 844, "iPhone 12/13/14"),
+            (375, 812, "iPhone SE")
+        ]
+        presets = ["isometric", "side", "front", "top"]
+
+        for width, height, vp_name in viewports:
+            self.page.set_viewport_size({"width": width, "height": height})
+            self.page.wait_for_timeout(60)
+
+            for preset in presets:
+                self.page.click(f".view-preset-hud .hud-btn[data-view='{preset}']")
+                self.page.wait_for_timeout(550)
+
+                for comp_id, expected_title in components:
+                    pin_elem_id = f"label-pin-{comp_id}"
+                    pin = self.page.locator(f"#{pin_elem_id}")
+                    self.assertTrue(pin.is_visible(), f"Pin {comp_id} must be visible in {preset} at {vp_name}")
+
+                    bb = pin.bounding_box()
+                    self.assertIsNotNone(bb)
+
+                    cx = bb["x"] + bb["width"] / 2
+                    cy = bb["y"] + bb["height"] / 2
+
+                    # 1. Verify elementFromPoint directly equals the exact button element (guarding transparent child spans)
+                    is_exact_pin = self.page.evaluate(
+                        "([x, y, id]) => document.elementFromPoint(x, y) === document.getElementById(id)",
+                        [cx, cy, pin_elem_id]
+                    )
+                    self.assertTrue(is_exact_pin, f"Center of pin {comp_id} did not resolve directly to button in {preset} at {vp_name}")
+
+                    # 2. Real mouse click on pin button center
+                    self.page.mouse.click(cx, cy)
+                    self.page.wait_for_timeout(30)
+
+                    # 3. Assert component selection and inspector state
+                    self.assertEqual(pin.get_attribute("aria-pressed"), "true")
+                    self.assertTrue("selected" in (pin.get_attribute("class") or ""))
+
+                    name_text = self.page.locator("#inspector-name").inner_text()
+                    self.assertEqual(name_text, expected_title, f"Inspector name mismatch after clicking {comp_id} in {preset} at {vp_name}")
+
+        # Restore default desktop viewport and view
+        self.page.set_viewport_size({"width": 1280, "height": 800})
+        self.page.click(".view-preset-hud .hud-btn[data-view='isometric']")
+        self.page.wait_for_timeout(60)
+        self.assertEqual(len(self.page_errors), 0, f"Pointer hit-testing threw errors: {self.page_errors}")
+
+    def test_v0_1_r3_f1_single_pin_enclosure_clamp_and_click_when_geometry_off(self):
+        """V0.1-R3-F1 regression: single enclosure pin clamps inside canvas and below HUD toolbar when geometry is toggled off."""
+        viewports = [
+            (375, 812, "iPhone SE"),
+            (390, 844, "iPhone 12/13/14"),
+            (1280, 800, "Desktop")
+        ]
+
+        for width, height, vp_name in viewports:
+            self.page.set_viewport_size({"width": width, "height": height})
+            self.page.wait_for_timeout(60)
+
+            # Ensure default isometric preset
+            self.page.click(".view-preset-hud .hud-btn[data-view='isometric']")
+            self.page.wait_for_timeout(100)
+
+            # Toggle Component Geometry OFF
+            self.page.evaluate("""() => {
+                const el = document.getElementById("toggle-geometry");
+                if (el.checked) {
+                    el.checked = false;
+                    el.dispatchEvent(new Event("change"));
+                }
+            }""")
+            self.page.wait_for_timeout(100)
+
+            # Assert exactly 1 visible label pin: enclosure_walls
+            visible_pins = self.page.locator(".label-pin:visible").all()
+            self.assertEqual(len(visible_pins), 1, f"Expected exactly 1 visible pin with geometry OFF at {vp_name}")
+            pin = visible_pins[0]
+            self.assertEqual(pin.get_attribute("id"), "label-pin-enclosure_walls")
+
+            # Check bounding box
+            b = pin.bounding_box()
+            self.assertIsNotNone(b)
+            canvas_box = self.page.locator("#viewport-container").bounding_box()
+            self.assertIsNotNone(canvas_box)
+            hud_box = self.page.locator(".view-preset-hud").bounding_box()
+            self.assertIsNotNone(hud_box)
+
+            # Must be inside viewport horizontally
+            self.assertGreaterEqual(b["x"], 0, f"Pin left {b['x']} must be inside viewport at {vp_name}")
+            self.assertLessEqual(b["x"] + b["width"], width, f"Pin right {b['x'] + b['width']} must be inside viewport at {vp_name}")
+
+            # Must be completely clear of (below) HUD preset toolbar
+            self.assertGreaterEqual(
+                b["y"],
+                hud_box["y"] + hud_box["height"],
+                f"Chamber pin at y={b['y']} occluded underneath HUD toolbar (bottom={hud_box['y'] + hud_box['height']}) at {vp_name}"
+            )
+
+            # Direct elementFromPoint test (exact HTMLButtonElement identity)
+            cx = b["x"] + b["width"] / 2
+            cy = b["y"] + b["height"] / 2
+            is_exact = self.page.evaluate(
+                "([x, y]) => document.elementFromPoint(x, y) === document.getElementById('label-pin-enclosure_walls')",
+                [cx, cy]
+            )
+            self.assertTrue(is_exact, f"elementFromPoint at ({cx}, {cy}) must resolve directly to enclosure pin at {vp_name}")
+
+            # Real mouse click
+            self.page.mouse.click(cx, cy)
+            self.page.wait_for_timeout(50)
+            self.assertEqual(pin.get_attribute("aria-pressed"), "true")
+            inspector_title = self.page.locator("#inspector-name").inner_text()
+            self.assertEqual(inspector_title, "Conductive Enclosure (Chamber)")
+
+            # Restore geometry
+            self.page.evaluate("""() => {
+                const el = document.getElementById("toggle-geometry");
+                if (!el.checked) {
+                    el.checked = true;
+                    el.dispatchEvent(new Event("change"));
+                }
+            }""")
+            self.page.wait_for_timeout(100)
+
+            # Assert all 5 pins reappear
+            all_pins = self.page.locator(".label-pin:visible").all()
+            self.assertEqual(len(all_pins), 5, f"All 5 pins must reappear after re-enabling geometry at {vp_name}")
+
+        # Restore default desktop viewport
+        self.page.set_viewport_size({"width": 1280, "height": 800})
+        self.page.wait_for_timeout(40)
+        self.assertEqual(len(self.page_errors), 0, f"Single-pin test threw errors: {self.page_errors}")
 
 
 if __name__ == "__main__":
