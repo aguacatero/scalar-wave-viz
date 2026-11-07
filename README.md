@@ -41,21 +41,25 @@ The question driving the project is **not "How do we prove Exodus is right?"** I
 
 **Build a useful, clearly labeled educational visualizer early; never describe unverified physics as demonstrated thrust.** Passing tests and attractive plots do not replace physical measurement.
 
-## Project progress — verified November 1, 2026
+## Project progress — verified November 7, 2026
 
 ![Scientific roadmap: P0 and P1 accepted and merged; P2 active in draft review; P3 and P4 pending; 2 of 5 gates accepted](assets/research-progress.svg)
 
 **2 of 5 independently reviewed scientific phases are accepted.** This is *not* a percentage of product completion or proof of unusual propulsion.
 
+**Parallel visual-track progress (not yet merged to `main`):** The runnable browser-based V0 3D Explorer was independently accepted at R5 on [Draft PR #14](https://github.com/aguacatero/scalar-wave-viz/pull/14), exact SHA `5d8b822e8771dc19a4bf2a27bfc013e3662e03ea`. V0.1 visual/UX enhancements in stacked [Draft PR #15](https://github.com/aguacatero/scalar-wave-viz/pull/15) have R3 remediation submitted at SHA `485291915bde686bbe947cee8591f833b2195fc8`, with successful CI, but still require independent R3 re-review. Neither visual PR is merged or an accepted scientific gate.
+
 - **P0 — ACCEPTED AND MERGED:** Conventional electrostatics baseline, [PR #5](https://github.com/aguacatero/scalar-wave-viz/pull/5).
 - **P1 — ACCEPTED AND MERGED:** Numerical validation and force accounting, [PR #10](https://github.com/aguacatero/scalar-wave-viz/pull/10). Accepted R11 scientific SHA `2a87abd0f8de873899f541d521d303d0f4462954`; **merged** in main commit `8e1fdb32655d073002ae5a794b08e48f19a78a0f`.
-- **P2 — ACTIVE DRAFT, NOT SCIENTIFICALLY ACCEPTED:** Exodus geometry and H0/H1 comparison in [Issue #7](https://github.com/aguacatero/scalar-wave-viz/issues/7), [Draft PR #11](https://github.com/aguacatero/scalar-wave-viz/pull/11). [Independent R8 review requested changes](https://github.com/aguacatero/scalar-wave-viz/pull/11#issuecomment-6564571034), including whole-assembly convergence and accurate uncertainty reporting. **Antigravity's R9 remediation has been submitted** at [SHA `661681d9...`](https://github.com/aguacatero/scalar-wave-viz/commit/661681d9a6483dea5df77b68442730e7afc18889) ([handoff](https://github.com/aguacatero/scalar-wave-viz/pull/11#issuecomment-6565425536), [CI: 126 tests passed](https://github.com/aguacatero/scalar-wave-viz/actions/runs/41360582041)); **independent R9 review is pending**, not accepted or merged.
+- **P2 — ACTIVE DRAFT, NOT SCIENTIFICALLY ACCEPTED:** Exodus source-bounded geometry and H0/H1 comparison remain in [Issue #7](https://github.com/aguacatero/scalar-wave-viz/issues/7) and [Draft PR #11](https://github.com/aguacatero/scalar-wave-viz/pull/11). The [independent R9 review](https://github.com/aguacatero/scalar-wave-viz/pull/11#issuecomment-6566089334) requested further changes, including full-length geometry refinement, domain sensitivity, dielectric virtual-work benchmarking, multi-body extrapolation, and missing-term reporting. P2 remains draft, unaccepted, and unmerged; R10 remediation/re-review is next.
 - **P3 — PENDING:** Physical scalar-field and nuclear hypotheses with traceable evidence and falsifiable predictions.
 - **P4 — PENDING SCIENTIFIC GATE:** Final validated research dashboard. **Early 3D visual-explorer development can happen in parallel**, without claiming P4 acceptance.
 
-**Next user-facing milestone:** a simple 3D electric-field/force explorer, with clear reaction arrows and explanations. **Next scientific milestone:** resolve P2's independent review findings. Neither is claimed complete.
+**Next user-facing milestone:** independently re-review V0.1 and obtain explicit owner authorization before merging V0/V0.1; then plan V1 solver integration. **Next scientific milestone:** resolve P2's R9 findings and submit R10 evidence. Neither is claimed complete.
 
 **Standing Antigravity rule:** At the start and end of every substantive implementation session, inspect and synchronize the README with live GitHub status. Any substantive repository change must carry its README update in the **same branch/PR**, including plain-English status and next steps. A no-change review should still explicitly verify the README without fabricating an update. Follow [AGENTS.md](AGENTS.md#mandatory-readme-progress-synchronization--every-project-update). This rule does not itself run a background scheduler.
+
+**README maintenance enforcement (in this draft branch; not yet active on `main`):** [README progress guard](.github/workflows/readme-progress.yml) runs on PRs and fails substantive changes to code, tests, docs, UI, assets, or CI unless this section's narrative changes in that same PR. A heading date edit or unrelated README edit alone does not count. README-only wording edits and empty/no-change reviews are exempt. The guard has [regression tests](tests/test_readme_progress_guard.py). Once merged, the owner must also configure the `README progress guard / verify` check as **required** in GitHub's `main` branch ruleset; without that setting, GitHub permits merges despite a failing check. The check cannot establish scientific truth or run an Antigravity scheduler.
 
 ## How you can support the project
 
