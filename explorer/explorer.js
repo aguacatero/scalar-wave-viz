@@ -1697,11 +1697,11 @@
       }
     });
 
-    // 2D Screen-Space Collision Avoidance (Remediated for V0.1-R2-F2)
-    // Ensures zero overlap between pins on all screen widths (375px/390px mobile & desktop)
+    // 2D Screen-Space Collision Avoidance (Remediated for V0.1-R2-F2 & V0.1-R3-M2)
+    // Relaxes pin positions and clamps bounds across mobile (375px/390px) and desktop viewports
     resolveLabelCollisions(activePins, rect);
 
-    // Apply calculated collision-free screen positions
+    // Apply calculated collision-relaxed screen positions
     activePins.forEach(item => {
       item.pin.style.left = `${Math.round(item.x)}px`;
       item.pin.style.top = `${Math.round(item.y)}px`;
@@ -1709,26 +1709,57 @@
   }
 
   // --- Screen-Space Label Collision Avoidance ---
-  // Remediated for V0.1-R2-F2: iteratively relaxes pin positions to guarantee zero overlap across viewports
+  // Remediated for V0.1-R2-F2, V0.1-R3-F1 & V0.1-R3-M2: multi-pass screen-space collision relaxation
+  // with vertical staggering, viewport boundary clamping, and bounded clearance fallback.
   function resolveLabelCollisions(activePins, rect) {
-    if (!activePins || activePins.length <= 1) return;
+    if (!activePins || activePins.length === 0) return;
 
-    const marginX = 8;
-    const marginY = 8;
+    let marginX = 8;
+    let marginY = 8;
     const pad = 6;
     const isMobile = rect.width <= 640;
-    const topMargin = isMobile ? 78 : 70; // clearance below view preset HUD toolbar
-    const bottomMargin = isMobile ? 42 : 48; // clearance above component chip bar
+    let topMargin = isMobile ? 78 : 70; // clearance below view preset HUD toolbar
+    let bottomMargin = isMobile ? 88 : 50; // clearance above component chip bar
+
+    const hudEl = document.querySelector('.view-preset-hud');
+    const chipBarEl = document.querySelector('.component-chip-bar');
+    const containerEl = document.getElementById('viewport-container');
+
+    if (containerEl && chipBarEl) {
+      const cBox = containerEl.getBoundingClientRect();
+      const bBox = chipBarEl.getBoundingClientRect();
+      if (bBox.top < cBox.bottom) {
+        bottomMargin = Math.max(bottomMargin, Math.ceil(cBox.bottom - bBox.top) + 6);
+      }
+    }
+    if (containerEl && hudEl) {
+      const cBox = containerEl.getBoundingClientRect();
+      const hBox = hudEl.getBoundingClientRect();
+      if (hBox.bottom > cBox.top) {
+        topMargin = Math.max(topMargin, Math.ceil(hBox.bottom - cBox.top) + 6);
+      }
+    }
+
     const maxY = rect.height - bottomMargin;
 
-    // 1. Initial clamp to allowable viewport bounds
+    // 1. Initial clamp to allowable viewport bounds (applies to single pin or multiple pins)
     activePins.forEach(item => {
       item.x = Math.max(item.w / 2 + pad, Math.min(rect.width - item.w / 2 - pad, item.x));
       item.y = Math.max(item.h + topMargin, Math.min(maxY, item.y));
     });
 
+    if (activePins.length <= 1) return;
+
+    // Capacity shortfall check: calculate vertical budget and dynamically compress margin if tight
+    const totalPinHeight = activePins.reduce((sum, p) => sum + p.h, 0);
+    const availableSpan = Math.max(0, maxY - topMargin);
+    const neededSpan = totalPinHeight + (activePins.length - 1) * marginY;
+    if (neededSpan > availableSpan) {
+      marginY = Math.max(2, Math.floor((availableSpan - totalPinHeight) / Math.max(1, activePins.length - 1)));
+    }
+
     if (isMobile) {
-      // Mobile 1D forward/backward sweep layout (provably collision-free)
+      // Mobile 1D forward/backward sweep layout with vertical staggering
       activePins.sort((a, b) => a.y - b.y);
 
       // Forward pass: ensure lower pins clear all overlapping upper pins
@@ -1784,6 +1815,35 @@
           }
         }
         activePins[k].y = Math.min(maxY, y_k);
+      }
+
+      // Fallback secondary horizontal staggering if any vertical overlap remains due to tight vertical clamping
+      for (let i = 0; i < activePins.length; i++) {
+        for (let j = i + 1; j < activePins.length; j++) {
+          const a = activePins[i];
+          const b = activePins[j];
+          const aTop = a.y - a.h;
+          const aBottom = a.y;
+          const bTop = b.y - b.h;
+          const bBottom = b.y;
+          const overlapY = Math.min(aBottom, bBottom) - Math.max(aTop, bTop) + marginY;
+          if (overlapY > 0) {
+            const aLeft = a.x - a.w / 2;
+            const aRight = a.x + a.w / 2;
+            const bLeft = b.x - b.w / 2;
+            const bRight = b.x + b.w / 2;
+            const overlapX = Math.min(aRight, bRight) - Math.max(aLeft, bLeft) + marginX;
+            if (overlapX > 0) {
+              if (a.x <= b.x) {
+                a.x = Math.max(a.w / 2 + pad, a.x - (overlapX / 2 + 2));
+                b.x = Math.min(rect.width - b.w / 2 - pad, b.x + (overlapX / 2 + 2));
+              } else {
+                b.x = Math.max(b.w / 2 + pad, b.x - (overlapX / 2 + 2));
+                a.x = Math.min(rect.width - a.w / 2 - pad, a.x + (overlapX / 2 + 2));
+              }
+            }
+          }
+        }
       }
 
       // Enforce bounds after pass

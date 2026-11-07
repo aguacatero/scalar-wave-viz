@@ -879,13 +879,20 @@ class PropulsionExplorerBrowserSmokeTests(unittest.TestCase):
         self.assertEqual(len(self.page_errors), 0, f"HUD non-overlap check threw errors: {self.page_errors}")
 
     def test_v0_1_r2_f2_billboard_label_pins_never_overlap_across_viewports_and_presets(self):
-        """V0.1-R2-F2 regression: all visible 3D billboard pins have zero bounding box overlap across presets and mobile."""
+        """V0.1-R2-F2 & V0.1-R3-M1 regression: all visible 3D billboard pins have zero bounding box overlap across all 4 presets and mobile."""
         viewports = [
             (1280, 800, "Desktop"),
             (390, 844, "iPhone 12/13/14"),
             (375, 812, "iPhone SE")
         ]
-        presets = ["isometric", "side", "top"]
+        presets = ["isometric", "side", "front", "top"]
+        expected_pin_ids = {
+            "label-pin-blade_electrode",
+            "label-pin-ground_electrode",
+            "label-pin-dielectric_block",
+            "label-pin-support_mount",
+            "label-pin-enclosure_walls"
+        }
 
         for width, height, vp_name in viewports:
             self.page.set_viewport_size({"width": width, "height": height})
@@ -898,7 +905,10 @@ class PropulsionExplorerBrowserSmokeTests(unittest.TestCase):
 
                 # Query all visible label pins
                 pins = self.page.locator(".label-pin:visible").all()
-                self.assertGreaterEqual(len(pins), 4, f"Expected at least 4 visible pins in {preset} at {vp_name}")
+                self.assertEqual(len(pins), 5, f"Expected exactly 5 visible pins in {preset} at {vp_name}")
+
+                pin_ids = {p.get_attribute("id") for p in pins}
+                self.assertEqual(pin_ids, expected_pin_ids, f"Visible pin IDs mismatch in {preset} at {vp_name}")
 
                 boxes = []
                 for pin in pins:
@@ -927,7 +937,7 @@ class PropulsionExplorerBrowserSmokeTests(unittest.TestCase):
         self.assertEqual(len(self.page_errors), 0, f"Label collision check threw errors: {self.page_errors}")
 
     def test_v0_1_r2_f2_all_five_billboard_pins_clickable_via_real_pointer_and_element_from_point(self):
-        """V0.1-R2-F2 regression: document.elementFromPoint and real pointer click reliably select ALL 5 components."""
+        """V0.1-R2-F2 & V0.1-R3-M1 regression: exact elementFromPoint equality and real pointer click select ALL 5 components across viewports and presets."""
         components = [
             ("blade_electrode", "Asymmetric High-Voltage Blade"),
             ("ground_electrode", "Ground Counter-Electrode"),
@@ -935,44 +945,141 @@ class PropulsionExplorerBrowserSmokeTests(unittest.TestCase):
             ("support_mount", "Structural Support Mount"),
             ("enclosure_walls", "Conductive Enclosure (Chamber)")
         ]
+        viewports = [
+            (1280, 800, "Desktop"),
+            (390, 844, "iPhone 12/13/14"),
+            (375, 812, "iPhone SE")
+        ]
+        presets = ["isometric", "side", "front", "top"]
 
-        # Verify on desktop and mobile viewports
-        for vp in [(1280, 800), (390, 844), (375, 812)]:
-            self.page.set_viewport_size({"width": vp[0], "height": vp[1]})
+        for width, height, vp_name in viewports:
+            self.page.set_viewport_size({"width": width, "height": height})
             self.page.wait_for_timeout(60)
 
-            for comp_id, expected_title in components:
-                pin = self.page.locator(f"#label-pin-{comp_id}")
-                self.assertTrue(pin.is_visible(), f"Pin {comp_id} must be visible at viewport {vp}")
+            for preset in presets:
+                self.page.click(f".view-preset-hud .hud-btn[data-view='{preset}']")
+                self.page.wait_for_timeout(550)
 
-                bb = pin.bounding_box()
-                self.assertIsNotNone(bb)
+                for comp_id, expected_title in components:
+                    pin_elem_id = f"label-pin-{comp_id}"
+                    pin = self.page.locator(f"#{pin_elem_id}")
+                    self.assertTrue(pin.is_visible(), f"Pin {comp_id} must be visible in {preset} at {vp_name}")
 
-                cx = bb["x"] + bb["width"] / 2
-                cy = bb["y"] + bb["height"] / 2
+                    bb = pin.bounding_box()
+                    self.assertIsNotNone(bb)
 
-                # 1. Verify elementFromPoint resolves to this exact pin button
-                hit_target = self.page.evaluate(
-                    "([x, y]) => document.elementFromPoint(x, y)?.closest('.label-pin')?.dataset.id",
-                    [cx, cy]
-                )
-                self.assertEqual(hit_target, comp_id, f"Center of pin {comp_id} resolves to {hit_target} at {vp}")
+                    cx = bb["x"] + bb["width"] / 2
+                    cy = bb["y"] + bb["height"] / 2
 
-                # 2. Real mouse click on pin button center
-                self.page.mouse.click(cx, cy)
-                self.page.wait_for_timeout(40)
+                    # 1. Verify elementFromPoint directly equals the exact button element (guarding transparent child spans)
+                    is_exact_pin = self.page.evaluate(
+                        "([x, y, id]) => document.elementFromPoint(x, y) === document.getElementById(id)",
+                        [cx, cy, pin_elem_id]
+                    )
+                    self.assertTrue(is_exact_pin, f"Center of pin {comp_id} did not resolve directly to button in {preset} at {vp_name}")
 
-                # 3. Assert component selection and inspector state
-                self.assertEqual(pin.get_attribute("aria-pressed"), "true")
-                self.assertTrue("selected" in (pin.get_attribute("class") or ""))
+                    # 2. Real mouse click on pin button center
+                    self.page.mouse.click(cx, cy)
+                    self.page.wait_for_timeout(30)
 
-                name_text = self.page.locator("#inspector-name").inner_text()
-                self.assertEqual(name_text, expected_title, f"Inspector name mismatch after clicking {comp_id}")
+                    # 3. Assert component selection and inspector state
+                    self.assertEqual(pin.get_attribute("aria-pressed"), "true")
+                    self.assertTrue("selected" in (pin.get_attribute("class") or ""))
+
+                    name_text = self.page.locator("#inspector-name").inner_text()
+                    self.assertEqual(name_text, expected_title, f"Inspector name mismatch after clicking {comp_id} in {preset} at {vp_name}")
+
+        # Restore default desktop viewport and view
+        self.page.set_viewport_size({"width": 1280, "height": 800})
+        self.page.click(".view-preset-hud .hud-btn[data-view='isometric']")
+        self.page.wait_for_timeout(60)
+        self.assertEqual(len(self.page_errors), 0, f"Pointer hit-testing threw errors: {self.page_errors}")
+
+    def test_v0_1_r3_f1_single_pin_enclosure_clamp_and_click_when_geometry_off(self):
+        """V0.1-R3-F1 regression: single enclosure pin clamps inside canvas and below HUD toolbar when geometry is toggled off."""
+        viewports = [
+            (375, 812, "iPhone SE"),
+            (390, 844, "iPhone 12/13/14"),
+            (1280, 800, "Desktop")
+        ]
+
+        for width, height, vp_name in viewports:
+            self.page.set_viewport_size({"width": width, "height": height})
+            self.page.wait_for_timeout(60)
+
+            # Ensure default isometric preset
+            self.page.click(".view-preset-hud .hud-btn[data-view='isometric']")
+            self.page.wait_for_timeout(100)
+
+            # Toggle Component Geometry OFF
+            self.page.evaluate("""() => {
+                const el = document.getElementById("toggle-geometry");
+                if (el.checked) {
+                    el.checked = false;
+                    el.dispatchEvent(new Event("change"));
+                }
+            }""")
+            self.page.wait_for_timeout(100)
+
+            # Assert exactly 1 visible label pin: enclosure_walls
+            visible_pins = self.page.locator(".label-pin:visible").all()
+            self.assertEqual(len(visible_pins), 1, f"Expected exactly 1 visible pin with geometry OFF at {vp_name}")
+            pin = visible_pins[0]
+            self.assertEqual(pin.get_attribute("id"), "label-pin-enclosure_walls")
+
+            # Check bounding box
+            b = pin.bounding_box()
+            self.assertIsNotNone(b)
+            canvas_box = self.page.locator("#viewport-container").bounding_box()
+            self.assertIsNotNone(canvas_box)
+            hud_box = self.page.locator(".view-preset-hud").bounding_box()
+            self.assertIsNotNone(hud_box)
+
+            # Must be inside viewport horizontally
+            self.assertGreaterEqual(b["x"], 0, f"Pin left {b['x']} must be inside viewport at {vp_name}")
+            self.assertLessEqual(b["x"] + b["width"], width, f"Pin right {b['x'] + b['width']} must be inside viewport at {vp_name}")
+
+            # Must be completely clear of (below) HUD preset toolbar
+            self.assertGreaterEqual(
+                b["y"],
+                hud_box["y"] + hud_box["height"],
+                f"Chamber pin at y={b['y']} occluded underneath HUD toolbar (bottom={hud_box['y'] + hud_box['height']}) at {vp_name}"
+            )
+
+            # Direct elementFromPoint test (exact HTMLButtonElement identity)
+            cx = b["x"] + b["width"] / 2
+            cy = b["y"] + b["height"] / 2
+            is_exact = self.page.evaluate(
+                "([x, y]) => document.elementFromPoint(x, y) === document.getElementById('label-pin-enclosure_walls')",
+                [cx, cy]
+            )
+            self.assertTrue(is_exact, f"elementFromPoint at ({cx}, {cy}) must resolve directly to enclosure pin at {vp_name}")
+
+            # Real mouse click
+            self.page.mouse.click(cx, cy)
+            self.page.wait_for_timeout(50)
+            self.assertEqual(pin.get_attribute("aria-pressed"), "true")
+            inspector_title = self.page.locator("#inspector-name").inner_text()
+            self.assertEqual(inspector_title, "Conductive Enclosure (Chamber)")
+
+            # Restore geometry
+            self.page.evaluate("""() => {
+                const el = document.getElementById("toggle-geometry");
+                if (!el.checked) {
+                    el.checked = true;
+                    el.dispatchEvent(new Event("change"));
+                }
+            }""")
+            self.page.wait_for_timeout(100)
+
+            # Assert all 5 pins reappear
+            all_pins = self.page.locator(".label-pin:visible").all()
+            self.assertEqual(len(all_pins), 5, f"All 5 pins must reappear after re-enabling geometry at {vp_name}")
 
         # Restore default desktop viewport
         self.page.set_viewport_size({"width": 1280, "height": 800})
         self.page.wait_for_timeout(40)
-        self.assertEqual(len(self.page_errors), 0, f"Pointer hit-testing threw errors: {self.page_errors}")
+        self.assertEqual(len(self.page_errors), 0, f"Single-pin test threw errors: {self.page_errors}")
 
 
 if __name__ == "__main__":

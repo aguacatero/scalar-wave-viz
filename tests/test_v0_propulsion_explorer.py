@@ -406,6 +406,21 @@ class PropulsionExplorerJSLogicTests(unittest.TestCase):
         self.assertIn("THREE.Vector3(currentGapMM + 14, 20, -8)", self.js)
         self.assertIn("THREE.Vector3(0, 36, 14)", self.js)
 
+    def test_v0_1_r3_f1_and_m2_single_pin_clamp_and_capacity_fallback_in_js(self):
+        """V0.1-R3-F1 & M2: clamp runs before activePins.length <= 1 check and capacity shortfall check exists."""
+        # 1. V0.1-R3-F1: Verify clamp loop occurs before activePins.length <= 1
+        clamp_idx = self.js.find("item.x = Math.max(item.w / 2 + pad")
+        early_return_idx = self.js.find("if (activePins.length <= 1) return;")
+        self.assertNotEqual(clamp_idx, -1)
+        self.assertNotEqual(early_return_idx, -1)
+        self.assertLess(clamp_idx, early_return_idx, "Clamping must occur before early return on activePins.length <= 1")
+
+        # 2. V0.1-R3-M2: Capacity shortfall check exists and no unconditional guarantee claims in comments
+        self.assertIn("totalPinHeight", self.js)
+        self.assertIn("neededSpan > availableSpan", self.js)
+        self.assertNotIn("provably collision-free", self.js)
+        self.assertNotIn("guarantee zero overlap", self.js)
+
 
 
 class PropulsionExplorerLauncherTests(unittest.TestCase):

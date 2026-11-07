@@ -172,6 +172,28 @@ def capture_all():
         mobile_390_page.screenshot(path=str(mobile_390_path), full_page=False)
         print(f"Captured: {mobile_390_path} ({mobile_390_path.stat().st_size} bytes)")
         mobile_390_context.close()
+
+        # 8. Single-Pin Mobile context (375x812 - iPhone SE with Component Geometry OFF, V0.1-R3-F1)
+        single_pin_context = browser.new_context(viewport={"width": 375, "height": 812}, device_scale_factor=2)
+        single_pin_page = single_pin_context.new_page()
+        single_pin_page.goto(base_url)
+        single_pin_page.wait_for_selector("#webgl-canvas")
+        single_pin_page.wait_for_selector("#loading-overlay.hidden")
+        time.sleep(0.5)
+        # Toggle Component Geometry OFF
+        single_pin_page.evaluate("""() => {
+            const el = document.getElementById("toggle-geometry");
+            if (el && el.checked) {
+                el.checked = false;
+                el.dispatchEvent(new Event("change"));
+            }
+        }""")
+        time.sleep(0.5)
+        single_pin_path = ASSETS_DIR / "propulsion_explorer_v0_single_pin.png"
+        single_pin_page.screenshot(path=str(single_pin_path), full_page=False)
+        print(f"Captured: {single_pin_path} ({single_pin_path.stat().st_size} bytes)")
+        single_pin_context.close()
+
         browser.close()
 
     server.shutdown()
