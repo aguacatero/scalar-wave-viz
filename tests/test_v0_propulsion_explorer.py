@@ -421,6 +421,64 @@ class PropulsionExplorerJSLogicTests(unittest.TestCase):
         self.assertNotIn("provably collision-free", self.js)
         self.assertNotIn("guarantee zero overlap", self.js)
 
+    def test_v0_1_r4_m1_capacity_shortfall_deterministic_conflict_suppression_and_postcondition(self):
+        """V0.1-R4-M1: deterministic conflict suppression resolves capacity shortfall counterexample with zero overlap."""
+        # 1. Structural check for conflict resolution loop and priority rankings in JS
+        self.assertIn("priority: 5", self.js)
+        self.assertIn("priority: 1", self.js)
+        self.assertIn("hasOverlap", self.js)
+        self.assertIn("collisionPair", self.js)
+        self.assertIn("victim.pin.style.display = 'none'", self.js)
+
+        # 2. Node execution test verifying exact counterexample (rect: 375x380, 5 pins w=220, h=50)
+        node_script = """
+        const js = require('fs').readFileSync('explorer/explorer.js', 'utf8');
+        const match = js.match(/function resolveLabelCollisions[\\s\\S]*?\\n  \\}/);
+        if (!match) throw new Error("resolveLabelCollisions not found");
+
+        global.document = {
+            querySelector: () => null,
+            getElementById: () => null
+        };
+
+        eval(match[0]);
+
+        const rect = { width: 375, height: 380 };
+        const pins = [
+            { id: "blade_electrode", x: 187, y: 180, w: 220, h: 50, priority: 5, pin: { style: {} } },
+            { id: "ground_electrode", x: 187, y: 180, w: 220, h: 50, priority: 4, pin: { style: {} } },
+            { id: "dielectric_block", x: 187, y: 180, w: 220, h: 50, priority: 3, pin: { style: {} } },
+            { id: "enclosure_walls", x: 187, y: 180, w: 220, h: 50, priority: 2, pin: { style: {} } },
+            { id: "support_mount", x: 187, y: 180, w: 220, h: 50, priority: 1, pin: { style: {} } }
+        ];
+
+        resolveLabelCollisions(pins, rect);
+
+        function overlaps(a, b) {
+            const aLeft = a.x - a.w / 2, aRight = a.x + a.w / 2;
+            const aTop = a.y - a.h, aBottom = a.y;
+            const bLeft = b.x - b.w / 2, bRight = b.x + b.w / 2;
+            const bTop = b.y - b.h, bBottom = b.y;
+            return (aLeft < bRight && aRight > bLeft && aTop < bBottom && aBottom > bTop);
+        }
+
+        for (let i = 0; i < pins.length; i++) {
+            for (let j = i + 1; j < pins.length; j++) {
+                if (overlaps(pins[i], pins[j])) {
+                    throw new Error(`Collision between ${pins[i].id} and ${pins[j].id}`);
+                }
+            }
+        }
+        console.log(JSON.stringify({ surviving: pins.map(p => p.id), count: pins.length }));
+        """
+        import subprocess, json
+        res = subprocess.run(["node", "-e", node_script], capture_output=True, text=True, check=True)
+        data = json.loads(res.stdout.strip())
+        self.assertLess(data["count"], 5, "Capacity shortfall must suppress conflicting pins")
+        self.assertGreaterEqual(data["count"], 2, "High-priority pins must survive")
+        self.assertIn("blade_electrode", data["surviving"], "Highest priority blade pin must survive")
+        self.assertNotIn("support_mount", data["surviving"], "Lowest priority mount pin must be suppressed in shortfall")
+
 
 
 class PropulsionExplorerLauncherTests(unittest.TestCase):

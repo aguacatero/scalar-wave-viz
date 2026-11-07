@@ -890,6 +890,14 @@
       el.classList.toggle('selected', el.dataset.id === id);
     });
 
+    // Highlight in 3D billboard label pins
+    const pins = document.querySelectorAll('.label-pin');
+    pins.forEach(el => {
+      const isSel = el.dataset.id === id;
+      el.classList.toggle('selected', isSel);
+      el.setAttribute('aria-pressed', isSel ? 'true' : 'false');
+    });
+
     renderInspectorCard(id);
     switchTab('tab-inspector');
     highlightMesh(id);
@@ -1631,12 +1639,14 @@
     // - Dielectric: elevated distinctly above the gap junction (x = 0, y = 36, z = 14)
     // - Mount: positioned underneath insulating base (x = 5, y = -32, z = -30)
     // - Chamber: positioned on front-left perimeter chamber wall (x = -45, y = 50, z = 25)
+    // Explicit priority ranks (5=highest to 1=lowest) ensure deterministic conflict suppression
+    // when vertical canvas capacity or enlarged text cannot accommodate all labels simultaneously.
     const labelDefs = [
-      { id: "blade_electrode", name: currentVoltageKV > 0 ? `Blade (-${currentVoltageKV.toFixed(0)} kV)` : 'Blade (0 V OFF)', worldPos: new THREE.Vector3(-24, 14, 8), dotColor: "#f43f5e", isInterior: true },
-      { id: "ground_electrode", name: "Ground (0 V)", worldPos: new THREE.Vector3(currentGapMM + 14, 20, -8), dotColor: "#10b981", isInterior: true },
-      { id: "dielectric_block", name: "Dielectric Potting", worldPos: new THREE.Vector3(0, 36, 14), dotColor: "#818cf8", isInterior: true },
-      { id: "support_mount", name: "Support Mount", worldPos: new THREE.Vector3(5, -32, -30), dotColor: "#64748b", isInterior: true },
-      { id: "enclosure_walls", name: "Chamber (0 V)", worldPos: new THREE.Vector3(-45, 50, 25), dotColor: "#475569", isInterior: false }
+      { id: "blade_electrode", name: currentVoltageKV > 0 ? `Blade (-${currentVoltageKV.toFixed(0)} kV)` : 'Blade (0 V OFF)', worldPos: new THREE.Vector3(-24, 14, 8), dotColor: "#f43f5e", isInterior: true, priority: 5 },
+      { id: "ground_electrode", name: "Ground (0 V)", worldPos: new THREE.Vector3(currentGapMM + 14, 20, -8), dotColor: "#10b981", isInterior: true, priority: 4 },
+      { id: "dielectric_block", name: "Dielectric Potting", worldPos: new THREE.Vector3(0, 36, 14), dotColor: "#818cf8", isInterior: true, priority: 3 },
+      { id: "enclosure_walls", name: "Chamber (0 V)", worldPos: new THREE.Vector3(-45, 50, 25), dotColor: "#475569", isInterior: false, priority: 2 },
+      { id: "support_mount", name: "Support Mount", worldPos: new THREE.Vector3(5, -32, -30), dotColor: "#64748b", isInterior: true, priority: 1 }
     ];
 
     const activePins = [];
@@ -1683,6 +1693,7 @@
         const projY = ((-v.y + 1) / 2) * rect.height;
         const pinW = pin.offsetWidth || (def.name.length * 7 + 28);
         const pinH = pin.offsetHeight || 26;
+        const pinPriority = (isSelected ? 100 : 0) + def.priority;
 
         activePins.push({
           pin,
@@ -1692,13 +1703,14 @@
           origX: projX,
           origY: projY,
           w: pinW,
-          h: pinH
+          h: pinH,
+          priority: pinPriority
         });
       }
     });
 
-    // 2D Screen-Space Collision Avoidance (Remediated for V0.1-R2-F2 & V0.1-R3-M2)
-    // Relaxes pin positions and clamps bounds across mobile (375px/390px) and desktop viewports
+    // 2D Screen-Space Collision Avoidance (Remediated for V0.1-R2-F2, V0.1-R3-M2 & V0.1-R4-M1)
+    // Relaxes pin positions and clamps bounds; deterministically suppresses conflicts if capacity is exceeded
     resolveLabelCollisions(activePins, rect);
 
     // Apply calculated collision-relaxed screen positions
@@ -1709,13 +1721,12 @@
   }
 
   // --- Screen-Space Label Collision Avoidance ---
-  // Remediated for V0.1-R2-F2, V0.1-R3-F1 & V0.1-R3-M2: multi-pass screen-space collision relaxation
-  // with vertical staggering, viewport boundary clamping, and bounded clearance fallback.
+  // Remediated for V0.1-R2-F2, V0.1-R3-F1, V0.1-R3-M2 & V0.1-R4-M1:
+  // Multi-pass screen-space collision relaxation with vertical staggering, dynamic HUD/chip clearance,
+  // and deterministic conflict suppression fallback guaranteeing an explicit no-collision postcondition.
   function resolveLabelCollisions(activePins, rect) {
     if (!activePins || activePins.length === 0) return;
 
-    let marginX = 8;
-    let marginY = 8;
     const pad = 6;
     const isMobile = rect.width <= 640;
     let topMargin = isMobile ? 78 : 70; // clearance below view preset HUD toolbar
@@ -1742,167 +1753,220 @@
 
     const maxY = rect.height - bottomMargin;
 
-    // 1. Initial clamp to allowable viewport bounds (applies to single pin or multiple pins)
-    activePins.forEach(item => {
-      item.x = Math.max(item.w / 2 + pad, Math.min(rect.width - item.w / 2 - pad, item.x));
-      item.y = Math.max(item.h + topMargin, Math.min(maxY, item.y));
-    });
+    function hasOverlap(a, b) {
+      const aLeft = a.x - a.w / 2;
+      const aRight = a.x + a.w / 2;
+      const aTop = a.y - a.h;
+      const aBottom = a.y;
 
-    if (activePins.length <= 1) return;
+      const bLeft = b.x - b.w / 2;
+      const bRight = b.x + b.w / 2;
+      const bTop = b.y - b.h;
+      const bBottom = b.y;
 
-    // Capacity shortfall check: calculate vertical budget and dynamically compress margin if tight
-    const totalPinHeight = activePins.reduce((sum, p) => sum + p.h, 0);
-    const availableSpan = Math.max(0, maxY - topMargin);
-    const neededSpan = totalPinHeight + (activePins.length - 1) * marginY;
-    if (neededSpan > availableSpan) {
-      marginY = Math.max(2, Math.floor((availableSpan - totalPinHeight) / Math.max(1, activePins.length - 1)));
+      const overlapX = Math.min(aRight, bRight) - Math.max(aLeft, bLeft);
+      const overlapY = Math.min(aBottom, bBottom) - Math.max(aTop, bTop);
+      return overlapX > 0 && overlapY > 0;
     }
 
-    if (isMobile) {
-      // Mobile 1D forward/backward sweep layout with vertical staggering
-      activePins.sort((a, b) => a.y - b.y);
+    function runPass(pins) {
+      // 1. Initial clamp to allowable viewport bounds (applies to single pin or multiple pins)
+      pins.forEach(item => {
+        item.x = Math.max(item.w / 2 + pad, Math.min(rect.width - item.w / 2 - pad, item.x));
+        item.y = Math.max(item.h + topMargin, Math.min(maxY, item.y));
+      });
 
-      // Forward pass: ensure lower pins clear all overlapping upper pins
-      for (let k = 0; k < activePins.length; k++) {
-        let y_k = Math.max(activePins[k].y, activePins[k].h + topMargin);
-        for (let m = 0; m < k; m++) {
-          const a = activePins[m];
-          const b = activePins[k];
-          const aLeft = a.x - a.w / 2;
-          const aRight = a.x + a.w / 2;
-          const bLeft = b.x - b.w / 2;
-          const bRight = b.x + b.w / 2;
-          const overlapX = Math.min(aRight, bRight) - Math.max(aLeft, bLeft) + marginX;
-          if (overlapX > 0) {
-            y_k = Math.max(y_k, a.y + marginY + b.h);
-          }
-        }
-        activePins[k].y = y_k;
+      if (pins.length <= 1) return;
+
+      const marginX = 8;
+      let marginY = 8;
+      const totalPinHeight = pins.reduce((sum, p) => sum + p.h, 0);
+      const availableSpan = Math.max(0, maxY - topMargin);
+      const neededSpan = totalPinHeight + (pins.length - 1) * marginY;
+      if (neededSpan > availableSpan) {
+        marginY = Math.max(2, Math.floor((availableSpan - totalPinHeight) / Math.max(1, pins.length - 1)));
       }
 
-      // Backward pass: clamp to maxY and pull upper pins up if needed
-      for (let k = activePins.length - 1; k >= 0; k--) {
-        if (activePins[k].y > maxY) {
-          activePins[k].y = maxY;
-        }
-        for (let m = k - 1; m >= 0; m--) {
-          const a = activePins[m];
-          const b = activePins[k];
-          const aLeft = a.x - a.w / 2;
-          const aRight = a.x + a.w / 2;
-          const bLeft = b.x - b.w / 2;
-          const bRight = b.x + b.w / 2;
-          const overlapX = Math.min(aRight, bRight) - Math.max(aLeft, bLeft) + marginX;
-          if (overlapX > 0) {
-            a.y = Math.min(a.y, b.y - b.h - marginY);
-          }
-        }
-      }
+      if (isMobile) {
+        pins.sort((a, b) => a.y - b.y);
 
-      // Final forward safety pass: ensure min bound strictly maintained
-      for (let k = 0; k < activePins.length; k++) {
-        let y_k = Math.max(activePins[k].y, activePins[k].h + topMargin);
-        for (let m = 0; m < k; m++) {
-          const a = activePins[m];
-          const b = activePins[k];
-          const aLeft = a.x - a.w / 2;
-          const aRight = a.x + a.w / 2;
-          const bLeft = b.x - b.w / 2;
-          const bRight = b.x + b.w / 2;
-          const overlapX = Math.min(aRight, bRight) - Math.max(aLeft, bLeft) + marginX;
-          if (overlapX > 0) {
-            y_k = Math.max(y_k, a.y + marginY + b.h);
-          }
-        }
-        activePins[k].y = Math.min(maxY, y_k);
-      }
-
-      // Fallback secondary horizontal staggering if any vertical overlap remains due to tight vertical clamping
-      for (let i = 0; i < activePins.length; i++) {
-        for (let j = i + 1; j < activePins.length; j++) {
-          const a = activePins[i];
-          const b = activePins[j];
-          const aTop = a.y - a.h;
-          const aBottom = a.y;
-          const bTop = b.y - b.h;
-          const bBottom = b.y;
-          const overlapY = Math.min(aBottom, bBottom) - Math.max(aTop, bTop) + marginY;
-          if (overlapY > 0) {
+        // Forward pass: ensure lower pins clear all overlapping upper pins
+        for (let k = 0; k < pins.length; k++) {
+          let y_k = Math.max(pins[k].y, pins[k].h + topMargin);
+          for (let m = 0; m < k; m++) {
+            const a = pins[m];
+            const b = pins[k];
             const aLeft = a.x - a.w / 2;
             const aRight = a.x + a.w / 2;
             const bLeft = b.x - b.w / 2;
             const bRight = b.x + b.w / 2;
             const overlapX = Math.min(aRight, bRight) - Math.max(aLeft, bLeft) + marginX;
             if (overlapX > 0) {
-              if (a.x <= b.x) {
-                a.x = Math.max(a.w / 2 + pad, a.x - (overlapX / 2 + 2));
-                b.x = Math.min(rect.width - b.w / 2 - pad, b.x + (overlapX / 2 + 2));
-              } else {
-                b.x = Math.max(b.w / 2 + pad, b.x - (overlapX / 2 + 2));
-                a.x = Math.min(rect.width - a.w / 2 - pad, a.x + (overlapX / 2 + 2));
-              }
+              y_k = Math.max(y_k, a.y + marginY + b.h);
             }
           }
+          pins[k].y = y_k;
         }
-      }
 
-      // Enforce bounds after pass
-      activePins.forEach(item => {
-        item.x = Math.max(item.w / 2 + pad, Math.min(rect.width - item.w / 2 - pad, item.x));
-        item.y = Math.max(item.h + topMargin, Math.min(maxY, item.y));
-      });
-    } else {
-      // Desktop / wide viewport: balanced 2D relaxation
-      const iterations = 10;
-      for (let iter = 0; iter < iterations; iter++) {
-        let collisionFound = false;
-        for (let i = 0; i < activePins.length; i++) {
-          for (let j = i + 1; j < activePins.length; j++) {
-            const a = activePins[i];
-            const b = activePins[j];
-
+        // Backward pass: clamp to maxY and pull upper pins up if needed
+        for (let k = pins.length - 1; k >= 0; k--) {
+          if (pins[k].y > maxY) {
+            pins[k].y = maxY;
+          }
+          for (let m = k - 1; m >= 0; m--) {
+            const a = pins[m];
+            const b = pins[k];
             const aLeft = a.x - a.w / 2;
             const aRight = a.x + a.w / 2;
-            const aTop = a.y - a.h;
-            const aBottom = a.y;
-
             const bLeft = b.x - b.w / 2;
             const bRight = b.x + b.w / 2;
+            const overlapX = Math.min(aRight, bRight) - Math.max(aLeft, bLeft) + marginX;
+            if (overlapX > 0) {
+              a.y = Math.min(a.y, b.y - b.h - marginY);
+            }
+          }
+        }
+
+        // Final forward safety pass: ensure min bound strictly maintained
+        for (let k = 0; k < pins.length; k++) {
+          let y_k = Math.max(pins[k].y, pins[k].h + topMargin);
+          for (let m = 0; m < k; m++) {
+            const a = pins[m];
+            const b = pins[k];
+            const aLeft = a.x - a.w / 2;
+            const aRight = a.x + a.w / 2;
+            const bLeft = b.x - b.w / 2;
+            const bRight = b.x + b.w / 2;
+            const overlapX = Math.min(aRight, bRight) - Math.max(aLeft, bLeft) + marginX;
+            if (overlapX > 0) {
+              y_k = Math.max(y_k, a.y + marginY + b.h);
+            }
+          }
+          pins[k].y = Math.min(maxY, y_k);
+        }
+
+        // Horizontal staggering pass if vertical overlap remains
+        for (let i = 0; i < pins.length; i++) {
+          for (let j = i + 1; j < pins.length; j++) {
+            const a = pins[i];
+            const b = pins[j];
+            const aTop = a.y - a.h;
+            const aBottom = a.y;
             const bTop = b.y - b.h;
             const bBottom = b.y;
-
-            const overlapX = Math.min(aRight, bRight) - Math.max(aLeft, bLeft) + marginX;
             const overlapY = Math.min(aBottom, bBottom) - Math.max(aTop, bTop) + marginY;
-
-            if (overlapX > 0 && overlapY > 0) {
-              collisionFound = true;
-
-              if (overlapX <= overlapY) {
-                // Separate horizontally
-                const lefter = aLeft <= bLeft ? a : b;
-                const righter = lefter === a ? b : a;
-                const shiftX = overlapX / 2 + 1;
-                lefter.x = Math.max(lefter.w / 2 + pad, lefter.x - shiftX);
-                righter.x = Math.min(rect.width - righter.w / 2 - pad, righter.x + shiftX);
-              } else {
-                // Separate vertically
-                const upper = aTop <= bTop ? a : b;
-                const lower = upper === a ? b : a;
-                const shiftY = overlapY / 2 + 1;
-                upper.y = Math.max(upper.h + topMargin, upper.y - shiftY);
-                lower.y = Math.min(maxY, lower.y + shiftY);
+            if (overlapY > 0) {
+              const aLeft = a.x - a.w / 2;
+              const aRight = a.x + a.w / 2;
+              const bLeft = b.x - b.w / 2;
+              const bRight = b.x + b.w / 2;
+              const overlapX = Math.min(aRight, bRight) - Math.max(aLeft, bLeft) + marginX;
+              if (overlapX > 0) {
+                if (a.x <= b.x) {
+                  a.x = Math.max(a.w / 2 + pad, a.x - (overlapX / 2 + 2));
+                  b.x = Math.min(rect.width - b.w / 2 - pad, b.x + (overlapX / 2 + 2));
+                } else {
+                  b.x = Math.max(b.w / 2 + pad, b.x - (overlapX / 2 + 2));
+                  a.x = Math.min(rect.width - a.w / 2 - pad, a.x + (overlapX / 2 + 2));
+                }
               }
             }
           }
         }
 
-        activePins.forEach(item => {
+        // Enforce bounds after pass
+        pins.forEach(item => {
           item.x = Math.max(item.w / 2 + pad, Math.min(rect.width - item.w / 2 - pad, item.x));
           item.y = Math.max(item.h + topMargin, Math.min(maxY, item.y));
         });
+      } else {
+        // Desktop / wide viewport: balanced 2D relaxation
+        const iterations = 12;
+        for (let iter = 0; iter < iterations; iter++) {
+          let collisionFound = false;
+          for (let i = 0; i < pins.length; i++) {
+            for (let j = i + 1; j < pins.length; j++) {
+              const a = pins[i];
+              const b = pins[j];
+              const aLeft = a.x - a.w / 2;
+              const aRight = a.x + a.w / 2;
+              const aTop = a.y - a.h;
+              const aBottom = a.y;
+              const bLeft = b.x - b.w / 2;
+              const bRight = b.x + b.w / 2;
+              const bTop = b.y - b.h;
+              const bBottom = b.y;
 
-        if (!collisionFound) break;
+              const overlapX = Math.min(aRight, bRight) - Math.max(aLeft, bLeft) + marginX;
+              const overlapY = Math.min(aBottom, bBottom) - Math.max(aTop, bTop) + marginY;
+
+              if (overlapX > 0 && overlapY > 0) {
+                collisionFound = true;
+                if (overlapX <= overlapY) {
+                  const lefter = aLeft <= bLeft ? a : b;
+                  const righter = lefter === a ? b : a;
+                  const shiftX = overlapX / 2 + 1;
+                  lefter.x = Math.max(lefter.w / 2 + pad, lefter.x - shiftX);
+                  righter.x = Math.min(rect.width - righter.w / 2 - pad, righter.x + shiftX);
+                } else {
+                  const upper = aTop <= bTop ? a : b;
+                  const lower = upper === a ? b : a;
+                  const shiftY = overlapY / 2 + 1;
+                  upper.y = Math.max(upper.h + topMargin, upper.y - shiftY);
+                  lower.y = Math.min(maxY, lower.y + shiftY);
+                }
+              }
+            }
+          }
+
+          pins.forEach(item => {
+            item.x = Math.max(item.w / 2 + pad, Math.min(rect.width - item.w / 2 - pad, item.x));
+            item.y = Math.max(item.h + topMargin, Math.min(maxY, item.y));
+          });
+
+          if (!collisionFound) break;
+        }
       }
+    }
+
+    // Run initial relaxation pass
+    runPass(activePins);
+
+    if (activePins.length <= 1) return;
+
+    // Deterministic postcondition conflict suppression fallback (Remediated for V0.1-R4-M1):
+    // If available canvas capacity or extreme label dimensions prevent complete clearance,
+    // iteratively suppress (hide) lower-priority pins until the explicit no-collision postcondition holds.
+    while (activePins.length > 1) {
+      let collisionPair = null;
+      for (let i = 0; i < activePins.length; i++) {
+        for (let j = i + 1; j < activePins.length; j++) {
+          if (hasOverlap(activePins[i], activePins[j])) {
+            collisionPair = [activePins[i], activePins[j]];
+            break;
+          }
+        }
+        if (collisionPair) break;
+      }
+
+      if (!collisionPair) {
+        // No collisions remain! Explicit no-collision postcondition holds.
+        break;
+      }
+
+      const [a, b] = collisionPair;
+      // Identify the lower-priority victim
+      const victim = (a.priority < b.priority) ? a : b;
+      if (victim.pin) {
+        victim.pin.style.display = 'none';
+      }
+      const vIdx = activePins.indexOf(victim);
+      if (vIdx !== -1) {
+        activePins.splice(vIdx, 1);
+      }
+
+      // Re-run relaxation pass on remaining pins
+      runPass(activePins);
     }
   }
 

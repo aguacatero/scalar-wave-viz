@@ -1035,9 +1035,9 @@ class PropulsionExplorerBrowserSmokeTests(unittest.TestCase):
             hud_box = self.page.locator(".view-preset-hud").bounding_box()
             self.assertIsNotNone(hud_box)
 
-            # Must be inside viewport horizontally
-            self.assertGreaterEqual(b["x"], 0, f"Pin left {b['x']} must be inside viewport at {vp_name}")
-            self.assertLessEqual(b["x"] + b["width"], width, f"Pin right {b['x'] + b['width']} must be inside viewport at {vp_name}")
+            # Must be strictly inside canvas container bounds horizontally
+            self.assertGreaterEqual(b["x"], canvas_box["x"], f"Pin left {b['x']} must be inside canvas left {canvas_box['x']} at {vp_name}")
+            self.assertLessEqual(b["x"] + b["width"], canvas_box["x"] + canvas_box["width"] + 1, f"Pin right {b['x'] + b['width']} must be inside canvas right at {vp_name}")
 
             # Must be completely clear of (below) HUD preset toolbar
             self.assertGreaterEqual(
@@ -1080,6 +1080,104 @@ class PropulsionExplorerBrowserSmokeTests(unittest.TestCase):
         self.page.set_viewport_size({"width": 1280, "height": 800})
         self.page.wait_for_timeout(40)
         self.assertEqual(len(self.page_errors), 0, f"Single-pin test threw errors: {self.page_errors}")
+
+    def test_v0_1_r4_m1_capacity_shortfall_enlarged_pins_runtime_regression(self):
+        """V0.1-R4-M1 regression: capacity shortfall triggers deterministic conflict suppression with zero overlap and hittable pins."""
+        # Test on narrow mobile viewport where vertical capacity is tight
+        self.page.set_viewport_size({"width": 375, "height": 812})
+        self.page.wait_for_timeout(60)
+
+        # 1. Artificially inject enlarged pin dimensions (w=220px, h=50px) representing large-text accessibility styles
+        self.page.evaluate("""() => {
+            const style = document.createElement('style');
+            style.id = 'test-enlarged-pins';
+            style.textContent = '.label-pin { min-width: 220px !important; min-height: 50px !important; font-size: 1.2rem !important; padding: 12px 20px !important; }';
+            document.head.appendChild(style);
+        }""")
+        self.page.click(".view-preset-hud .hud-btn[data-view='isometric']")
+        self.page.wait_for_timeout(600)
+
+        # 2. Query visible pins: capacity shortfall must suppress at least one conflicting pin
+        enlarged_pins = self.page.locator(".label-pin:visible").all()
+        self.assertLess(len(enlarged_pins), 5, f"Capacity shortfall must suppress conflicting pins, found {len(enlarged_pins)}")
+        self.assertGreaterEqual(len(enlarged_pins), 2, "High-priority pins must remain visible")
+
+        canvas_box = self.page.locator("#viewport-container").bounding_box()
+        hud_box = self.page.locator(".view-preset-hud").bounding_box()
+        self.assertIsNotNone(canvas_box)
+        self.assertIsNotNone(hud_box)
+
+        boxes = []
+        for p in enlarged_pins:
+            b = p.bounding_box()
+            self.assertIsNotNone(b)
+            cid = p.get_attribute("id")
+            boxes.append((cid, b, p))
+
+            # Must be inside canvas container horizontally
+            self.assertGreaterEqual(b["x"], canvas_box["x"], f"Pin {cid} left edge {b['x']} outside canvas")
+            self.assertLessEqual(b["x"] + b["width"], canvas_box["x"] + canvas_box["width"] + 1, f"Pin {cid} right edge outside canvas")
+
+            # Must be clear of HUD toolbar
+            self.assertGreaterEqual(b["y"], hud_box["y"] + hud_box["height"], f"Pin {cid} occluded under HUD toolbar")
+
+        # 3. Explicit postcondition verification: zero pairwise bounding box overlap among all surviving pins
+        for i in range(len(boxes)):
+            for j in range(i + 1, len(boxes)):
+                id_a, box_a, _ = boxes[i]
+                id_b, box_b, _ = boxes[j]
+                horiz_sep = (box_a["x"] + box_a["width"] <= box_b["x"]) or (box_b["x"] + box_b["width"] <= box_a["x"])
+                vert_sep = (box_a["y"] + box_a["height"] <= box_b["y"]) or (box_b["y"] + box_b["height"] <= box_a["y"])
+                self.assertTrue(
+                    horiz_sep or vert_sep,
+                    f"Conflict suppression failed: collision detected between {id_a} and {id_b} in shortfall state"
+                )
+
+        # 4. Verify exact direct elementFromPoint resolution and real pointer click on every surviving pin
+        for cid, _, pin in boxes:
+            current_b = pin.bounding_box()
+            cx = current_b["x"] + current_b["width"] / 2
+            cy = current_b["y"] + current_b["height"] / 2
+
+            is_exact = self.page.evaluate(
+                "([x, y, id]) => document.elementFromPoint(x, y) === document.getElementById(id)",
+                [cx, cy, cid]
+            )
+            self.assertTrue(is_exact, f"elementFromPoint at ({cx}, {cy}) failed for {cid}")
+
+            self.page.mouse.click(cx, cy)
+            self.page.wait_for_timeout(60)
+            self.assertEqual(pin.get_attribute("aria-pressed"), "true", f"Clicking {cid} failed to set aria-pressed=true")
+
+            selected_id = self.page.evaluate("() => document.querySelector('.component-item-btn.selected')?.dataset?.id")
+            expected_id = cid.replace("label-pin-", "")
+            self.assertEqual(selected_id, expected_id, f"Clicking {cid} failed to select {expected_id}")
+
+        # 5. Verify quick-select chip bar retains ALL 5 components even during 3D label suppression
+        chips = self.page.locator(".chip-btn").all()
+        self.assertEqual(len(chips), 5, "Quick-select chip bar must retain all 5 components")
+
+        # Clicking chip for a suppressed component must select it successfully
+        self.page.click("#chip-support-mount")
+        self.page.wait_for_timeout(60)
+        self.assertEqual(
+            self.page.locator("#inspector-name").inner_text(),
+            "Structural Support Mount",
+            "Chip bar must successfully inspect support mount even if suppressed in 3D canvas"
+        )
+
+        # 6. Clean up: remove enlarged style and verify all 5 pins return in normal state
+        self.page.evaluate("() => document.getElementById('test-enlarged-pins')?.remove()")
+        self.page.click(".view-preset-hud .hud-btn[data-view='isometric']")
+        self.page.wait_for_timeout(600)
+
+        restored_pins = self.page.locator(".label-pin:visible").all()
+        self.assertEqual(len(restored_pins), 5, "All 5 pins must reappear when normal dimensions are restored")
+
+        # Restore desktop viewport
+        self.page.set_viewport_size({"width": 1280, "height": 800})
+        self.page.wait_for_timeout(40)
+        self.assertEqual(len(self.page_errors), 0, f"Enlarged pins regression test threw errors: {self.page_errors}")
 
 
 if __name__ == "__main__":
