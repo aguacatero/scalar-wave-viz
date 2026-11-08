@@ -18,17 +18,21 @@ The planned **interactive 3D lab** lets anyone:
 4. **Test it:** Find the source and uncertainty behind each result, and learn which controls would distinguish a real effect from ion wind, nearby surfaces, wires or measurement drift.
 5. **Plan it:** Eventually export *provisional* dimensions, material requirements, electrical inputs, missing specifications, a bill-of-materials outline, and a controlled test plan — **not a proven propulsion recipe**.
 
-### Visual Explorer V0 — Available Now in Browser
+### Visual Explorer V0 / V0.1 — Available Now in Browser
 
-The first working version (**V0**) of the 3D Propulsion Explorer is runnable directly in your web browser:
-- **Interactive 3D Geometry:** Orbit, zoom, and inspect an Exodus-inspired single-stage electrode assembly (US11511891B2 FIGS. 4–8) featuring a high-voltage blade cathode (-20 kV), a planar ground counter-electrode (0 V), solid dielectric potting block, and grounded chamber walls.
-- **Occlusion-Free Interior Picking:** Click or hover directly on interior components (blade, ground plate, dielectric potting, structural mount) straight through the outer transparent chamber walls via intelligent raycasting priority, verified across default isometric and alternate camera views with real canvas pointer interactions.
-- **Dynamic Field & Force Layers:** Switch between component geometry, signed electric field streamlines ($0\text{ V} \to -20\text{ kV}$) with color-coded $|\mathbf{E}|$, zero-voltage field extinction, and bounded schematic action-reaction force vectors ($[6.0, 30.0]\text{ mm}$, $F \propto V^2$).
-- **The Four Questions Tour:** Guided plain-language walkthrough answering *What am I seeing?*, *Why does it happen?*, *What changes it?*, and *How could we test it?*, rendered with accessible HTML math notation.
+The interactive 3D Propulsion Explorer is runnable directly in your web browser:
+- **Interactive 3D Geometry:** Orbit, zoom, and inspect an Exodus-inspired single-stage electrode assembly (US11511891B2 FIGS. 4–8) featuring a high-voltage blade cathode (-20 kV), a planar ground counter-electrode (0 V), solid dielectric potting block, grounded chamber walls, and structural insulating mount.
+- **Visual Atmosphere & Lighting (V0.1):** Studio laboratory lighting with cool cyan fill for electrode undersides, warm specular rim accents, a dual-zone coordinate ground grid, and a razor-sharp knife-edge apex highlight along the active cathode tip.
+- **Dynamic 3D Component Labels (V0.1):** Real-time billboard labels tracking component coordinates in 3D camera space, toggleable with the `L` key or HUD toolbar button.
+- **Animated Schematic Direction Markers (V0.1):** Signed electric field streamlines with animated directional markers demonstrating conventional field orientation ($\mathbf{E} = -\nabla\Phi$) pointing from Ground ($0\text{ V}$) to Blade ($-20\text{ kV}$). Strictly qualified as schematic orientation indicators—not physical charge carriers, wave propagation, or computed $|\mathbf{E}|$ magnitude. Completely extinguished at 0 V.
+- **Quick-Select Chip Bar & Full-Screen Mode (V0.1):** 1-click component quick-select toolbar for rapid selection on desktop and touch devices, alongside a full-screen laboratory mode toggling the sidebar (`S` key or HUD button).
+- **Occlusion-Free Interior Picking:** Click or hover directly on interior components straight through the outer transparent chamber walls via intelligent raycasting priority, verified across default isometric, Side, and Top views with real canvas pointer interactions.
+- **Beginner-Friendly Inspector (V0.1):** Plain-language descriptions of electrode roles, dielectric polarization, and mechanical counter-forces replacing raw internal strings, while preserving exact patent citations and Maxwell stress tensor formulas in expandable details.
 - **Action-Reaction Force Ledger:** Structured by physical system boundaries, demonstrating that internal electrostatic forces sum identically to zero across the isolated Device Under Test (Boundary A), while clearly separating external lab environment walls (Boundary B) and the closed universe (Boundary C).
+- **The Four Questions Tour:** Guided plain-language walkthrough answering *What am I seeing?*, *Why does it happen?*, *What changes it?*, and *How could we test it?*, rendered with accessible HTML math notation.
 - **Honest Provenance & Disclaimers:** Explicitly marked `WHOLE-BODY THRUST: NOT MEASURED / NOT ESTABLISHED`. No unverified thrust claims, zero fabricated force numbers, explicit non-modeled tip radius metadata tag, and accurate patent citations (FIGS. 6B, 21, 23A for dielectric potting).
 - **What-If Sandbox:** Explore how voltage ($0 - 50\text{ kV}$, scaling $\propto V^2$), dielectric permittivity (visual material proxy $\varepsilon_r \in [1, 5]$), and surface-to-surface electrode gap ($d \ge 16\text{ mm}$ maintaining $\ge 5.0\text{ mm}$ positive clearance from dielectric potting) alter field gradients, with zero GPU memory leaks verified by instrumented prototype disposal.
-- **Accessible & Responsive Design:** Crash-free keyboard navigation, modal focus trapping, and responsive layout verified on mobile screens down to 375px. Tested with automated browser smoke suite.
+- **Accessible & Mobile-First Design (V0.1):** Crash-free keyboard navigation, modal focus trapping, and responsive layouts verified on mobile viewports at 375px (iPhone SE) and 390px (iPhone 12/13/14) with zero horizontal overflow.
 
 ![Propulsion Explorer 3D V0 Preview](assets/propulsion_explorer_v0_preview.png)
 
@@ -53,19 +57,28 @@ The question driving the project is **not "How do we prove Exodus is right?"** I
 
 **Build a useful, clearly labeled educational visualizer early; never describe unverified physics as demonstrated thrust.** Passing tests and attractive plots do not replace physical measurement.
 
-## Project progress — verified November 3, 2026
+## Project progress — verified November 6, 2026
 
 ![Scientific roadmap: P0 and P1 accepted and merged; P2 active in draft review; P3 and P4 pending; 2 of 5 gates accepted](assets/research-progress.svg)
 
 **2 of 5 independently reviewed scientific phases are accepted.** This is *not* a percentage of product completion or proof of unusual propulsion. Educational visual milestones (Track A) proceed in parallel with scientific remediation (Track B).
 
-- **Track A (Interactive 3D Explorer) — V0 R5 REMEDIATED & READY FOR INDEPENDENT RE-REVIEW:**
-  - **V0 — FIRST WORKING 3D EXPLORER (ROUND 5):** Complete standalone browser application delivered on branch `v0-propulsion-explorer-3d` ([Issue #13](https://github.com/aguacatero/scalar-wave-viz/issues/13), [Draft PR #14](https://github.com/aguacatero/scalar-wave-viz/pull/14)). Remediated all findings from ChatGPT independent re-review V0 R4 (`pullrequestreview-5744233825`):
-    - `V0-R4-F1`: Expanded alternate-view canvas pointer picking to cover all 5 components in both Side and Top views with real `page.mouse.move(x, y)` and `page.mouse.click(x, y)`, asserting `#banner-text` hover updates, inspector badge and title updates, and unique button selection; eliminated top view camera polar singularity (`camera.up.set(0, 0, -1)`).
-    - `V0-R4-M1`: Built runtime WebGL bounding-box regression test (`test_runtime_gap_slider_mesh_bounding_boxes`) querying `THREE.Box3().setFromObject(mesh)` directly across slider sweeps (16, 25, 50 mm), proving $x_{\text{ground,near}} - x_{\text{blade,tip}} == d$ and maintaining $\ge 5.0\text{ mm}$ physical clearance from dielectric potting ($x_{\text{diel,max}} = 11.0\text{ mm}$).
-    - `V0-R4-M2`: Formulated full vacuum Maxwell stress tensor component $T_{xx} = \varepsilon_0(E_x^2 - \frac{1}{2}|\mathbf{E}|^2) = \frac{1}{2}\varepsilon_0(E_x^2 - E_y^2 - E_z^2)$ across HTML, tour, and provenance metadata, explicitly qualifying $\frac{1}{2}\varepsilon_0 E_x^2$ as an idealized 1D approximation strictly valid only where transverse fields vanish.
-    - `V0-R4-M3`: Separated physical quadratic force scaling from visual arrow legibility encoding in `#inspector-force`: `[Physical Trend: (V/20)² = ...x | Visual Arrow: ... mm bounded legibility]`.
-    - Verification: 32 unit tests passing; 14 browser smoke tests passing; 118 total tests passing across repo.
+- **Track A (Interactive 3D Explorer) — V0.1 R5 REMEDIATED & READY FOR INDEPENDENT RE-REVIEW:**
+  - **V0 — BASELINE ACCEPTED (ROUND 5):** Complete standalone browser application delivered on branch `v0-propulsion-explorer-3d` ([Issue #13](https://github.com/aguacatero/scalar-wave-viz/issues/13), [Draft PR #14](https://github.com/aguacatero/scalar-wave-viz/pull/14)), accepted by ChatGPT independent review V0 R5 at commit `5d8b822e8771dc19a4bf2a27bfc013e3662e03ea`.
+  - **V0.1 — VISUAL EXPERIENCE & UX POLISH (ROUND 5 REMEDIATION):** Stacked feature branch `feat/v0-1-visual-ux-polish` ([Draft PR #15](https://github.com/aguacatero/scalar-wave-viz/pull/15)). Remediated all findings from ChatGPT independent reviews V0.1 R1 (`pullrequestreview-5808774072`), V0.1 R2 (`pullrequestreview-5809773862`), V0.1 R3 (`pullrequestreview-5813174089`), and V0.1 R4 (`pullrequestreview-5814758576`):
+    - `V0.1-R4-M1`: Implemented deterministic postcondition conflict suppression fallback for label collision relaxation when vertical canvas capacity or enlarged text cannot accommodate all labels simultaneously; prioritizes components (`blade_electrode` > `ground_electrode` > `dielectric_block` > `enclosure_walls` > `support_mount`, with selected item prioritized at +100) and iteratively suppresses conflicting pins until an explicit zero-overlap postcondition holds; backed by Node-driven counterexample test in `test_v0_propulsion_explorer.py`, runtime browser regression test with enlarged styles in `test_v0_browser_smoke.py`, and immediate pin highlighting in `selectComponent()`.
+    - `V0.1-R4-LOW`: Corrected single-pin browser test horizontally against actual `canvas_box` bounds on desktop; synchronized `docs/ROADMAP.md` stage status.
+    - `V0.1-R3-F1`: Clamped single-pin layout before early-return guard in `resolveLabelCollisions`, ensuring single visible chamber pin (when Component Geometry is toggled OFF) is strictly clamped within canvas bounds and below `.view-preset-hud` toolbar (`y >= topMargin`, `y <= maxY`) across mobile viewports (375px/390px) and desktop; backed by Playwright browser regression test and screenshot `assets/propulsion_explorer_v0_single_pin.png`.
+    - `V0.1-R3-M1`: Expanded cross-preset interaction verification in `test_v0_browser_smoke.py`: asserts exact 5-pin ID set and zero bounding-box overlap across all 4 camera presets (`isometric`, `side`, `front`, `top`) and viewports (`1280x800`, `390x844`, `375x812`), with direct button identity assertions `document.elementFromPoint(cx, cy) === pinElement` (validating `.label-pin * { pointer-events: none; }`) and real pointer clicks driving inspector updates.
+    - `V0.1-R3-M2`: Removed formal/unconditional guarantee claims across code comments, tests, and documentation (re-qualified as *multi-pass screen-space collision relaxation with vertical staggering and bounded clearance fallback*); added vertical capacity shortfall check with dynamic margin compression, secondary horizontal staggering fallback, and dynamic clearance measurement for HUD preset toolbar and bottom component chip bar.
+    - `V0.1-R2-F1`: Repositioned scientific-legend HUD (`.layer-legend-hud`) below camera preset HUD with constrained max-width (290px), preventing visual overlap across desktop and tablet viewports.
+    - `V0.1-R2-F2`: Screen-space label collision relaxation with transparent child pointer events (`.label-pin * { pointer-events: none; }`), distinct 3D anchor points, and 1D layout sweep on mobile/desktop, ensuring 100% reliable center pointer hit-testing (`elementFromPoint`) and selection clicks on all 5 components with zero visual overlap across viewports (1280x800 desktop, 390x844 iPhone 12/13/14, 375x812 iPhone SE) and camera presets (Isometric, Side, Front, Top).
+    - `V0.1-R2-M1`: Synchronized PR #15 body and documentation with current 140-test suite (41 V0 unit + 27 browser smoke + 35 P0 + 16 P1 numerics + 21 P1 wave) and schematic-only direction marker semantics.
+    - `V0.1-R1-F1`: Billboard labels made fully interactive (`pointer-events: auto`, `type="button"`, `aria-label`, `aria-pressed`); container made accessible region (`role="region" aria-label="3D Component Labels"`) without contradictory `aria-hidden`; interior pins cleanly hide when geometry layer is toggled off; verified with real `page.mouse.click` and keyboard `Enter` activation.
+    - `V0.1-R1-F2`: Streamline direction markers explicitly qualified as schematic orientation indicators only ($\mathbf{E} = -\nabla\Phi$), removing all claims of physical particles, charge transport, wave propagation, or computed $|\mathbf{E}|$ magnitude across UI, legend, and documentation.
+    - `V0.1-R1-M1`: Quick-select chip bar dynamically synchronizes with voltage slider across sweeps (`Blade (0 V OFF)`, `Blade (-20 kV)`, `Blade (-50 kV)`), verified in browser smoke tests.
+    - `V0.1-R1-M2`: Inspector card dynamically separates unenergized 0 V state (`Field OFF at 0 V — Zero Electrostatic Traction`) from energized state, avoiding unsupported pairwise equality claims on the two electrodes alone and qualifying multi-body forces with dielectric and chamber coupling.
+    - Verification: 41 V0 unit tests passing; 27 browser smoke tests passing; 140 total tests passing across repo. Preserves unmerged PR #14 and accepted P0/P1 baselines.
 - **Track B (Scientific Acceptance Gates) — 2 OF 5 ACCEPTED:**
   - **P0 — ACCEPTED AND MERGED:** Conventional electrostatics baseline, [PR #5](https://github.com/aguacatero/scalar-wave-viz/pull/5).
   - **P1 — ACCEPTED AND MERGED:** Numerical validation and force accounting, [PR #10](https://github.com/aguacatero/scalar-wave-viz/pull/10). Accepted R11 scientific SHA `2a87abd0f8de873899f541d521d303d0f4462954`; **merged** in main commit `8e1fdb32655d073002ae5a794b08e48f19a78a0f`.
@@ -73,7 +86,7 @@ The question driving the project is **not "How do we prove Exodus is right?"** I
   - **P3 — PENDING:** Physical scalar-field and nuclear hypotheses with traceable evidence and falsifiable predictions.
   - **P4 — PENDING SCIENTIFIC GATE:** Final validated research dashboard.
 
-**Next user-facing milestone:** expand V0 into V1 with direct solver-bound recalculation and scenario presets. **Next scientific milestone:** resolve P2's independent R10 findings. Neither is claimed complete.
+**Next user-facing milestone:** independent review of V0.1 UX polish, then V1 solver integration. **Next scientific milestone:** resolve P2's independent R10 findings. Neither is claimed complete.
 
 **Standing Antigravity rule:** At the start and end of every substantive implementation session, inspect and synchronize the README with live GitHub status. Any substantive repository change must carry its README update in the **same branch/PR**, including plain-English status and next steps. A no-change review should still explicitly verify the README without fabricating an update. Follow [AGENTS.md](AGENTS.md#mandatory-readme-progress-synchronization--every-project-update). This rule does not itself run a background scheduler.
 
@@ -85,7 +98,7 @@ Start with the [visual product vision](docs/PROPULSION_EXPLORER_VISION.md) and [
 
 ## What already runs
 
-### 3D Propulsion Explorer (V0) — Browser Laboratory
+### 3D Propulsion Explorer (V0 / V0.1) — Browser Laboratory
 
 Run the zero-friction local launcher from repository root:
 

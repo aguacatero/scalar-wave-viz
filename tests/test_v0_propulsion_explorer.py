@@ -261,6 +261,12 @@ class PropulsionExplorerJSLogicTests(unittest.TestCase):
         js_path = EXPLORER_DIR / "explorer.js"
         with open(js_path, "r", encoding="utf-8") as f:
             self.js = f.read()
+        html_path = EXPLORER_DIR / "index.html"
+        with open(html_path, "r", encoding="utf-8") as f:
+            self.html = f.read()
+        css_path = EXPLORER_DIR / "explorer.css"
+        with open(css_path, "r", encoding="utf-8") as f:
+            self.css = f.read()
 
     def test_no_invalid_orbit_controls_method_calls(self):
         """V0-R1-F3 regression: verify nonexistent rotateLeft/rotateUp/dollyIn are NOT called."""
@@ -337,6 +343,142 @@ class PropulsionExplorerJSLogicTests(unittest.TestCase):
         """V0-R3-F1 regression: verify getComponentScreenCoords is implemented and exposed for real pointer testing."""
         self.assertIn("function getComponentScreenCoords(id)", self.js)
         self.assertIn("getComponentScreenCoords: getComponentScreenCoords", self.js)
+
+    def test_v0_1_r1_f1_billboard_label_pins_interactive_and_accessible(self):
+        """V0.1-R1-F1 regression: billboard label pins have interactive pointer events, type='button', and ARIA."""
+        # Container is an accessible region without contradictory aria-hidden
+        self.assertIn('id="labels-container" class="labels-container" role="region" aria-label="3D Component Labels"', self.html)
+        self.assertNotIn('id="labels-container" class="labels-container" aria-hidden="true"', self.html)
+
+        # Pin buttons in JS
+        self.assertIn("pin.type = 'button';", self.js)
+        self.assertIn("pin.setAttribute('aria-label', `Select ${def.name}`);", self.js)
+        self.assertIn("pin.setAttribute('aria-pressed', isSelected ? 'true' : 'false');", self.js)
+        self.assertIn("e.stopPropagation();", self.js)
+
+        # CSS has pointer-events: auto on .label-pin
+        self.assertIn("pointer-events: auto;", self.css)
+
+    def test_v0_1_r1_f2_streamline_markers_qualified_not_particles_or_field_magnitude(self):
+        """V0.1-R1-F2 regression: streamline markers qualified as schematic orientation only, not particles or |E|."""
+        self.assertIn("isFieldDirectionMarkers: true", self.js)
+        self.assertIn("Schematic Orientation Only, Not Computed |E| Magnitude or Charge Flow", self.js)
+        self.assertIn("Schematic Orientation Only, Not Computed |E| Magnitude or Charge Flow", self.html)
+        self.assertIn("Electric Field Direction (OFF at 0 V — Zero Field)", self.js)
+
+    def test_v0_1_r1_m1_chip_bar_synchronizes_with_voltage(self):
+        """V0.1-R1-M1 regression: chip bar blade label dynamically updates from voltage state."""
+        self.assertIn("id=\"chip-blade-label\"", self.html)
+        self.assertIn("const chipBlade = document.getElementById('chip-blade-label');", self.js)
+        self.assertIn("chipBlade.textContent = currentVoltageKV > 0", self.js)
+        self.assertIn("'Blade (0 V OFF)'", self.js)
+
+    def test_v0_1_r1_m2_inspector_role_and_status_qualified(self):
+        """V0.1-R1-M2 regression: inspector card qualifies multi-body forces and specifies 0 V null state."""
+        # 0 V null state
+        self.assertIn("Field OFF at 0 V — Zero Electrostatic Traction (Unenergized)", self.js)
+        self.assertIn("electrostatic forces are identically zero", self.js)
+
+        # Energized multi-body qualification (no unconditional pairwise equality)
+        self.assertIn("Pairwise equality between these two electrodes alone is not assumed", self.js)
+        self.assertIn("not isolated pairwise equal", self.js)
+
+    def test_v0_1_r2_f1_legend_hud_non_overlapping_placement_and_max_width(self):
+        """V0.1-R2-F1 regression: legend HUD positioned below preset toolbar with constrained max-width."""
+        self.assertIn("top: 4.5rem;", self.css)
+        self.assertIn("max-width: 290px;", self.css)
+
+    def test_v0_1_r2_f2_collision_avoidance_algorithm_and_pointer_events_in_js_and_css(self):
+        """V0.1-R2-F2 regression: billboard label pins have 2D collision avoidance and transparent child pointer events."""
+        # CSS transparent pointer events on child spans
+        self.assertIn(".label-pin *", self.css)
+        self.assertIn("pointer-events: none;", self.css)
+
+        # JS 2D Screen-Space collision avoidance logic
+        self.assertIn("function resolveLabelCollisions", self.js)
+        self.assertIn("overlapX > 0 && overlapY > 0", self.js)
+        self.assertIn("shiftY", self.js)
+        self.assertIn("shiftX", self.js)
+
+    def test_v0_1_r2_f2_distinct_3d_anchor_coordinates(self):
+        """V0.1-R2-F2 regression: distinct 3D anchor points prevent overlapping baseline projections."""
+        self.assertIn("THREE.Vector3(-24, 14, 8)", self.js)
+        self.assertIn("THREE.Vector3(currentGapMM + 14, 20, -8)", self.js)
+        self.assertIn("THREE.Vector3(0, 36, 14)", self.js)
+
+    def test_v0_1_r3_f1_and_m2_single_pin_clamp_and_capacity_fallback_in_js(self):
+        """V0.1-R3-F1 & M2: clamp runs before activePins.length <= 1 check and capacity shortfall check exists."""
+        # 1. V0.1-R3-F1: Verify clamp loop occurs before activePins.length <= 1
+        clamp_idx = self.js.find("item.x = Math.max(item.w / 2 + pad")
+        early_return_idx = self.js.find("if (activePins.length <= 1) return;")
+        self.assertNotEqual(clamp_idx, -1)
+        self.assertNotEqual(early_return_idx, -1)
+        self.assertLess(clamp_idx, early_return_idx, "Clamping must occur before early return on activePins.length <= 1")
+
+        # 2. V0.1-R3-M2: Capacity shortfall check exists and no unconditional guarantee claims in comments
+        self.assertIn("totalPinHeight", self.js)
+        self.assertIn("neededSpan > availableSpan", self.js)
+        self.assertNotIn("provably collision-free", self.js)
+        self.assertNotIn("guarantee zero overlap", self.js)
+
+    def test_v0_1_r4_m1_capacity_shortfall_deterministic_conflict_suppression_and_postcondition(self):
+        """V0.1-R4-M1: deterministic conflict suppression resolves capacity shortfall counterexample with zero overlap."""
+        # 1. Structural check for conflict resolution loop and priority rankings in JS
+        self.assertIn("priority: 5", self.js)
+        self.assertIn("priority: 1", self.js)
+        self.assertIn("hasOverlap", self.js)
+        self.assertIn("collisionPair", self.js)
+        self.assertIn("victim.pin.style.display = 'none'", self.js)
+
+        # 2. Node execution test verifying exact counterexample (rect: 375x380, 5 pins w=220, h=50)
+        node_script = """
+        const js = require('fs').readFileSync('explorer/explorer.js', 'utf8');
+        const match = js.match(/function resolveLabelCollisions[\\s\\S]*?\\n  \\}/);
+        if (!match) throw new Error("resolveLabelCollisions not found");
+
+        global.document = {
+            querySelector: () => null,
+            getElementById: () => null
+        };
+
+        eval(match[0]);
+
+        const rect = { width: 375, height: 380 };
+        const pins = [
+            { id: "blade_electrode", x: 187, y: 180, w: 220, h: 50, priority: 5, pin: { style: {} } },
+            { id: "ground_electrode", x: 187, y: 180, w: 220, h: 50, priority: 4, pin: { style: {} } },
+            { id: "dielectric_block", x: 187, y: 180, w: 220, h: 50, priority: 3, pin: { style: {} } },
+            { id: "enclosure_walls", x: 187, y: 180, w: 220, h: 50, priority: 2, pin: { style: {} } },
+            { id: "support_mount", x: 187, y: 180, w: 220, h: 50, priority: 1, pin: { style: {} } }
+        ];
+
+        resolveLabelCollisions(pins, rect);
+
+        function overlaps(a, b) {
+            const aLeft = a.x - a.w / 2, aRight = a.x + a.w / 2;
+            const aTop = a.y - a.h, aBottom = a.y;
+            const bLeft = b.x - b.w / 2, bRight = b.x + b.w / 2;
+            const bTop = b.y - b.h, bBottom = b.y;
+            return (aLeft < bRight && aRight > bLeft && aTop < bBottom && aBottom > bTop);
+        }
+
+        for (let i = 0; i < pins.length; i++) {
+            for (let j = i + 1; j < pins.length; j++) {
+                if (overlaps(pins[i], pins[j])) {
+                    throw new Error(`Collision between ${pins[i].id} and ${pins[j].id}`);
+                }
+            }
+        }
+        console.log(JSON.stringify({ surviving: pins.map(p => p.id), count: pins.length }));
+        """
+        import subprocess, json
+        res = subprocess.run(["node", "-e", node_script], capture_output=True, text=True, check=True)
+        data = json.loads(res.stdout.strip())
+        self.assertLess(data["count"], 5, "Capacity shortfall must suppress conflicting pins")
+        self.assertGreaterEqual(data["count"], 2, "High-priority pins must survive")
+        self.assertIn("blade_electrode", data["surviving"], "Highest priority blade pin must survive")
+        self.assertNotIn("support_mount", data["surviving"], "Lowest priority mount pin must be suppressed in shortfall")
+
 
 
 class PropulsionExplorerLauncherTests(unittest.TestCase):
