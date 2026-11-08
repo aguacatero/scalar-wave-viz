@@ -8,7 +8,7 @@ Read [the product vision](PROPULSION_EXPLORER_VISION.md) and [the scientific cha
 
 ## Track A — interactive visual explorer (planned; independent of P0–P4 acceptance count)
 
-- [ ] **V0: Useful first 3D view.** Documented electrode geometry with orbit/zoom, component selection, schematic or computed electric-field layers, local force arrows and mechanical reactions, and a plain-English tour. Clearly distinguish illustrative overlays from solved fields.
+- [x] **V0: Useful first 3D view.** Documented electrode geometry with orbit/zoom, component selection, schematic or computed electric-field layers, local force arrows and mechanical reactions, and a plain-English tour. Clearly distinguish illustrative overlays from solved fields. Implemented on branch `v0-propulsion-explorer-3d` ([Issue #13](https://github.com/aguacatero/scalar-wave-viz/issues/13), [Draft PR #14](https://github.com/aguacatero/scalar-wave-viz/pull/14)); R5 remediating independent review findings V0-R4-F1 and M1–M3 prepared for re-review.
 - [ ] **V1: Interactive inputs.** Voltage, geometry, and cited material-property controls, tied to recalculation when the solver supports it. Expose units, parameter sources, uncertainty and what-if assumptions.
 - [ ] **V2: Whole-device force story.** H0 conventional force ledger vs H1 sourced patent prediction vs H2 conventional confounders, plus environmental momentum paths and null controls.
 - [ ] **V3: Test-article planner.** Provisional geometry/dimensions, candidate materials, electrical inputs, missing specifications, research BOM outline and independent test conditions. No implied high-voltage safety certification or functioning propulsion design.
@@ -39,7 +39,7 @@ Read [the product vision](PROPULSION_EXPLORER_VISION.md) and [the scientific cha
 - [ ] Validate domain-clearance, dielectric/interface, axial and full-device uncertainty estimates; export strict finite scientific evidence.
 - [ ] Independent review sign-off at the correct SHA and **separate owner-authorized merge**.
 
-**Verified as of 2026-11-01:** [Issue #7](https://github.com/aguacatero/scalar-wave-viz/issues/7), [Draft PR #11](https://github.com/aguacatero/scalar-wave-viz/pull/11); the [independent R8 review](https://github.com/aguacatero/scalar-wave-viz/pull/11#issuecomment-6564571034) identified five blocking HIGH issues. [R9 remediation](https://github.com/aguacatero/scalar-wave-viz/pull/11#issuecomment-6565425536) was submitted at SHA `661681d9a6483dea5df77b68442730e7afc18889` with [CI 126 tests passing](https://github.com/aguacatero/scalar-wave-viz/actions/runs/41360582041), **but awaits independent R9 review**. P2 is scientifically unaccepted, draft and unmerged; do not start P3 scientific work.
+**Verified as of 2026-11-01:** [Issue #7](https://github.com/aguacatero/scalar-wave-viz/issues/7), [Draft PR #11](https://github.com/aguacatero/scalar-wave-viz/pull/11); the [independent R9 review](https://github.com/aguacatero/scalar-wave-viz/pull/11#issuecomment-6566089334) concluded `CHANGES REQUIRED — P2 R9 SCIENTIFIC BASELINE NOT ACCEPTED` (findings tracked for R10: full-length FIG. 21 refinement, domain sensitivity bounds, 3D dielectric virtual work benchmark, multi-body discretization extrapolation, and missing-term reporting). P2 remains scientifically unaccepted, draft and unmerged; do not start P3 scientific work. V0 visual explorer development proceeds in parallel on Track A.
 
 ### P3 — physical scalar and nuclear hypotheses (PENDING)
 
