@@ -164,7 +164,8 @@ class PropulsionExplorerBrowserSmokeTests(unittest.TestCase):
         self.assertTrue(canvas.is_visible())
 
         legend_blade = self.page.locator("#legend-blade-label").inner_text()
-        self.assertIn("Blade (-20.0 kV)", legend_blade)
+        self.assertIn("Blade", legend_blade)
+        self.assertIn("0.0 kV", legend_blade)
 
     def test_keyboard_navigation_no_exceptions(self):
         """V0-R1-F3 / V0-R2-M3: verify all 10 keyboard shortcuts execute cleanly without throwing errors."""
@@ -181,6 +182,8 @@ class PropulsionExplorerBrowserSmokeTests(unittest.TestCase):
     def test_what_if_sliders_dom_synchronization(self):
         """V0-R1-M1 / V0-R2-M3: verify What-If sliders update DOM values and extinguish at 0 V."""
         self.page.click("#tab-btn-sandbox")
+        # Ensure force layer is enabled for What-If sandbox testing
+        self.page.evaluate("() => { const el = document.getElementById('toggle-forces'); if (el) { el.checked = true; } }")
         self.assertTrue(self.page.locator("#tab-sandbox").is_visible())
 
         # Voltage down to 0 kV
@@ -377,6 +380,11 @@ class PropulsionExplorerBrowserSmokeTests(unittest.TestCase):
         """
         # Switch to Sandbox tab
         self.page.click("#tab-btn-sandbox")
+        # Ensure force layer is enabled for What-If sandbox testing
+        self.page.evaluate("() => { const el = document.getElementById('toggle-forces'); if (el) { el.checked = true; } }")
+        self.page.fill("#slider-voltage", "20")
+        self.page.dispatch_event("#slider-voltage", "input")
+        self.page.wait_for_timeout(30)
 
         # Install prototype disposal tracking hooks
         self.page.evaluate("""() => {
@@ -441,6 +449,8 @@ class PropulsionExplorerBrowserSmokeTests(unittest.TestCase):
         5. Arrow endpoints stay strictly inside enclosure chamber [-80, 80] mm.
         """
         self.page.click("#tab-btn-sandbox")
+        # Ensure force layer is enabled for What-If sandbox testing
+        self.page.evaluate("() => { const el = document.getElementById('toggle-forces'); if (el) { el.checked = true; } }")
 
         # 1. At 0 kV: extinguished
         self.page.fill("#slider-voltage", "0")
@@ -529,14 +539,26 @@ class PropulsionExplorerBrowserSmokeTests(unittest.TestCase):
         self.assertIn(result.get("id"), {"blade_electrode", "dielectric_block", "ground_electrode", "support_mount"})
 
     def test_guided_tour_and_help_modals(self):
-        """V0-R1-M4: verify Guided Tour and Help modals open, trap focus, and dismiss on Escape."""
-        self.page.click("#btn-start-tour")
-        tour_modal = self.page.locator("#tour-modal")
-        self.assertTrue(tour_modal.is_visible())
+        """V0.2 regression: verify nonblocking Guided Learning panel and Help modal."""
+        # V0.2: Learning panel is open and nonblocking by default
+        learning_panel = self.page.locator("#learning-panel")
+        self.assertTrue(learning_panel.is_visible())
 
-        self.page.click("#tour-btn-close")
-        self.assertFalse(tour_modal.is_visible())
+        # Verify no centered darkened tour-modal exists
+        self.assertEqual(self.page.locator("#tour-modal").count(), 0)
 
+        # Toggle learning panel collapse and expand
+        self.page.click("#btn-toggle-guide")
+        self.page.wait_for_timeout(300)
+        has_collapsed = self.page.evaluate("() => document.getElementById('app-layout').classList.contains('guide-collapsed')")
+        self.assertTrue(has_collapsed)
+
+        self.page.click("#btn-toggle-guide")
+        self.page.wait_for_timeout(300)
+        has_collapsed_after = self.page.evaluate("() => document.getElementById('app-layout').classList.contains('guide-collapsed')")
+        self.assertFalse(has_collapsed_after)
+
+        # Help modal opens and traps focus, dismisses on Escape
         self.page.click("#btn-toggle-help")
         help_modal = self.page.locator("#help-modal")
         self.assertTrue(help_modal.is_visible())
@@ -567,6 +589,8 @@ class PropulsionExplorerBrowserSmokeTests(unittest.TestCase):
         3. UI inspector retains tip radius metadata and surface gap notes.
         """
         self.page.click("#tab-btn-sandbox")
+        # Ensure force layer is enabled for What-If sandbox testing
+        self.page.evaluate("() => { const el = document.getElementById('toggle-forces'); if (el) { el.checked = true; } }")
 
         gap_settings = [16, 25, 50]
         for gap in gap_settings:
@@ -636,6 +660,8 @@ class PropulsionExplorerBrowserSmokeTests(unittest.TestCase):
         ]
 
         self.page.click("#tab-btn-sandbox")
+        # Ensure force layer is enabled for What-If sandbox testing
+        self.page.evaluate("() => { const el = document.getElementById('toggle-forces'); if (el) { el.checked = true; } }")
         for v, expected_trend, expected_arrow in test_voltages:
             self.page.fill("#slider-voltage", str(v))
             self.page.dispatch_event("#slider-voltage", "input")
@@ -651,6 +677,8 @@ class PropulsionExplorerBrowserSmokeTests(unittest.TestCase):
                 self.assertIn(expected_trend, force_text, f"Expected '{expected_trend}' at V={v} kV; got: '{force_text}'")
                 self.assertIn(expected_arrow, force_text, f"Expected '{expected_arrow}' at V={v} kV; got: '{force_text}'")
             self.page.click("#tab-btn-sandbox")
+        # Ensure force layer is enabled for What-If sandbox testing
+        self.page.evaluate("() => { const el = document.getElementById('toggle-forces'); if (el) { el.checked = true; } }")
 
     def test_chip_bar_component_quick_select(self):
         """V0.1 regression: verify accessible component quick-select chip bar selects all 5 components."""
@@ -780,6 +808,8 @@ class PropulsionExplorerBrowserSmokeTests(unittest.TestCase):
         pin_label = self.page.locator("#label-pin-blade_electrode .label-pin-text")
 
         self.page.click("#tab-btn-sandbox")
+        # Ensure force layer is enabled for What-If sandbox testing
+        self.page.evaluate("() => { const el = document.getElementById('toggle-forces'); if (el) { el.checked = true; } }")
 
         test_voltages = [
             ("0", "Blade (0 V OFF)"),
@@ -801,6 +831,12 @@ class PropulsionExplorerBrowserSmokeTests(unittest.TestCase):
 
     def test_inspector_role_and_status_at_zero_and_energized_voltage(self):
         """V0.1-R1-M2 regression: inspector card qualifies multi-body forces and specifies unenergized 0 V state."""
+        # Set voltage to nominal 20 kV
+        self.page.click("#tab-btn-sandbox")
+        self.page.fill("#slider-voltage", "20")
+        self.page.dispatch_event("#slider-voltage", "input")
+        self.page.wait_for_timeout(30)
+
         # Select ground electrode at nominal 20 kV
         self.page.click("#tab-btn-layers")
         self.page.click(".component-item-btn[data-id='ground_electrode']")
@@ -832,16 +868,16 @@ class PropulsionExplorerBrowserSmokeTests(unittest.TestCase):
         """V0.1-R1-F2 regression: electric field legend qualifies schematic orientation and distinguishes 0 V extinction."""
         legend_field = self.page.locator("#legend-field-label")
 
-        # At default 20 kV
-        self.assertIn("Schematic Orientation Only, Not Computed |E| Magnitude or Charge Flow", legend_field.inner_text())
+        # At initial 0 kV (Chapter 1)
+        self.assertIn("Electric Field Direction (OFF at 0 V — Zero Field)", legend_field.inner_text())
 
-        # At 0 kV
+        # At energized 20 kV (Chapter 2 or sandbox)
         self.page.click("#tab-btn-sandbox")
-        self.page.fill("#slider-voltage", "0")
+        self.page.fill("#slider-voltage", "20")
         self.page.dispatch_event("#slider-voltage", "input")
         self.page.wait_for_timeout(30)
 
-        self.assertIn("Electric Field Direction (OFF at 0 V — Zero Field)", legend_field.inner_text())
+        self.assertIn("Schematic Orientation Only, Not Computed |E| Magnitude or Charge Flow", legend_field.inner_text())
 
         self.assertEqual(len(self.page_errors), 0, f"Field legend check threw errors: {self.page_errors}")
 
@@ -1178,6 +1214,158 @@ class PropulsionExplorerBrowserSmokeTests(unittest.TestCase):
         self.page.set_viewport_size({"width": 1280, "height": 800})
         self.page.wait_for_timeout(40)
         self.assertEqual(len(self.page_errors), 0, f"Enlarged pins regression test threw errors: {self.page_errors}")
+
+    def test_v0_2_six_chapter_navigation_and_scene_synchronization(self):
+        """V0.2 regression: verify 6-chapter guided tour navigation and dynamic scene synchronization."""
+        # 1. Chapter 1: Initial state
+        title_el = self.page.locator("#guide-chapter-title")
+        self.assertIn("1. Meet the Device", title_el.inner_text())
+        self.assertIn("Component Focus", self.page.locator("#scene-annotation-card").inner_text())
+
+        # Chapter 1 prev button is disabled
+        self.assertTrue(self.page.locator("#guide-btn-prev").is_disabled())
+
+        # 2. Navigate to Chapter 2: Turn on the Electricity
+        self.page.click("#guide-btn-next")
+        self.page.wait_for_timeout(200)
+        self.assertIn("2. Turn on the Electricity", title_el.inner_text())
+        self.assertIn("Streamlines", self.page.locator("#scene-annotation-card").inner_text())
+        # Check scene voltage synchronized to 20 kV
+        val_voltage = self.page.locator("#val-voltage").inner_text()
+        self.assertIn("-20.0 kV", val_voltage)
+        # Check field lines visible
+        field_vis = self.page.evaluate("() => window.__explorer.fieldGroup.visible")
+        self.assertTrue(field_vis)
+
+        # 3. Navigate to Chapter 3: Follow the Forces
+        self.page.click("#guide-btn-next")
+        self.page.wait_for_timeout(200)
+        self.assertIn("3. Follow the Forces", title_el.inner_text())
+        self.assertIn("Action & Reaction", self.page.locator("#scene-annotation-card").inner_text())
+        forces_vis = self.page.evaluate("() => window.__explorer.forceGroup.visible")
+        self.assertTrue(forces_vis)
+
+        # 4. Navigate to Chapter 4: Can the Whole Device Move?
+        self.page.click("#guide-btn-next")
+        self.page.wait_for_timeout(200)
+        self.assertIn("4. Can the Whole Device Move?", title_el.inner_text())
+        self.assertIn("No Net Propulsion", self.page.locator("#scene-annotation-card").inner_text())
+        # Check Force Ledger tab automatically activated
+        ledger_panel = self.page.locator("#tab-ledger")
+        self.assertTrue(ledger_panel.is_visible())
+        self.assertEqual(self.page.locator("#tab-btn-ledger").get_attribute("aria-selected"), "true")
+
+        # 5. Navigate to Chapter 5: What are Scalar Waves?
+        self.page.click("#guide-btn-next")
+        self.page.wait_for_timeout(200)
+        self.assertIn("5. What", title_el.inner_text())
+        self.assertIn("Scalar Wave", self.page.locator("#scene-annotation-card").inner_text())
+
+        # 6. Navigate to Chapter 6: How Could We Test It?
+        self.page.click("#guide-btn-next")
+        self.page.wait_for_timeout(200)
+        self.assertIn("6. How Could We Test", title_el.inner_text())
+        self.assertIn("Testing Reality", self.page.locator("#scene-annotation-card").inner_text())
+        next_btn = self.page.locator("#guide-btn-next")
+        self.assertEqual(next_btn.inner_text(), "Finish Tour")
+
+        # Stepper direct jump back to Chapter 2
+        self.page.click(".chapter-step-btn[data-chapter='1']")
+        self.page.wait_for_timeout(200)
+        self.assertIn("2. Turn on the Electricity", title_el.inner_text())
+
+        # Back button returns to Chapter 1
+        self.page.click("#guide-btn-prev")
+        self.page.wait_for_timeout(200)
+        self.assertIn("1. Meet the Device", title_el.inner_text())
+
+        self.assertEqual(len(self.page_errors), 0, f"Chapter navigation threw errors: {self.page_errors}")
+
+    def test_v0_2_progressive_disclosure_iceberg_details_and_explore_freely(self):
+        """V0.2 regression: verify Iceberg disclosures, equations, citations, and Explore Freely mode."""
+        guide_body = self.page.locator("#guide-body")
+        self.assertTrue(guide_body.locator(".iceberg-surface").is_visible())
+        self.assertTrue(guide_body.locator(".iceberg-shallow").is_visible())
+
+        # Deeper details disclosure
+        deeper = guide_body.locator(".iceberg-deeper")
+        self.assertFalse(deeper.evaluate("el => el.open"))
+        guide_body.locator(".iceberg-deeper summary").evaluate("el => el.click()")
+        self.page.wait_for_timeout(50)
+        self.assertTrue(deeper.evaluate("el => el.open"))
+        self.assertIn("Jackson", deeper.inner_text())
+
+        # Research details disclosure
+        research = guide_body.locator(".iceberg-research")
+        self.assertFalse(research.evaluate("el => el.open"))
+        guide_body.locator(".iceberg-research summary").evaluate("el => el.click()")
+        self.page.wait_for_timeout(50)
+        self.assertTrue(research.evaluate("el => el.open"))
+        self.assertIn("Hypothesis Tested", research.inner_text())
+        self.assertIn("US11511891B2", research.inner_text())
+
+        # Explore Freely mode
+        self.page.click("#guide-btn-free")
+        self.page.wait_for_timeout(100)
+        self.assertIn("FREE EXPLORATION", guide_body.inner_text().upper())
+        resume_btn = self.page.locator("#btn-resume-guide")
+        self.assertTrue(resume_btn.is_visible())
+
+        # Resume guide returns to chapter
+        resume_btn.click()
+        self.page.wait_for_timeout(100)
+        self.assertIn("Meet the Device", self.page.locator("#guide-chapter-title").inner_text())
+
+        # Pause / Resume streamline pulse animation
+        pause_btn = self.page.locator("#guide-btn-pause")
+        pause_btn.click()
+        self.assertIn("Resume", pause_btn.inner_text())
+        pause_btn.click()
+        self.assertIn("Pause", pause_btn.inner_text())
+
+        # Reset Tour
+        self.page.click("#guide-btn-reset")
+        self.page.wait_for_timeout(100)
+        self.assertIn("1. Meet the Device", self.page.locator("#guide-chapter-title").inner_text())
+
+        self.assertEqual(len(self.page_errors), 0, f"Iceberg and explore freely threw errors: {self.page_errors}")
+
+    def test_v0_2_mobile_tabs_responsive_layout(self):
+        """V0.2 regression: verify mobile tab navigation between Guide and Controls preserves 3D model visibility."""
+        # Test on iPhone 12/13/14 viewport (390x844)
+        self.page.set_viewport_size({"width": 390, "height": 844})
+        self.page.wait_for_timeout(100)
+
+        # Tabs should be visible
+        mobile_tabs = self.page.locator(".mobile-panel-tabs")
+        self.assertTrue(mobile_tabs.is_visible())
+
+        # 3D Canvas should be visible and at top of layout
+        canvas = self.page.locator("#webgl-canvas")
+        self.assertTrue(canvas.is_visible())
+        canvas_box = canvas.bounding_box()
+        self.assertLess(canvas_box["y"], 220, "3D viewport must sit at the top of the mobile layout under header")
+
+        # Initial mobile state: Guide is visible, Controls hidden
+        self.assertTrue(self.page.locator("#learning-panel").is_visible())
+        self.assertFalse(self.page.locator("#sidebar-container").is_visible())
+
+        # Switch to Controls
+        self.page.click("#mobile-tab-controls")
+        self.page.wait_for_timeout(100)
+        self.assertFalse(self.page.locator("#learning-panel").is_visible())
+        self.assertTrue(self.page.locator("#sidebar-container").is_visible())
+
+        # Switch back to Guide
+        self.page.click("#mobile-tab-guide")
+        self.page.wait_for_timeout(100)
+        self.assertTrue(self.page.locator("#learning-panel").is_visible())
+        self.assertFalse(self.page.locator("#sidebar-container").is_visible())
+
+        # Restore desktop viewport
+        self.page.set_viewport_size({"width": 1280, "height": 800})
+        self.page.wait_for_timeout(50)
+        self.assertEqual(len(self.page_errors), 0, f"Mobile tabs threw errors: {self.page_errors}")
 
 
 if __name__ == "__main__":

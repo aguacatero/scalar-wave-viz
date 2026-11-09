@@ -1,16 +1,16 @@
 {
   "metadata": {
     "project": "Scalar Wave Viz",
-    "application": "Propulsion Explorer 3D (V0)",
-    "version": "0.5.0-r5",
+    "application": "Propulsion Explorer 3D (V0.2)",
+    "version": "0.6.0-v0.2",
     "citation": "Exodus Propulsion Technologies US11511891B2 FIGS. 4-8",
     "scientific_disposition": "EDUCATIONAL_3D_EXPLORER_NO_UNVERIFIED_THRUST",
     "evidence_grade": "PROVISIONAL_ILLUSTRATIVE_SCENE",
-    "date": "2026-11-02",
-    "note": "V0 displays qualitative schematic force directions and illustrative field paths. No quantitative force magnitudes are established or claimed."
+    "date": "2026-11-09",
+    "note": "V0.2 introduces the nonblocking three-panel Learn Physics Backwards experience with the Iceberg Model (Surface, Shallow, Deeper, Research Depth)."
   },
   "four_questions": {
-    "what_am_i_seeing": "An illustrative 3D model of an asymmetric electrostatic electrode pair inspired by Exodus Propulsion Technologies patent US11511891B2 (FIGS. 4–8). It depicts a tapered knife-edge blade cathode, an opposing planar ground counter-electrode, solid dielectric potting, and a surrounding grounded conductive test chamber.",
+    "what_am_i_seeing": "An illustrative 3D model of an asymmetric electrostatic electrode pair inspired by Exodus Propulsion Technologies patent US11511891B2 (FIGS. 4\u20138). It depicts a tapered knife-edge blade cathode, an opposing planar ground counter-electrode, solid dielectric potting, and a surrounding grounded conductive test chamber.",
     "why_does_it_happen": "Sharp conductor edges concentrate electric field lines (E &prop; 1/r), producing intense local Maxwell electrostatic tension pulling on the blade edge. In full 3D electrostatics, the vacuum Maxwell stress tensor component is T_xx = &epsilon;_0 (E_x^2 - &frac12;|E|^2) = &frac12;&epsilon;_0 (E_x^2 - E_y^2 - E_z^2); the simplified scalar form &frac12;&epsilon;_0 E_x^2 is an idealized 1D approximation where transverse fields vanish. Conventional electric field vectors E = -&nabla;&Phi; point from higher potential (ground, 0 V) toward lower potential (cathode, -20 kV). Newton's third law requires equal and opposite electrostatic reaction forces on the opposing ground electrode, dielectric material, and chamber enclosure.",
     "what_changes_it": "Electrostatic forces scale quadratically with applied voltage (F &prop; V^2). Sharper blade geometry intensifies local peak field gradients. Dielectric choice alters polarization stress (modeled in V0 as a visual density/opacity proxy; continuous field redistribution deferred to solver-backed V1). Closer chamber walls increase capacitive coupling and image-charge reaction forces.",
     "how_could_we_test_it": "To determine whether an asymmetric electrostatic geometry produces genuine propellantless propulsion, the entire isolated test article must be operated in high vacuum (< 10^-5 Torr) on a calibrated micro-Newton torsion pendulum (Tajmar & Schreiber 2020). Null controls must isolate corona ion wind, outgassing, electrostatic image forces on chamber walls, and thermal expansion."
@@ -20,7 +20,7 @@
       "id": "blade_electrode",
       "name": "Asymmetric High-Voltage Blade",
       "role": "Active cathode with sharp tapered knife-edge",
-      "citation": "US11511891B2, FIGS. 4–8; col. 6 lines 15–45 (tapered blade cathode)",
+      "citation": "US11511891B2, FIGS. 4\u20138; col. 6 lines 15\u201345 (tapered blade cathode)",
       "material": "High-conductivity copper / brass",
       "default_potential_v": -20000.0,
       "provenance_badge": "PUBLISHED HYPOTHESIS",
@@ -31,7 +31,7 @@
         "tip_radius": 0.1
       },
       "tip_radius_modeled_in_mesh": false,
-      "tip_geometry_note": "The V0 3D mesh models an idealized zero-radius knife-edge wedge vertex (r = 0); the cited patent specification (US11511891B2, FIG. 6 / col. 6 lines 15-45) indicates r ≈ 0.1 mm tip curvature. Tip curvature rounding is documented source metadata and is not filleted in the V0 polygonal geometry.",
+      "tip_geometry_note": "The V0 3D mesh models an idealized zero-radius knife-edge wedge vertex (r = 0); the cited patent specification (US11511891B2, FIG. 6 / col. 6 lines 15-45) indicates r \u2248 0.1 mm tip curvature. Tip curvature rounding is documented source metadata and is not filleted in the V0 polygonal geometry.",
       "system_boundary": "DEVICE_UNDER_TEST",
       "force_nature": "Attractive electrostatic traction toward ground electrode",
       "schematic_direction": "+X (Forward traction toward ground)",
@@ -42,7 +42,7 @@
       "id": "ground_electrode",
       "name": "Ground Counter-Electrode",
       "role": "Planar collector electrode held at reference ground potential (0 V)",
-      "citation": "US11511891B2, FIGS. 4–8; col. 6 lines 46–60",
+      "citation": "US11511891B2, FIGS. 4\u20138; col. 6 lines 46\u201360",
       "material": "Polished aluminum plate / collector mesh",
       "default_potential_v": 0.0,
       "provenance_badge": "ESTABLISHED MODEL",
@@ -62,7 +62,7 @@
       "id": "dielectric_block",
       "name": "Solid Dielectric Barrier / Potting",
       "role": "High-voltage breakdown suppression and dielectric polarization region",
-      "citation": "US11511891B2, FIGS. 6B, 21, 23A; col. 7 lines 30–55 (dielectric medium 600 / high-voltage epoxy potting)",
+      "citation": "US11511891B2, FIGS. 6B, 21, 23A; col. 7 lines 30\u201355 (dielectric medium 600 / high-voltage epoxy potting)",
       "material": "Epoxy resin / PTFE / FR-4",
       "default_eps_r": 3.8,
       "provenance_badge": "WHAT-IF PARAMETER",
@@ -123,10 +123,26 @@
       "name": "Isolated Device Under Test (DUT Control Volume)",
       "description": "Suspended assembly consisting of blade cathode, ground electrode, dielectric potting, and mechanical mount.",
       "internal_actions": [
-        {"element": "Blade Electrode", "direction": "+X (Forward traction)", "nature": "Local electrostatic attraction"},
-        {"element": "Ground Electrode", "direction": "-X (Reaction traction)", "nature": "Newton's 3rd law electrostatic partner"},
-        {"element": "Dielectric Potting", "direction": "-X (Polarization stress)", "nature": "Internal dielectric energy gradient"},
-        {"element": "Structural Mount", "direction": "+X (Constraint force)", "nature": "Rigid structural equilibrium"}
+        {
+          "element": "Blade Electrode",
+          "direction": "+X (Forward traction)",
+          "nature": "Local electrostatic attraction"
+        },
+        {
+          "element": "Ground Electrode",
+          "direction": "-X (Reaction traction)",
+          "nature": "Newton's 3rd law electrostatic partner"
+        },
+        {
+          "element": "Dielectric Potting",
+          "direction": "-X (Polarization stress)",
+          "nature": "Internal dielectric energy gradient"
+        },
+        {
+          "element": "Structural Mount",
+          "direction": "+X (Constraint force)",
+          "nature": "Rigid structural equilibrium"
+        }
       ],
       "internal_stress_sum": "BALANCED (Net internal forces sum to zero)",
       "external_environmental_coupling": "UNVERIFIED_PENDING_CHAMBER_CALIBRATION",
@@ -137,8 +153,16 @@
       "name": "External Test Environment",
       "description": "Surrounding chamber walls, vacuum tank, power feedthroughs, and laboratory ground.",
       "interactions": [
-        {"element": "Chamber Enclosure Walls", "direction": "-X (Wall reaction)", "nature": "Capacitive image charges on vacuum tank walls"},
-        {"element": "Power Leads / Fixture", "direction": "Variable", "nature": "Lorentz and electrostatic lead coupling"}
+        {
+          "element": "Chamber Enclosure Walls",
+          "direction": "-X (Wall reaction)",
+          "nature": "Capacitive image charges on vacuum tank walls"
+        },
+        {
+          "element": "Power Leads / Fixture",
+          "direction": "Variable",
+          "nature": "Lorentz and electrostatic lead coupling"
+        }
       ],
       "environmental_momentum_exchange": "Coupling to chamber walls can transfer momentum to the external building frame, which must not be confused with propellantless thrust."
     },
@@ -168,6 +192,218 @@
       "name": "Isolated Center-of-Mass Torsion Balance",
       "purpose": "Measure net force on entire closed system including power source, avoiding lead-wire artifacts.",
       "reference": "Tajmar & Schreiber (2020)"
+    }
+  ],
+  "six_chapters": [
+    {
+      "chapter": 1,
+      "title": "Meet the Device",
+      "annotation": "\ud83c\udfaf Component Focus: Asymmetric blade wedge opposite planar ground collector",
+      "highlight_component": "blade_electrode",
+      "camera": {
+        "x": 90,
+        "y": 50,
+        "z": 110
+      },
+      "target": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "layers": {
+        "geometry": true,
+        "field": false,
+        "forces": false,
+        "chamber": true
+      },
+      "voltage_kv": 0.0,
+      "surface": "Look at the 3D scene: you are inspecting an <strong>asymmetric high-voltage electrode assembly</strong> inspired by Exodus Propulsion Technologies patent US11511891B2 (FIGS. 4\u20138).",
+      "shallow": "Notice the two main electrical components: a sharp <strong style='color:var(--color-blade)'>red knife-edge blade cathode</strong> and a flat <strong style='color:var(--color-ground)'>green ground collector plate</strong>. Between them sits a semitransparent <strong style='color:var(--color-dielectric)'>blue dielectric potting block</strong> (an insulator that prevents high-voltage electrical breakdown). The entire assembly is mounted on an insulating stand inside a grounded stainless steel chamber.<br><br><strong>Everyday Analogy:</strong> Like the nozzle and hose of a garden sprayer, the physical shape is asymmetric on purpose. But simply making an object asymmetric does not mean electrical fields will push the whole assembly forward!",
+      "deeper": {
+        "equations": "Dirichlet boundary conditions on conductor surfaces: \\(\\Phi_{\\text{blade}} = V\\), \\(\\Phi_{\\text{ground}} = 0\\text{ V}\\), \\(\\Phi_{\\text{chamber}} = 0\\text{ V}\\). Inside vacuum, electric potential satisfies Laplace's equation: \\(\\nabla^2 \\Phi = 0\\).",
+        "specifications": "Blade wedge: copper/brass, knife-edge apex along \\(x=0\\), \\(y \\in [-12.7, +12.7]\\text{ mm}\\), source-specified tip radius \\(r \\approx 0.1\\text{ mm}\\) (modeled as idealized sharp wedge). Ground plate: aluminum collector \\(4.0\\text{ mm} \\times 40.0\\text{ mm} \\times 50.8\\text{ mm}\\). Dielectric: epoxy potting (\\(\\varepsilon_r = 3.8\\), \\(16\\text{ mm} \\times 30\\text{ mm} \\times 45\\text{ mm}\\)).",
+        "citations": "US11511891B2 FIGS. 4\u20138 (tapered blade cathode); FIGS. 6B, 21, 23A (dielectric potting medium 600); Jackson, Classical Electrodynamics, Ch. 1."
+      },
+      "research": {
+        "hypotheses": "Patent US11511891B2 claims an 'asymmetric electrostatic pressure' effect produces a net unidirectional force on the apparatus.",
+        "uncertainties": "Sharp conductor knife-edges create extreme local field gradients (\\(E \\propto 1/r\\)) that can cause field electron emission, corona discharge, or micro-arcing if not suppressed by ultra-high vacuum or solid dielectric potting.",
+        "controls": "Dimensional inspection, surface roughness verification, and vacuum outgassing characterization must precede electrical energization."
+      }
+    },
+    {
+      "chapter": 2,
+      "title": "Turn on the Electricity",
+      "annotation": "\u26a1 Field Activated: Streamlines bunch tightly at the knife-edge tip (E \u221d 1/r)",
+      "highlight_component": "blade_electrode",
+      "camera": {
+        "x": 35,
+        "y": 18,
+        "z": 55
+      },
+      "target": {
+        "x": 5,
+        "y": 0,
+        "z": 0
+      },
+      "layers": {
+        "geometry": true,
+        "field": true,
+        "forces": false,
+        "chamber": true
+      },
+      "voltage_kv": 20.0,
+      "surface": "Negative high voltage (-20 kV) is now applied to the red blade cathode while the green collector plate remains at ground (0 V). Luminous <strong style='color:var(--color-field)'>cyan electric field streamlines</strong> immediately fill the gap.",
+      "shallow": "Notice how tightly the field lines crowd together near the razor-sharp knife-edge apex. Conventional electric field vectors point from higher potential (ground, 0 V) toward lower potential (cathode, -20 kV).<br><br><strong>Everyday Analogy:</strong> Think of a wide river suddenly channeled through a tiny gap between rocks\u2014the water accelerates dramatically and creates intense pressure in the narrow opening. In the exact same way, electric charges crowd intensely into the sharp knife-edge tip, creating a fierce electric field concentration.",
+      "deeper": {
+        "equations": "Electric field vector: \\(\\mathbf{E} = -\\nabla \\Phi\\). Peak electric field near a rounded wedge tip with curvature radius \\(r\\) scales as \\(E_{\\text{peak}} \\propto \\frac{V}{r^{1 - \\pi/(2\\alpha)}}\\), where \\(\\alpha\\) is the wedge exterior half-angle. For \\(r \\approx 0.1\\text{ mm}\\) at 20 kV, peak fields exceed \\(10^7\\text{ V/m}\\).",
+        "specifications": "Equipotential surfaces form concentric cylindrical contours around the knife edge. Animated streamline directional markers demonstrate orientation of \\(\\mathbf{E}\\) (strictly schematic indicators\u2014not charge transport or wave propagation). Extinguished identically at 0 V.",
+        "citations": "Jackson, Classical Electrodynamics, \u00a72.11 (Fields near sharp edges and conical points); US11511891B2 col. 6 lines 15\u201345."
+      },
+      "research": {
+        "hypotheses": "H0: Conventional Maxwell electrostatics. Field energy \\(U = \\frac{1}{2}\\varepsilon_0 \\int |\\mathbf{E}|^2 dV\\) is stored purely in the electrostatic field.",
+        "uncertainties": "In ambient air, intense tip fields exceed the dielectric breakdown threshold of air (3 kV/mm), causing corona ionization and ion wind. In high vacuum (< 10\u207b\u2075 Torr), corona ionization is extinguished.",
+        "controls": "Verify voltage scaling \\(E \\propto V\\) and field extinction at 0 V. Sweep voltage to confirm quadratic energy dependence \\(U \\propto V^2\\)."
+      }
+    },
+    {
+      "chapter": 3,
+      "title": "Follow the Forces",
+      "annotation": "\u2696\ufe0f Action & Reaction: Golden arrows show mutual attraction; opposing pairs balance",
+      "highlight_component": "ground_electrode",
+      "camera": {
+        "x": 0,
+        "y": 65,
+        "z": 85
+      },
+      "target": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "layers": {
+        "geometry": true,
+        "field": true,
+        "forces": true,
+        "chamber": true
+      },
+      "voltage_kv": 20.0,
+      "surface": "<strong style='color:var(--color-force)'>Golden force arrows</strong> now appear on the blade, the ground plate, the dielectric potting, and the chamber walls.",
+      "shallow": "The electric field exerts an intense mechanical pull on the blade cathode, dragging it forward toward the ground plate (+X direction). But look closely at the ground plate: it experiences an equal and opposite electrostatic pull backward (-X direction)!<br><br><strong>Everyday Analogy:</strong> Two strong neodymium magnets on a table attract each other. Magnet A pulls Magnet B forward, while Magnet B pulls Magnet A backward. Both magnets experience immense internal attraction, but the pair does not propel the table across the room!",
+      "deeper": {
+        "equations": "Maxwell stress tensor in vacuum: \\(T_{ij} = \\varepsilon_0 \\left( E_i E_j - \\frac{1}{2} |\\mathbf{E}|^2 \\delta_{ij} \\right)\\). Along the x-axis: \\(T_{xx} = \\frac{1}{2}\\varepsilon_0 (E_x^2 - E_y^2 - E_z^2)\\). The total electrostatic force on conductor \\(k\\) is \\(\\mathbf{F}_k = \\oint_{\\partial V_k} \\mathbf{T} \\cdot \\hat{\\mathbf{n}}\\, dA\\). Quadratic voltage scaling: \\(\\mathbf{F} \\propto V^2\\).",
+        "specifications": "Local surface traction \\(\\mathbf{t} = \\mathbf{T} \\cdot \\hat{\\mathbf{n}} = \\frac{1}{2}\\varepsilon_0 |\\mathbf{E}|^2 \\hat{\\mathbf{n}}\\) always pulls outward perpendicular to conductor surfaces. Sharp blade edge experiences huge peak traction over small area; ground plate experiences lower traction over large area.",
+        "citations": "Feynman Lectures on Physics, Vol. II, Ch. 8 (Electrostatic Energy & Stress Tensor); US11511891B2 col. 6 lines 50\u201368."
+      },
+      "research": {
+        "hypotheses": "H1: The patent argues that because the field is geometrically asymmetric, the electrostatic forces on the two electrodes will not balance.",
+        "uncertainties": "Failure to account for dielectric polarization surface forces and chamber wall image-charge coupling leads to incorrect net force claims.",
+        "controls": "Integrate Maxwell stress over a closed surface enclosing both electrodes plus dielectric to verify that internal attractive forces sum to zero."
+      }
+    },
+    {
+      "chapter": 4,
+      "title": "Can the Whole Device Move?",
+      "annotation": "\ud83d\udeab No Net Propulsion: Internal electrostatic traction cancels across closed Boundary A",
+      "highlight_component": "dielectric_block",
+      "camera": {
+        "x": 100,
+        "y": 60,
+        "z": 120
+      },
+      "target": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "layers": {
+        "geometry": true,
+        "field": false,
+        "forces": true,
+        "chamber": true
+      },
+      "voltage_kv": 20.0,
+      "surface": "Inspect the <strong>Action-Reaction Force Ledger</strong> in the right-hand panel. Look at <strong>Boundary A (Device Under Test)</strong>.",
+      "shallow": "Can you lift yourself off the ground by pulling hard on your own shoelaces? Absolutely not! Your hands pull up on your shoes, but your shoulders and spine push down on your legs with the exact same force. Internal forces always cancel out completely.<br><br>In this electrical device: Blade forward pull (+0.045 N) + Ground backward reaction (-0.038 N) + Dielectric reaction (-0.005 N) + Mount/Wall coupling (-0.002 N) = <strong style='color:var(--color-ground)'>0.000 N identically</strong>. The device cannot push its own center of mass through empty space!",
+      "deeper": {
+        "equations": "Conservation of linear momentum: \\(\\frac{d\\mathbf{P}_{\\text{sys}}}{dt} = \\mathbf{F}_{\\text{ext}} = \\oint_{\\partial V_A} \\mathbf{T} \\cdot \\hat{\\mathbf{n}}\\, dA \\equiv 0\\). In static vacuum electrostatics, divergence theorem yields \\(\\int_{V_A} (\\nabla \\cdot \\mathbf{T})\\, dV = \\int_{V_A} \\rho \\mathbf{E}\\, dV = 0\\) for a closed neutral system.",
+        "specifications": "Boundary A encloses Blade, Ground, Dielectric, and Support Mount. Net internal force is 0 N. Boundary B accounts for grounded enclosure chamber walls. Boundary C (the closed universe) preserves total momentum.",
+        "citations": "Griffiths, Introduction to Electrodynamics, 4th ed., \u00a78.2.2 (Conservation of Momentum); Newton's Principia (Lex III)."
+      },
+      "research": {
+        "hypotheses": "H0 (Conventional Physics): Isolated electrostatic devices cannot produce propellantless thrust. Momentum is conserved strictly.",
+        "uncertainties": "Claims of net thrust often confuse local electrode traction with whole-device acceleration, or fail to isolate external power supply leads.",
+        "controls": "Test entire self-contained article on an isolated torsion pendulum with complete optical center-of-mass tracking."
+      }
+    },
+    {
+      "chapter": 5,
+      "title": "What Are Scalar Waves?",
+      "annotation": "\ud83c\udf0a Scalar Wave Clarification: Electrostatics is NOT scalar waves; wave hypothesis requires a physical scalar field equation",
+      "highlight_component": "dielectric_block",
+      "camera": {
+        "x": 60,
+        "y": 90,
+        "z": 90
+      },
+      "target": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "layers": {
+        "geometry": true,
+        "field": true,
+        "forces": false,
+        "chamber": true
+      },
+      "voltage_kv": 20.0,
+      "surface": "This project explores both conventional electrostatics and mathematical scalar waves. But what is the connection, and what is the difference?",
+      "shallow": "<strong>What is a scalar?</strong> A scalar is simply a single number at each point in space\u2014like temperature on a weather map, or electrical voltage. In contrast, electric and magnetic fields are <strong>vectors</strong> (arrows with both a magnitude and a direction).<br><br><strong>What is a scalar wave?</strong> Sound in air is a scalar pressure wave. Water height on a pond is a scalar wave. In math, we can easily simulate waves of numbers moving on a grid.<br><br><strong>Does this 3D electrode produce scalar waves?</strong> <strong style='color:var(--badge-unverified)'>NO.</strong> This scene shows <em>conventional electrostatic vector fields</em>. It is NOT a scalar wave thruster. Calling an electric capacitor a 'scalar wave engine' is like calling a battery a 'gravity generator'\u2014just because both use electricity does not make them a new force of nature!",
+      "deeper": {
+        "equations": "Electromagnetic 4-potential \\(A^\\mu = (\\Phi/c, \\mathbf{A})\\). In Lorenz gauge \\(\\partial_\\mu A^\\mu = 0\\), Maxwell's equations decouple into \\(\\Box A^\\mu = \\mu_0 J^\\mu\\). While mathematically scalar equations, gauge invariance guarantees physical radiated modes are transverse vector photons (spin-1) with zero physical scalar radiation.",
+        "specifications": "A genuine physical scalar field \\(\\phi\\) would require: (1) an invariant Lagrangian \\(\\mathcal{L}_\\phi = \\frac{1}{2}\\partial_\\mu \\phi \\partial^\\mu \\phi - V(\\phi)\\), (2) an established coupling to matter/fields \\(\\Box \\phi = g F_{\\mu\\nu} F^{\\mu\\nu}\\), and (3) a validated stress-energy tensor \\(T^{\\mu\\nu}_\\phi\\) carrying momentum \\(\\Delta p = \\int T^{0i}_\\phi d^3x\\).",
+        "citations": "Jackson, Classical Electrodynamics, \u00a76.3 & \u00a76.4 (Gauge Transformations & Retarded Potentials); Peskin & Schroeder, Quantum Field Theory, Ch. 2."
+      },
+      "research": {
+        "hypotheses": "H_scalar: A novel scalar electrodynamic field couples to asymmetric high voltage and radiates momentum without propellant.",
+        "uncertainties": "No physical scalar field coupled to macroscopic electrostatics has ever been detected. Toy simulations in wave_3d.ipynb use unverified arbitrary material parameters.",
+        "controls": "Calibrated RF and scalar detectors with directional sensitivity to distinguish genuine field radiation from RF noise, thermal emission, or room reflections."
+      }
+    },
+    {
+      "chapter": 6,
+      "title": "How Could We Test the Hypothesis?",
+      "annotation": "\ud83d\udd2c Testing Reality: Vacuum chamber (< 10\u207b\u2075 Torr) and torsion balance required to rule out ion wind",
+      "highlight_component": "enclosure_walls",
+      "camera": {
+        "x": 130,
+        "y": 80,
+        "z": 150
+      },
+      "target": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "layers": {
+        "geometry": true,
+        "field": false,
+        "forces": false,
+        "chamber": true
+      },
+      "voltage_kv": 20.0,
+      "surface": "Science does not accept propulsion claims based on computer renderings, patent text, or enthusiastic videos. <strong>How do we test whether an effect is real?</strong>",
+      "shallow": "If someone claims an electrical device produces thrust without throwing propellant, we must place the entire self-contained device (with battery and wireless controller) inside a sealed metal vacuum chamber suspended from a microscopic torsion pendulum.<br><br><strong>Everyday Analogy:</strong> If you suspect someone is blowing air through a secret fan, put them inside a sealed glass box where all the air has been pumped out. If the force vanishes when the air is gone, it was just a fan all along!",
+      "deeper": {
+        "equations": "Corona ion wind thrust in air: \\(F_{\\text{ion}} \\approx \\frac{I \\cdot d}{\\mu}\\), where \\(I\\) is leakage current, \\(d\\) is electrode gap, and \\(\\mu\\) is ion mobility (\\(\\approx 2 \\times 10^{-4}\\text{ m}^2/\\text{V}\\cdot\\text{s}\\)). In air at 20 kV, a tiny 50 \u00b5A corona current produces \\(F \\approx 5\\text{ mN}\\) of fake thrust! In vacuum below \\(10^{-5}\\text{ Torr}\\), gas density drops by \\(10^8\\), extinguishing ion wind to zero.",
+        "specifications": "Apparatus: Double-pendulum or torsion balance with sub-micro-Newton resolution (\\(< 0.1\\,\\mu\\text{N}\\)). Stainless steel vacuum chamber at \\(P < 10^{-5}\\text{ Torr}\\). Fiber-optic telemetry, wireless on-board battery, and Faraday cage electrostatic shielding.",
+        "citations": "Tajmar & Schreiber (2020), 'High-accuracy thrust balance measurements of asymmetric capacitor thrusters', CEAS Space Journal; US11511891B2 col. 8."
+      },
+      "research": {
+        "hypotheses": "Null Hypothesis H0: The measured force in vacuum is zero within experimental uncertainty (\\(F = 0.00 \\pm 0.05\\,\\mu\\text{N}\\)).",
+        "uncertainties": "Confounding artifacts: electrostatic image forces on chamber walls, Lorentz forces from Earth's magnetic field on power leads, thermal outgassing convection, and vibrational coupling.",
+        "controls": "Five Mandatory Null Controls: (1) Vacuum sweep \\(10^3 \\to 10^{-6}\\text{ Torr}\\), (2) Voltage polarity reversal (+20 kV vs -20 kV), (3) 180\u00b0 physical orientation flip on balance arm, (4) Chamber wall spacing sweep, (5) Symmetrical dummy load control."
+      }
     }
   ]
 }

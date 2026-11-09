@@ -78,6 +78,34 @@ class PropulsionExplorerProvenanceSchemaTests(unittest.TestCase):
         self.assertEqual(meta["evidence_grade"], "PROVISIONAL_ILLUSTRATIVE_SCENE")
         self.assertIn("US11511891B2", meta["citation"])
 
+    def test_six_chapters_iceberg_structure(self):
+        """V0.2 regression: verify six_chapters exists with 6 Iceberg chapters."""
+        self.assertIn("six_chapters", self.data)
+        chapters = self.data["six_chapters"]
+        self.assertEqual(len(chapters), 6)
+        expected_titles = [
+            "Meet the Device",
+            "Turn on the Electricity",
+            "Follow the Forces",
+            "Can the Whole Device Move?",
+            "Scalar Waves",
+            "How Could We Test",
+        ]
+        for i, ch in enumerate(chapters):
+            self.assertEqual(ch["chapter"], i + 1)
+            self.assertIn(expected_titles[i], ch["title"])
+            self.assertTrue(len(ch["surface"]) > 10)
+            self.assertTrue(len(ch["shallow"]) > 10)
+            self.assertIn("equations", ch["deeper"])
+            self.assertIn("specifications", ch["deeper"])
+            self.assertIn("citations", ch["deeper"])
+            self.assertIn("hypotheses", ch["research"])
+            self.assertIn("uncertainties", ch["research"])
+            self.assertIn("controls", ch["research"])
+            self.assertIn("annotation", ch)
+            self.assertIn("camera", ch)
+            self.assertIn("layers", ch)
+
     def test_no_invented_newton_forces_in_components(self):
         """V0-R1-F1 regression: ensure no invented numeric force quantities appear in data."""
         components = self.data["components"]
@@ -203,7 +231,7 @@ class PropulsionExplorerHTMLStructureTests(unittest.TestCase):
     def test_html_landmarks_and_metadata(self):
         self.assertIn("<!DOCTYPE html>", self.html)
         self.assertIn('<meta name="viewport"', self.html)
-        self.assertIn("Propulsion Explorer 3D (V0)", self.html)
+        self.assertIn("Propulsion Explorer 3D", self.html)
         self.assertIn('role="banner"', self.html)
         self.assertIn('role="main"', self.html)
         self.assertIn('role="complementary"', self.html)
@@ -248,10 +276,13 @@ class PropulsionExplorerHTMLStructureTests(unittest.TestCase):
         self.assertNotIn(r"\frac", self.html)
         self.assertNotIn(r"\nabla", self.html)
 
-    def test_modal_focus_trap_attributes(self):
-        """V0-R1-M4 regression: modal content has tabindex='-1' for focus capture."""
-        self.assertIn('class="tour-modal-content" tabindex="-1"', self.html)
-        self.assertIn('class="tour-modal-content help-content" tabindex="-1"', self.html)
+    def test_v0_2_learning_panel_and_help_modal_attributes(self):
+        """V0.2 regression: nonblocking learning panel and help modal focus capture."""
+        self.assertIn('id="learning-panel"', self.html)
+        self.assertIn('id="guide-body" tabindex="0"', self.html)
+        self.assertIn('class="help-modal-content" tabindex="-1"', self.html)
+        self.assertIn('id="scene-annotation-card"', self.html)
+        self.assertIn('class="mobile-panel-tabs"', self.html)
 
 
 class PropulsionExplorerJSLogicTests(unittest.TestCase):
@@ -478,6 +509,27 @@ class PropulsionExplorerJSLogicTests(unittest.TestCase):
         self.assertGreaterEqual(data["count"], 2, "High-priority pins must survive")
         self.assertIn("blade_electrode", data["surviving"], "Highest priority blade pin must survive")
         self.assertNotIn("support_mount", data["surviving"], "Lowest priority mount pin must be suppressed in shortfall")
+
+    def test_v0_2_iceberg_progressive_disclosure_templates_in_js(self):
+        """V0.2 regression: verify Iceberg progressive disclosure template rendering in explorer.js."""
+        self.assertIn("iceberg-disclosure iceberg-deeper", self.js)
+        self.assertIn("iceberg-disclosure iceberg-research", self.js)
+        self.assertIn("iceberg-card iceberg-surface", self.js)
+        self.assertIn("iceberg-card iceberg-shallow", self.js)
+        self.assertIn("function renderChapter", self.js)
+        self.assertIn("function toggleExploreFreely", self.js)
+        self.assertIn("function toggleAnimationPause", self.js)
+        self.assertIn("function resetTour", self.js)
+        self.assertIn("function toggleLearningPanel", self.js)
+        self.assertIn("function toggleSidebar", self.js)
+
+    def test_v0_2_keyboard_shortcuts_and_controls_in_js(self):
+        """V0.2 regression: verify keyboard shortcuts for guide, sidebar, chapters, and pause."""
+        self.assertIn("case 'g':", self.js)
+        self.assertIn("case 's':", self.js)
+        self.assertIn("case '[':", self.js)
+        self.assertIn("case ']':", self.js)
+        self.assertIn("case ' ':", self.js)
 
 
 
