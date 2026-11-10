@@ -1395,7 +1395,7 @@ class PropulsionExplorerBrowserSmokeTests(unittest.TestCase):
         self.assertEqual(len(self.page_errors), 0, f"Rendered math & links threw errors: {self.page_errors}")
 
     def test_v0_2_r1_m3_mobile_deep_scrolling_and_ledger_navigation(self):
-        """V0.2-R1-M3 regression: mobile layout has reachable scrollable controls and bidirectional ledger navigation."""
+        """V0.2-R1-M3 & V0.2-R2-M3: mobile layout has reachable scrollable footer and bidirectional ledger navigation."""
         for vp in [{"width": 375, "height": 667}, {"width": 390, "height": 844}]:
             self.page.set_viewport_size(vp)
             self.page.wait_for_timeout(100)
@@ -1426,13 +1426,29 @@ class PropulsionExplorerBrowserSmokeTests(unittest.TestCase):
             learning_panel = self.page.locator("#learning-panel")
             self.assertTrue(learning_panel.is_visible(), "Learning panel must be visible after returning from ledger")
 
-            # Expand deeper disclosure and verify Next/Back buttons remain clickable
+            # Expand deeper and research disclosures
             deeper = learning_panel.locator(".iceberg-deeper")
             deeper.locator("summary").evaluate("el => el.click()")
+            research = learning_panel.locator(".iceberg-research")
+            research.locator("summary").evaluate("el => el.click()")
             self.page.wait_for_timeout(50)
 
+            # V0.2-R2-M3: Explicitly scroll to .guide-footer and assert bounding-box visibility postcondition
+            footer = self.page.locator(".guide-footer")
+            footer.scroll_into_view_if_needed()
+            self.page.wait_for_timeout(100)
+            self.assertTrue(footer.is_visible(), f"Guide footer must be visible on mobile viewport {vp}")
+            box = footer.bounding_box()
+            self.assertIsNotNone(box, "Guide footer bounding box must exist")
+            self.assertGreater(box["y"] + box["height"], 0, "Guide footer must be vertically on screen")
+            self.assertLess(box["y"], vp["height"], "Guide footer top must be inside mobile viewport height")
+
+            # Verify footer buttons are visible and functional
             next_btn = self.page.locator("#guide-btn-next")
-            self.assertTrue(next_btn.is_visible())
+            reset_btn = self.page.locator("#guide-btn-reset")
+            self.assertTrue(next_btn.is_visible(), "Next button must be visible in scrolled footer")
+            self.assertTrue(reset_btn.is_visible(), "Reset button must be visible in scrolled footer")
+
             next_btn.click()
             self.page.wait_for_timeout(100)
             self.assertIn("5. What Are Scalar Waves?", self.page.locator("#guide-chapter-title").inner_text())
@@ -1443,38 +1459,53 @@ class PropulsionExplorerBrowserSmokeTests(unittest.TestCase):
         self.assertEqual(len(self.page_errors), 0, f"Mobile scrolling and ledger navigation threw errors: {self.page_errors}")
 
     def test_v0_2_r1_m4_chapter5_scalar_wave_contrast_toggle_and_badge(self):
-        """V0.2-R1-M4 regression: Chapter 5 provides 3D mathematical scalar-wave contrast visualizer and badge."""
+        """V0.2-R1-M4 & V0.2-R2-M2: Chapter 5 mutually exclusive 3D mathematical scalar-wave contrast view."""
         # Navigate to Chapter 5
         self.page.click(".chapter-step-btn[data-index='4']")
         self.page.wait_for_timeout(100)
         self.assertIn("What Are Scalar Waves?", self.page.locator("#guide-chapter-title").inner_text())
 
-        # Toggle button should be visible
+        # Toggle button should be visible with initial switch-to label
         toggle_btn = self.page.locator("#guide-body #btn-toggle-wave-contrast")
         self.assertTrue(toggle_btn.is_visible(), "Chapter 5 wave contrast button must be visible")
+        self.assertIn("Switch to Mathematical Scalar Wave Toy View", toggle_btn.inner_text())
+
+        # Initial state: vector field streamlines visible, toy wave hidden
+        field_vis_before = self.page.evaluate("window.__explorer.fieldGroup.visible")
+        self.assertTrue(field_vis_before, "Vector field lines must be initially visible in Chapter 5")
+        wave_vis_before = self.page.evaluate("window.__explorer.scalarWaveGroup.visible")
+        self.assertFalse(wave_vis_before, "Scalar wave group must be initially hidden in Chapter 5")
 
         badge = self.page.locator("#scalar-wave-badge")
-        # Initially hidden
-        self.assertTrue("hidden" in (badge.get_attribute("class") or ""))
+        self.assertTrue("hidden" in (badge.get_attribute("class") or ""), "Badge must be initially hidden")
 
-        # Click to toggle on
+        # Click to toggle on mutually exclusive scalar wave toy view
         toggle_btn.click()
         self.page.wait_for_timeout(100)
-        self.assertFalse("hidden" in (badge.get_attribute("class") or ""))
+        self.assertFalse("hidden" in (badge.get_attribute("class") or ""), "Badge must be displayed")
         badge_text = badge.inner_text()
-        self.assertIn("MATHEMATICAL SCALAR WAVE CONTRAST", badge_text)
-        self.assertIn("NOT coupled to capacitor or thrust", badge_text)
+        self.assertIn("MATHEMATICAL SCALAR WAVE VIEW (ABSTRACT TOY MODEL)", badge_text)
+        self.assertIn("Vector streamlines hidden", badge_text)
+        self.assertIn("NOT emitted by or coupled to capacitor apparatus", badge_text)
+        self.assertIn("Switch Back to Electrostatic Vector Field", toggle_btn.inner_text())
 
-        # Verify 3D scalar wave group is visible
-        is_wave_visible = self.page.evaluate("window.__explorer.scalarWaveGroup.visible")
-        self.assertTrue(is_wave_visible, "3D scalar wave group must be visible when contrast is toggled on")
+        # Mutually exclusive verification: field lines HIDDEN, toy wave VISIBLE
+        field_vis_active = self.page.evaluate("window.__explorer.fieldGroup.visible")
+        self.assertFalse(field_vis_active, "Vector field streamlines must be hidden when scalar wave toy view is active")
+        wave_vis_active = self.page.evaluate("window.__explorer.scalarWaveGroup.visible")
+        self.assertTrue(wave_vis_active, "3D scalar wave group must be visible when contrast is toggled on")
 
-        # Click again to toggle off
+        # Click again to switch back
         toggle_btn.click()
         self.page.wait_for_timeout(100)
-        self.assertTrue("hidden" in (badge.get_attribute("class") or ""))
-        is_wave_visible_after = self.page.evaluate("window.__explorer.scalarWaveGroup.visible")
-        self.assertFalse(is_wave_visible_after, "3D scalar wave group must be hidden when contrast is toggled off")
+        self.assertTrue("hidden" in (badge.get_attribute("class") or ""), "Badge must be hidden when switched back")
+        self.assertIn("Switch to Mathematical Scalar Wave Toy View", toggle_btn.inner_text())
+
+        # Restoration verification: field lines RESTORED, toy wave HIDDEN
+        field_vis_restored = self.page.evaluate("window.__explorer.fieldGroup.visible")
+        self.assertTrue(field_vis_restored, "Vector field streamlines must be restored when switched back")
+        wave_vis_restored = self.page.evaluate("window.__explorer.scalarWaveGroup.visible")
+        self.assertFalse(wave_vis_restored, "3D scalar wave group must be hidden when contrast is toggled off")
 
         self.assertEqual(len(self.page_errors), 0, f"Chapter 5 wave contrast threw errors: {self.page_errors}")
 

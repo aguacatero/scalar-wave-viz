@@ -1421,6 +1421,15 @@ kbd {
     overflow-y: visible !important;
     padding-bottom: 3.5rem;
   }
+  .guide-body {
+    height: auto !important;
+    max-height: none !important;
+    overflow-y: visible !important;
+  }
+  .guide-footer {
+    position: relative;
+    width: 100%;
+  }
   .sidebar-container {
     order: 2;
     width: 100%;

@@ -534,38 +534,128 @@ class PropulsionExplorerJSLogicTests(unittest.TestCase):
         self.assertIn("case ']':", self.js)
         self.assertIn("case ' ':", self.js)
 
-    def test_v0_2_r1_f1_negative_scan_for_unsourced_force_numbers(self):
-        """V0.2-R1-F1: Scan all six chapter strings and fallback JS for unsourced force values."""
-        forbidden_patterns = [
-            "+0.045 N",
-            "-0.038 N",
-            "-0.005 N",
-            "-0.002 N",
-            "0.000 N identically",
-            "0.00 ± 0.05",
-            "0.00 \\pm 0.05",
-            "F = 0.00"
-        ]
+    def test_v0_2_r2_m3_generalized_numeric_force_evidence_policy(self):
+        """V0.2-R2-M3: Generalized allowlist check for numeric force values across all chapters and JS fallback."""
+        import re
 
-        # Scan JSON six_chapters
+        # Regex matching numeric values followed by force/mass units (N, mN, μN, mg, etc.)
+        force_pattern = re.compile(
+            r'([+\-]?\d+(?:\.\d+)?\s*(?:±|&plusmn;)?\s*(?:\d+(?:\.\d+)?)?\s*(?:mN|μN|uN|µN|pN|&mu;N|\bN\b|mg))'
+        )
+
+        # Allowlisted numeric force mentions with explicit provenance:
+        # 1. '0.3 mg' / '3 &mu;N' / '3 μN': Tajmar & Schreiber (2020) null limit citation
+        # 2. '5 mN': Parameterized illustrative ion wind formula with declared inputs (d=20mm, I=50uA)
+        # 3. '0.1 &mu;N' / '0.1 μN': Micro-Newton balance specification
+        allowlist = {
+            "0.3 mg", "0.3mg",
+            "3 &mu;N", "3 μN", "3&mu;N", "3μN",
+            "5 mN", "5mN",
+            "0.1 &mu;N", "0.1 μN", "0.1&mu;N", "0.1μN"
+        }
+
+        # 1. Scan JSON six_chapters
         for ch in self.provenance.get("six_chapters", []):
             ch_str = json.dumps(ch)
-            for pat in forbidden_patterns:
-                self.assertNotIn(pat, ch_str, f"Forbidden unsourced force '{pat}' found in JSON chapter {ch.get('chapter')}")
+            matches = force_pattern.findall(ch_str)
+            for m in matches:
+                normalized = m.strip()
+                # Remove leading + or - for comparison if present
+                clean_norm = normalized.lstrip("+-").strip()
+                self.assertTrue(
+                    any(clean_norm.startswith(allowed) or clean_norm == allowed for allowed in allowlist),
+                    f"Disallowed numeric force '{m}' in Chapter {ch.get('chapter')}. Only allowlisted external citations/toy examples permitted."
+                )
 
-        # Scan JS file
-        for pat in forbidden_patterns:
-            self.assertNotIn(pat, self.js, f"Forbidden unsourced force '{pat}' found in explorer.js")
+        # 2. Scan JS fallback six_chapters
+        js_match = re.search(r'six_chapters:\s*\[(.*?)\]\s*,\s*four_questions', self.js, re.DOTALL)
+        self.assertIsNotNone(js_match, "Fallback six_chapters must be present in explorer.js")
+        js_chapters = js_match.group(1)
+        matches_js = force_pattern.findall(js_chapters)
+        for m in matches_js:
+            clean_norm = m.strip().lstrip("+-").strip()
+            self.assertTrue(
+                any(clean_norm.startswith(allowed) or clean_norm == allowed for allowed in allowlist),
+                f"Disallowed numeric force '{m}' in explorer.js fallback chapters."
+            )
 
-    def test_v0_2_r1_f2_boundary_a_environmental_coupling(self):
-        """V0.2-R1-F2: Chapter 4 does not claim Boundary A Maxwell stress flux is identically zero."""
+        # 3. Verify unsourced DUT force claims are strictly forbidden
+        forbidden_claims = [
+            "+0.045 N", "-0.038 N", "-0.005 N", "-0.002 N",
+            "0.000 N identically", "0.00 ± 0.05", "0.00 \\pm 0.05", "F = 0.00"
+        ]
+        for pat in forbidden_claims:
+            self.assertNotIn(pat, json.dumps(self.provenance))
+            self.assertNotIn(pat, self.js)
+
+    def test_v0_2_r2_f1_boundary_accounting_consistency_across_surfaces(self):
+        """V0.2-R2-F1: Verify boundary-accounting consistency across chapters, ledger, JS, and README."""
+        # Chapter 3 shallow: blade-ground attraction qualified by dielectric and walls
+        ch3 = next((c for c in self.provenance.get("six_chapters", []) if c["chapter"] == 3), None)
+        self.assertIsNotNone(ch3)
+        self.assertIn("direct pairwise electrostatic interaction is mutually attractive", ch3["shallow"])
+        self.assertIn("total force on any single electrode also includes dielectric polarization", ch3["shallow"])
+
+        # Chapter 3 research control: evaluates boundary flux rather than promising zero
+        self.assertIn("quantify boundary flux", ch3["research"]["controls"])
+        self.assertNotIn("verify that internal attractive forces sum to zero", ch3["research"]["controls"])
+
+        # Chapter 4 shallow: explicit internal pairwise sum and external coupling
         ch4 = next((c for c in self.provenance.get("six_chapters", []) if c["chapter"] == 4), None)
         self.assertIsNotNone(ch4)
-        eqs = ch4["deeper"]["equations"]
-        self.assertNotIn("\\oint_{\\partial V_A} \\mathbf{T} \\cdot \\hat{\\mathbf{n}}\\, dA \\equiv 0", eqs)
-        self.assertNotIn("&conint;<sub>&part;V<sub>A</sub></sub> <b>T</b>&middot;<b>n̂</b> dA = 0", eqs)
-        self.assertIn("NOT identically zero if external electric fields penetrate Boundary A", eqs)
-        self.assertIn("&sum; <b>F</b><sub>internal</sub> = <b>0</b> identically", eqs)
+        self.assertIn("&sum; <b>F</b><sub>internal</sub> = <b>F</b><sub>blade,int</sub>", ch4["shallow"])
+        self.assertIn("<b>F</b><sub>DUT,net</sub> = <b>F</b><sub>external</sub>", ch4["shallow"])
+        self.assertIn("unknown pending calibrated geometry", ch4["shallow"])
+
+        # Chapter 4 deeper: Boundary A integral is UNKNOWN pending geometry
+        eqs4 = ch4["deeper"]["equations"]
+        self.assertIn("<b>F</b><sub>DUT</sub> = &conint;<sub>&part;V<sub>A</sub></sub> <b>T</b>&middot;<b>n̂</b> dA = <b>F</b><sub>external</sub>", eqs4)
+        self.assertIn("UNKNOWN pending calibrated geometry", eqs4)
+        self.assertNotIn("&conint;<sub>&part;V<sub>A</sub></sub> <b>T</b>&middot;<b>n̂</b> dA = 0", eqs4)
+        self.assertNotIn("&conint;<sub>&part;V<sub>A</sub></sub> <b>T</b>&middot;<b>n̂</b> dA &ne; 0", eqs4)
+
+        # Force Ledger Boundary A
+        ledger_a = self.provenance.get("force_accounting_ledger", {}).get("boundary_a_isolated_dut", {})
+        self.assertIn("Internal pairwise forces sum identically to zero", ledger_a.get("internal_stress_sum", ""))
+        self.assertIn("neither assumed zero nor assumed non-zero", ledger_a.get("external_environmental_coupling", ""))
+
+        # README consistency check: no assertion of != 0 pending geometry
+        with open("README.md", "r") as f:
+            readme = f.read()
+        self.assertNotIn("\\oint_{\\partial V_A} \\mathbf{T}\\cdot\\hat{\\mathbf{n}}\\,dA \\neq 0", readme)
+        self.assertIn("unknown pending calibrated geometry, neither assumed to be zero nor asserted to be non-zero", readme)
+
+    def test_v0_2_r2_m1_corona_onset_and_vacuum_ratio_provenance(self):
+        """V0.2-R2-M1: Qualified corona onset and accurate vacuum density ratio across all surfaces."""
+        # Chapter 2 uncertainties
+        ch2 = next((c for c in self.provenance.get("six_chapters", []) if c["chapter"] == 2), None)
+        self.assertIsNotNone(ch2)
+        u2 = ch2["research"]["uncertainties"]
+        self.assertIn("sharp conductor tips may reach the dielectric breakdown threshold", u2)
+        self.assertIn("peak field strength and corona onset have NOT been calculated or verified", u2)
+        self.assertIn("about eight orders of magnitude (~7.88 orders at 10⁻⁵ Torr)", u2)
+
+        # Chapter 6 deeper equations and citations
+        ch6 = next((c for c in self.provenance.get("six_chapters", []) if c["chapter"] == 6), None)
+        self.assertIsNotNone(ch6)
+        eqs6 = ch6["deeper"]["equations"]
+        self.assertIn("about eight orders of magnitude (~7.88 orders of magnitude", eqs6)
+        citations6 = ch6["deeper"]["citations"]
+        self.assertIn("Put strong limits on all proposed theories so far assessing electrostatic propulsion", citations6)
+        self.assertIn("Journal of Electrostatics", citations6)
+        self.assertIn("10.1016/j.elstat.2020.103477", citations6)
+
+        # Null controls: no categorical "Eliminate" for finite pressure
+        null_ctrls = self.provenance.get("null_controls", [])
+        vac_ctrl = next((c for c in null_ctrls if "High-Vacuum" in c["name"]), None)
+        self.assertIsNotNone(vac_ctrl)
+        self.assertIn("Suppress and test for", vac_ctrl["purpose"])
+        self.assertNotIn("Eliminate corona discharge", vac_ctrl["purpose"])
+
+        # Help modal in index.html has accurate Tajmar citation
+        self.assertIn("Journal of Electrostatics", self.html)
+        self.assertIn("10.1016/j.elstat.2020.103477", self.html)
+        self.assertNotIn("CEAS Space Journal", self.html)
 
     def test_v0_2_r1_m1_semantic_math_and_clickable_citations(self):
         """V0.2-R1-M1: Semantic math formatting and clickable citation hyperlinks."""
@@ -583,27 +673,6 @@ class PropulsionExplorerJSLogicTests(unittest.TestCase):
             self.assertIn("target='_blank'", citations, f"Citation in chapter {ch['chapter']} must open in new tab")
             self.assertIn("rel='noopener noreferrer'", citations, f"Citation in chapter {ch['chapter']} must have rel='noopener noreferrer'")
 
-    def test_v0_2_r1_m2_tajmar_2020_and_ion_wind_provenance(self):
-        """V0.2-R1-M2: Accurate Tajmar & Schreiber (2020) reference and qualified ion wind formula."""
-        ch6 = next((c for c in self.provenance.get("six_chapters", []) if c["chapter"] == 6), None)
-        self.assertIsNotNone(ch6)
-        citations = ch6["deeper"]["citations"]
-        self.assertIn("Put strong limits on all proposed theories so far assessing electrostatic propulsion", citations)
-        self.assertIn("Journal of Electrostatics", citations)
-        self.assertIn("10.1016/j.elstat.2020.103477", citations)
-
-        # Ion wind formula explicitly declares gap distance d
-        eqs6 = ch6["deeper"]["equations"]
-        self.assertIn("d = 20 mm", eqs6)
-        self.assertIn("50 &mu;A", eqs6)
-        self.assertNotIn("extinguishing ion wind to zero", eqs6)
-
-        # Chapter 2 peak field is qualified (not unconditional 10^7 V/m)
-        ch2 = next((c for c in self.provenance.get("six_chapters", []) if c["chapter"] == 2), None)
-        self.assertIsNotNone(ch2)
-        eqs2 = ch2["deeper"]["equations"]
-        self.assertIn("No validated 3D peak field magnitude is claimed", eqs2)
-
     def test_v0_2_r1_m3_mobile_scrollable_layout_and_ledger_navigation(self):
         """V0.2-R1-M3: Mobile layout has no clipping overflow constraints and provides ledger navigation."""
         # CSS mobile overrides
@@ -620,18 +689,21 @@ class PropulsionExplorerJSLogicTests(unittest.TestCase):
         self.assertIn("btn-chapter4-open-ledger", self.js)
         self.assertIn("btn-ledger-back-to-guide", self.js)
 
-    def test_v0_2_r1_m4_mathematical_scalar_wave_contrast_overlay(self):
-        """V0.2-R1-M4: 3D scene provides dedicated mathematical scalar wave contrast visualizer."""
+    def test_v0_2_r2_m2_mathematical_scalar_wave_mutually_exclusive_view(self):
+        """V0.2-R2-M2: 3D scene provides mutually exclusive scalar wave toy view centered at origin."""
         # HTML badge
         self.assertIn("id=\"scalar-wave-badge\"", self.html)
-        self.assertIn("MATHEMATICAL SCALAR WAVE CONTRAST", self.html)
-        self.assertIn("NOT coupled to capacitor or thrust", self.html)
+        self.assertIn("MATHEMATICAL SCALAR WAVE VIEW (ABSTRACT TOY MODEL)", self.html)
+        self.assertIn("Vector streamlines hidden", self.html)
+        self.assertIn("NOT emitted by or coupled to capacitor apparatus", self.html)
 
-        # JS group and helpers
+        # JS group, origin centering, and mutually exclusive toggling
         self.assertIn("scalarWaveGroup", self.js)
         self.assertIn("function createScalarWaveVisual", self.js)
+        self.assertIn("new THREE.Vector3(0, 0, 0)", self.js)
         self.assertIn("function updateScalarWaveAnimation", self.js)
         self.assertIn("function toggleScalarWaveContrast", self.js)
+        self.assertIn("fieldGroup.visible = false;", self.js)
         self.assertIn("btn-toggle-wave-contrast", self.js)
 
 
