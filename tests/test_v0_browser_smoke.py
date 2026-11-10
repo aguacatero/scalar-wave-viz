@@ -1249,7 +1249,7 @@ class PropulsionExplorerBrowserSmokeTests(unittest.TestCase):
         self.page.click("#guide-btn-next")
         self.page.wait_for_timeout(200)
         self.assertIn("4. Can the Whole Device Move?", title_el.inner_text())
-        self.assertIn("No Net Propulsion", self.page.locator("#scene-annotation-card").inner_text())
+        self.assertIn("Action-Reaction Balance", self.page.locator("#scene-annotation-card").inner_text())
         # Check Force Ledger tab automatically activated
         ledger_panel = self.page.locator("#tab-ledger")
         self.assertTrue(ledger_panel.is_visible())
@@ -1366,6 +1366,117 @@ class PropulsionExplorerBrowserSmokeTests(unittest.TestCase):
         self.page.set_viewport_size({"width": 1280, "height": 800})
         self.page.wait_for_timeout(50)
         self.assertEqual(len(self.page_errors), 0, f"Mobile tabs threw errors: {self.page_errors}")
+
+    def test_v0_2_r1_m1_rendered_math_and_clickable_citations(self):
+        """V0.2-R1-M1 regression: deeper layer renders clean semantic math without raw TeX delimiters and provides clickable links."""
+        # Open Chapter 2 (contains field formulas and citations)
+        self.page.click(".chapter-step-btn[data-index='1']")
+        self.page.wait_for_timeout(100)
+
+        guide_body = self.page.locator("#guide-body")
+        deeper = guide_body.locator(".iceberg-deeper")
+        deeper.locator("summary").evaluate("el => el.click()")
+        self.page.wait_for_timeout(50)
+
+        deeper_html = deeper.inner_html()
+        # Assert no raw TeX delimiters
+        self.assertNotIn(r"\(", deeper_html, "Raw LaTeX '\\(' found in rendered deeper HTML")
+        self.assertNotIn(r"\)", deeper_html, "Raw LaTeX '\\)' found in rendered deeper HTML")
+
+        # Assert clickable citation hyperlinks
+        citations_links = deeper.locator(".iceberg-content p:has-text('Primary Citations') a")
+        link_count = citations_links.count()
+        self.assertGreater(link_count, 0, "Deeper citations must contain clickable hyperlinks")
+        for i in range(link_count):
+            href = citations_links.nth(i).get_attribute("href")
+            self.assertTrue(href.startswith("https://") or href.startswith("http://"), f"Invalid citation href: {href}")
+            self.assertEqual(citations_links.nth(i).get_attribute("target"), "_blank")
+
+        self.assertEqual(len(self.page_errors), 0, f"Rendered math & links threw errors: {self.page_errors}")
+
+    def test_v0_2_r1_m3_mobile_deep_scrolling_and_ledger_navigation(self):
+        """V0.2-R1-M3 regression: mobile layout has reachable scrollable controls and bidirectional ledger navigation."""
+        for vp in [{"width": 375, "height": 667}, {"width": 390, "height": 844}]:
+            self.page.set_viewport_size(vp)
+            self.page.wait_for_timeout(100)
+
+            # Navigate to Chapter 4 (Can the Whole Device Move?)
+            self.page.click(".chapter-step-btn[data-index='3']")
+            self.page.wait_for_timeout(100)
+
+            # Open Action-Reaction Force Ledger from inside chapter content
+            open_ledger_btn = self.page.locator("#guide-body #btn-chapter4-open-ledger")
+            self.assertTrue(open_ledger_btn.is_visible(), "Chapter 4 open ledger button must be visible on mobile")
+            open_ledger_btn.click()
+            self.page.wait_for_timeout(150)
+
+            # Assert sidebar container and force ledger card are visible
+            sidebar = self.page.locator("#sidebar-container")
+            self.assertTrue(sidebar.is_visible(), "Sidebar container must be visible after clicking open ledger button")
+            ledger_card = self.page.locator("#force-ledger-card")
+            self.assertTrue(ledger_card.is_visible(), "Force ledger card must be visible")
+
+            # Click return to guide button
+            back_btn = self.page.locator("#btn-ledger-back-to-guide")
+            self.assertTrue(back_btn.is_visible(), "Return to guide button must be visible in ledger on mobile")
+            back_btn.click()
+            self.page.wait_for_timeout(150)
+
+            # Assert learning panel is visible again
+            learning_panel = self.page.locator("#learning-panel")
+            self.assertTrue(learning_panel.is_visible(), "Learning panel must be visible after returning from ledger")
+
+            # Expand deeper disclosure and verify Next/Back buttons remain clickable
+            deeper = learning_panel.locator(".iceberg-deeper")
+            deeper.locator("summary").evaluate("el => el.click()")
+            self.page.wait_for_timeout(50)
+
+            next_btn = self.page.locator("#guide-btn-next")
+            self.assertTrue(next_btn.is_visible())
+            next_btn.click()
+            self.page.wait_for_timeout(100)
+            self.assertIn("5. What Are Scalar Waves?", self.page.locator("#guide-chapter-title").inner_text())
+
+        # Restore desktop viewport
+        self.page.set_viewport_size({"width": 1280, "height": 800})
+        self.page.wait_for_timeout(50)
+        self.assertEqual(len(self.page_errors), 0, f"Mobile scrolling and ledger navigation threw errors: {self.page_errors}")
+
+    def test_v0_2_r1_m4_chapter5_scalar_wave_contrast_toggle_and_badge(self):
+        """V0.2-R1-M4 regression: Chapter 5 provides 3D mathematical scalar-wave contrast visualizer and badge."""
+        # Navigate to Chapter 5
+        self.page.click(".chapter-step-btn[data-index='4']")
+        self.page.wait_for_timeout(100)
+        self.assertIn("What Are Scalar Waves?", self.page.locator("#guide-chapter-title").inner_text())
+
+        # Toggle button should be visible
+        toggle_btn = self.page.locator("#guide-body #btn-toggle-wave-contrast")
+        self.assertTrue(toggle_btn.is_visible(), "Chapter 5 wave contrast button must be visible")
+
+        badge = self.page.locator("#scalar-wave-badge")
+        # Initially hidden
+        self.assertTrue("hidden" in (badge.get_attribute("class") or ""))
+
+        # Click to toggle on
+        toggle_btn.click()
+        self.page.wait_for_timeout(100)
+        self.assertFalse("hidden" in (badge.get_attribute("class") or ""))
+        badge_text = badge.inner_text()
+        self.assertIn("MATHEMATICAL SCALAR WAVE CONTRAST", badge_text)
+        self.assertIn("NOT coupled to capacitor or thrust", badge_text)
+
+        # Verify 3D scalar wave group is visible
+        is_wave_visible = self.page.evaluate("window.__explorer.scalarWaveGroup.visible")
+        self.assertTrue(is_wave_visible, "3D scalar wave group must be visible when contrast is toggled on")
+
+        # Click again to toggle off
+        toggle_btn.click()
+        self.page.wait_for_timeout(100)
+        self.assertTrue("hidden" in (badge.get_attribute("class") or ""))
+        is_wave_visible_after = self.page.evaluate("window.__explorer.scalarWaveGroup.visible")
+        self.assertFalse(is_wave_visible_after, "3D scalar wave group must be hidden when contrast is toggled off")
+
+        self.assertEqual(len(self.page_errors), 0, f"Chapter 5 wave contrast threw errors: {self.page_errors}")
 
 
 if __name__ == "__main__":

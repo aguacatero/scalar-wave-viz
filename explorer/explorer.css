@@ -773,6 +773,85 @@ body {
   pointer-events: none;
 }
 
+/* Mathematical Scalar Wave Contrast Overlay Badge (V0.2-R1-M4) */
+.scalar-wave-badge {
+  position: absolute;
+  bottom: 4.5rem;
+  left: 1rem;
+  background: rgba(30, 16, 48, 0.92);
+  border: 1px solid #c084fc;
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.6);
+  border-radius: 8px;
+  padding: 0.6rem 0.9rem;
+  z-index: 15;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  max-width: 360px;
+  pointer-events: none;
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+
+.scalar-wave-badge.hidden {
+  display: none !important;
+}
+
+.scalar-wave-badge .badge-title {
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: #f3e8ff;
+  letter-spacing: 0.05em;
+}
+
+.scalar-wave-badge .badge-sub {
+  font-size: 0.68rem;
+  color: #e9d5ff;
+  font-family: var(--font-mono);
+}
+
+.scalar-wave-badge .badge-disclaimer {
+  font-size: 0.63rem;
+  color: #fbcfe8;
+  font-style: italic;
+  line-height: 1.3;
+}
+
+.math-formula {
+  display: inline-block;
+  padding: 0.2rem 0.4rem;
+  background: rgba(15, 23, 42, 0.6);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  font-family: var(--font-mono);
+  font-size: 0.82rem;
+  color: #f8fafc;
+}
+
+.math-eq {
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  color: #f1f5f9;
+}
+
+.iceberg-content a {
+  color: #38bdf8;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  transition: color 0.15s ease;
+}
+
+.iceberg-content a:hover {
+  color: #7dd3fc;
+  text-decoration: underline;
+}
+
+.ledger-highlight {
+  outline: 2px solid var(--color-force);
+  box-shadow: 0 0 15px rgba(250, 204, 21, 0.35);
+  transition: outline 0.3s ease, box-shadow 0.3s ease;
+}
+
 .legend-header {
   font-size: 0.65rem;
   font-weight: 700;
@@ -1306,37 +1385,50 @@ kbd {
 }
 
 @media (max-width: 850px) {
-  body {
-    min-height: auto;
-    overflow-y: auto;
+  html, body {
+    height: auto !important;
+    min-height: 100% !important;
+    overflow-x: hidden !important;
+    overflow-y: auto !important;
   }
   .app-layout {
     flex-direction: column;
-    height: auto;
+    height: auto !important;
+    max-height: none !important;
+    overflow: visible !important;
   }
   .viewport-container {
     order: 0;
     height: 380px;
     flex: none;
     width: 100%;
+    overflow: hidden;
   }
   .mobile-panel-tabs {
     order: 1;
     display: flex;
+    position: sticky;
+    top: 0;
+    z-index: 50;
   }
   .learning-panel {
     order: 2;
     width: 100%;
     border-right: none;
     border-bottom: 1px solid var(--border-color);
-    height: auto;
-    max-height: none;
+    height: auto !important;
+    max-height: none !important;
+    overflow-y: visible !important;
+    padding-bottom: 3.5rem;
   }
   .sidebar-container {
     order: 2;
     width: 100%;
     border-left: none;
-    height: auto;
+    height: auto !important;
+    max-height: none !important;
+    overflow-y: visible !important;
+    padding-bottom: 3.5rem;
   }
 
   /* In mobile view, tab switching controls visibility: */
@@ -1351,6 +1443,17 @@ kbd {
   }
   .app-layout:not(.mobile-show-controls) .learning-panel {
     display: flex !important;
+  }
+
+  .mobile-only-btn {
+    display: inline-block !important;
+  }
+
+  .scalar-wave-badge {
+    bottom: 3.5rem;
+    left: 0.5rem;
+    right: 0.5rem;
+    max-width: calc(100vw - 1rem);
   }
 }
 

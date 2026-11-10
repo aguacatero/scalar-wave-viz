@@ -298,6 +298,9 @@ class PropulsionExplorerJSLogicTests(unittest.TestCase):
         css_path = EXPLORER_DIR / "explorer.css"
         with open(css_path, "r", encoding="utf-8") as f:
             self.css = f.read()
+        prov_path = EXPLORER_DIR / "provenance_data.json"
+        with open(prov_path, "r", encoding="utf-8") as f:
+            self.provenance = json.load(f)
 
     def test_no_invalid_orbit_controls_method_calls(self):
         """V0-R1-F3 regression: verify nonexistent rotateLeft/rotateUp/dollyIn are NOT called."""
@@ -530,6 +533,106 @@ class PropulsionExplorerJSLogicTests(unittest.TestCase):
         self.assertIn("case '[':", self.js)
         self.assertIn("case ']':", self.js)
         self.assertIn("case ' ':", self.js)
+
+    def test_v0_2_r1_f1_negative_scan_for_unsourced_force_numbers(self):
+        """V0.2-R1-F1: Scan all six chapter strings and fallback JS for unsourced force values."""
+        forbidden_patterns = [
+            "+0.045 N",
+            "-0.038 N",
+            "-0.005 N",
+            "-0.002 N",
+            "0.000 N identically",
+            "0.00 ± 0.05",
+            "0.00 \\pm 0.05",
+            "F = 0.00"
+        ]
+
+        # Scan JSON six_chapters
+        for ch in self.provenance.get("six_chapters", []):
+            ch_str = json.dumps(ch)
+            for pat in forbidden_patterns:
+                self.assertNotIn(pat, ch_str, f"Forbidden unsourced force '{pat}' found in JSON chapter {ch.get('chapter')}")
+
+        # Scan JS file
+        for pat in forbidden_patterns:
+            self.assertNotIn(pat, self.js, f"Forbidden unsourced force '{pat}' found in explorer.js")
+
+    def test_v0_2_r1_f2_boundary_a_environmental_coupling(self):
+        """V0.2-R1-F2: Chapter 4 does not claim Boundary A Maxwell stress flux is identically zero."""
+        ch4 = next((c for c in self.provenance.get("six_chapters", []) if c["chapter"] == 4), None)
+        self.assertIsNotNone(ch4)
+        eqs = ch4["deeper"]["equations"]
+        self.assertNotIn("\\oint_{\\partial V_A} \\mathbf{T} \\cdot \\hat{\\mathbf{n}}\\, dA \\equiv 0", eqs)
+        self.assertNotIn("&conint;<sub>&part;V<sub>A</sub></sub> <b>T</b>&middot;<b>n̂</b> dA = 0", eqs)
+        self.assertIn("NOT identically zero if external electric fields penetrate Boundary A", eqs)
+        self.assertIn("&sum; <b>F</b><sub>internal</sub> = <b>0</b> identically", eqs)
+
+    def test_v0_2_r1_m1_semantic_math_and_clickable_citations(self):
+        """V0.2-R1-M1: Semantic math formatting and clickable citation hyperlinks."""
+        self.assertIn("function cleanMathHtml", self.js)
+
+        for ch in self.provenance.get("six_chapters", []):
+            deeper = ch["deeper"]
+            # No raw unescaped LaTeX delimiters in equations
+            self.assertNotIn("\\(", deeper["equations"], f"Raw LaTeX '\\(' found in chapter {ch['chapter']} equations")
+            self.assertNotIn("\\)", deeper["equations"], f"Raw LaTeX '\\)' found in chapter {ch['chapter']} equations")
+
+            # Citations must contain valid hyperlinks
+            citations = deeper["citations"]
+            self.assertIn("<a href=", citations, f"Citation in chapter {ch['chapter']} must contain clickable link")
+            self.assertIn("target='_blank'", citations, f"Citation in chapter {ch['chapter']} must open in new tab")
+            self.assertIn("rel='noopener noreferrer'", citations, f"Citation in chapter {ch['chapter']} must have rel='noopener noreferrer'")
+
+    def test_v0_2_r1_m2_tajmar_2020_and_ion_wind_provenance(self):
+        """V0.2-R1-M2: Accurate Tajmar & Schreiber (2020) reference and qualified ion wind formula."""
+        ch6 = next((c for c in self.provenance.get("six_chapters", []) if c["chapter"] == 6), None)
+        self.assertIsNotNone(ch6)
+        citations = ch6["deeper"]["citations"]
+        self.assertIn("Put strong limits on all proposed theories so far assessing electrostatic propulsion", citations)
+        self.assertIn("Journal of Electrostatics", citations)
+        self.assertIn("10.1016/j.elstat.2020.103477", citations)
+
+        # Ion wind formula explicitly declares gap distance d
+        eqs6 = ch6["deeper"]["equations"]
+        self.assertIn("d = 20 mm", eqs6)
+        self.assertIn("50 &mu;A", eqs6)
+        self.assertNotIn("extinguishing ion wind to zero", eqs6)
+
+        # Chapter 2 peak field is qualified (not unconditional 10^7 V/m)
+        ch2 = next((c for c in self.provenance.get("six_chapters", []) if c["chapter"] == 2), None)
+        self.assertIsNotNone(ch2)
+        eqs2 = ch2["deeper"]["equations"]
+        self.assertIn("No validated 3D peak field magnitude is claimed", eqs2)
+
+    def test_v0_2_r1_m3_mobile_scrollable_layout_and_ledger_navigation(self):
+        """V0.2-R1-M3: Mobile layout has no clipping overflow constraints and provides ledger navigation."""
+        # CSS mobile overrides
+        self.assertIn("height: auto !important;", self.css)
+        self.assertIn("max-height: none !important;", self.css)
+        self.assertIn("overflow: visible !important;", self.css)
+        self.assertIn("overflow-y: auto !important;", self.css)
+
+        # HTML elements
+        self.assertIn("id=\"force-ledger-card\"", self.html)
+        self.assertIn("id=\"btn-ledger-back-to-guide\"", self.html)
+
+        # JS wirings
+        self.assertIn("btn-chapter4-open-ledger", self.js)
+        self.assertIn("btn-ledger-back-to-guide", self.js)
+
+    def test_v0_2_r1_m4_mathematical_scalar_wave_contrast_overlay(self):
+        """V0.2-R1-M4: 3D scene provides dedicated mathematical scalar wave contrast visualizer."""
+        # HTML badge
+        self.assertIn("id=\"scalar-wave-badge\"", self.html)
+        self.assertIn("MATHEMATICAL SCALAR WAVE CONTRAST", self.html)
+        self.assertIn("NOT coupled to capacitor or thrust", self.html)
+
+        # JS group and helpers
+        self.assertIn("scalarWaveGroup", self.js)
+        self.assertIn("function createScalarWaveVisual", self.js)
+        self.assertIn("function updateScalarWaveAnimation", self.js)
+        self.assertIn("function toggleScalarWaveContrast", self.js)
+        self.assertIn("btn-toggle-wave-contrast", self.js)
 
 
 
