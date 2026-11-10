@@ -803,13 +803,19 @@
   // - Convention: E = -grad Phi points from Ground (0 V, high potential) to Blade (-V, low potential)
   // - When V = 0: fieldGroup is completely hidden and lines have 0 opacity
   function updateFieldLines() {
+    // V0.2-R5 / R4-F1: Do not destructively dispose live streamlines during scalar wave view.
+    if (isScalarWaveContrastActive) {
+      fieldGroup.visible = false;
+      return;
+    }
+
     while (fieldGroup.children.length > 0) {
       const obj = fieldGroup.children[0];
       fieldGroup.remove(obj);
       disposeHierarchy(obj);
     }
 
-    if (currentVoltageKV <= 0.0 || isScalarWaveContrastActive) {
+    if (currentVoltageKV <= 0.0) {
       fieldGroup.visible = false;
       return;
     }
@@ -913,13 +919,19 @@
   //   * Scales from 16.0 mm to 30.0 mm at 50 kV (stays strictly within 80 mm chamber).
   // - Fully disposes nested geometries and materials before rebuild.
   function updateForceVectors() {
+    // V0.2-R5 / R4-F1: Do not destructively dispose live force vectors during scalar wave view.
+    if (isScalarWaveContrastActive) {
+      forceGroup.visible = false;
+      return;
+    }
+
     while (forceGroup.children.length > 0) {
       const obj = forceGroup.children[0];
       forceGroup.remove(obj);
       disposeHierarchy(obj);
     }
 
-    if (currentVoltageKV <= 0.0 || isScalarWaveContrastActive) {
+    if (currentVoltageKV <= 0.0) {
       forceGroup.visible = false;
       return;
     }
@@ -1128,6 +1140,15 @@
 
     if (scalarWaveGroup) {
       scalarWaveGroup.visible = isScalarWaveContrastActive;
+    }
+
+    // V0.2-R5 / R4-F1: When leaving wave mode, unconditionally rebuild field lines,
+    // force vectors, and gap indicator so any parameter adjustments during wave mode
+    // (voltage slider, gap slider) are cleanly and accurately populated in 3D geometry.
+    if (!isScalarWaveContrastActive) {
+      updateFieldLines();
+      updateForceVectors();
+      updateGapIndicator();
     }
 
     // Mutually exclusive view & visual scene isolation (V0.2-R4 / R3-F1 & R3-M2):

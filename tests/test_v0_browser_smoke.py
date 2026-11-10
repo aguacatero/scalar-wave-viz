@@ -1553,29 +1553,103 @@ class PropulsionExplorerBrowserSmokeTests(unittest.TestCase):
         chk_fields.check()
         self.assertTrue(self.page.evaluate("window.__explorer.fieldGroup.visible"), "fieldGroup should be visible when rechecked")
 
-        # Sub-check (c): voltage/layer changes during toy mode
+        # Sub-check (c): voltage/layer changes during toy mode (V0.2-R5 / R4-F1 & R4-M1)
         toggle_btn.click()
         self.page.wait_for_timeout(100)
         self.assertTrue(self.page.evaluate("window.__explorer.scalarWaveGroup.visible"), "scalarWaveGroup visible")
         self.assertFalse(self.page.evaluate("window.__explorer.fieldGroup.visible"), "fieldGroup hidden")
         self.assertFalse(self.page.evaluate("window.__explorer.geometryGroup.visible"), "geometryGroup hidden")
 
-        # Change voltage slider while toy mode is active
+        # Change voltage and gap sliders while toy mode is active
         slider = self.page.locator("#slider-voltage")
         slider.fill("35")
         slider.dispatch_event("input")
+        slider_gap = self.page.locator("#slider-gap")
+        slider_gap.fill("30")
+        slider_gap.dispatch_event("input")
         self.page.wait_for_timeout(100)
+
+        # Groups must remain hidden during toy mode even after slider events
         self.assertFalse(self.page.evaluate("window.__explorer.fieldGroup.visible"), "fieldGroup must NOT reappear on voltage change during toy mode")
         self.assertFalse(self.page.evaluate("window.__explorer.forceGroup.visible"), "forceGroup must NOT reappear on voltage change during toy mode")
         self.assertFalse(self.page.evaluate("window.__explorer.geometryGroup.visible"), "geometryGroup must NOT reappear during toy mode")
         self.assertTrue(self.page.evaluate("window.__explorer.scalarWaveGroup.visible"), "scalarWaveGroup remains visible")
 
-        # Toggle layer checkbox while toy mode is active
-        chk_fields.check()
-        self.assertFalse(self.page.evaluate("window.__explorer.fieldGroup.visible"), "fieldGroup must NOT reappear on layer checkbox click during toy mode")
+        # V0.2-R5 / R4-M1: Execute real unchecked -> checked and checked -> unchecked transitions during toy mode
         chk_geom = self.page.locator("#toggle-geometry")
+        chk_forces = self.page.locator("#toggle-forces")
+
+        # 1. Uncheck then check toggle-fields
+        chk_fields.uncheck()
+        self.assertFalse(chk_fields.is_checked(), "toggle-fields must be unchecked after uncheck()")
+        self.assertFalse(self.page.evaluate("window.__explorer.fieldGroup.visible"), "fieldGroup must remain false in toy mode")
+        chk_fields.check()
+        self.assertTrue(chk_fields.is_checked(), "toggle-fields must be checked after check()")
+        self.assertFalse(self.page.evaluate("window.__explorer.fieldGroup.visible"), "fieldGroup must still be hidden during toy mode despite checkbox=true")
+
+        # 2. Uncheck then check toggle-geometry
+        chk_geom.uncheck()
+        self.assertFalse(chk_geom.is_checked(), "toggle-geometry must be unchecked after uncheck()")
+        self.assertFalse(self.page.evaluate("window.__explorer.geometryGroup.visible"), "geometryGroup must remain false in toy mode")
         chk_geom.check()
-        self.assertFalse(self.page.evaluate("window.__explorer.geometryGroup.visible"), "geometryGroup must NOT reappear during toy mode")
+        self.assertTrue(chk_geom.is_checked(), "toggle-geometry must be checked after check()")
+        self.assertFalse(self.page.evaluate("window.__explorer.geometryGroup.visible"), "geometryGroup must still be hidden during toy mode despite checkbox=true")
+
+        # 3. Uncheck then check toggle-forces
+        chk_forces.uncheck()
+        self.assertFalse(chk_forces.is_checked(), "toggle-forces must be unchecked after uncheck()")
+        self.assertFalse(self.page.evaluate("window.__explorer.forceGroup.visible"), "forceGroup must remain false in toy mode")
+        chk_forces.check()
+        self.assertTrue(chk_forces.is_checked(), "toggle-forces must be checked after check()")
+        self.assertFalse(self.page.evaluate("window.__explorer.forceGroup.visible"), "forceGroup must still be hidden during toy mode despite checkbox=true")
+
+        # V0.2-R5 / R4-F1: Deactivate toy mode; verify objects are restored with nonzero child counts
+        toggle_btn.click()
+        self.page.wait_for_timeout(100)
+        self.assertFalse(self.page.evaluate("window.__explorer.scalarWaveGroup.visible"), "scalarWaveGroup must be hidden after toggle off")
+        self.assertTrue(self.page.evaluate("window.__explorer.geometryGroup.visible"), "geometryGroup must be restored")
+        self.assertTrue(self.page.evaluate("window.__explorer.fieldGroup.visible"), "fieldGroup must be visible")
+        self.assertTrue(self.page.evaluate("window.__explorer.forceGroup.visible"), "forceGroup must be visible")
+
+        field_child_count = self.page.evaluate("window.__explorer.fieldGroup.children.length")
+        self.assertGreater(field_child_count, 0, f"fieldGroup must have rebuilt/restored streamline children at 35 kV, got {field_child_count}")
+        force_child_count = self.page.evaluate("window.__explorer.forceGroup.children.length")
+        self.assertGreater(force_child_count, 0, f"forceGroup must have rebuilt/restored force vector children at 35 kV, got {force_child_count}")
+
+        # V0.2-R5 / R4-F1: Test zero voltage behavior
+        slider.fill("0")
+        slider.dispatch_event("input")
+        self.page.wait_for_timeout(100)
+        self.assertFalse(self.page.evaluate("window.__explorer.fieldGroup.visible"), "fieldGroup must be hidden at 0 kV")
+        self.assertFalse(self.page.evaluate("window.__explorer.forceGroup.visible"), "forceGroup must be hidden at 0 kV")
+        self.assertEqual(self.page.evaluate("window.__explorer.fieldGroup.children.length"), 0, "fieldGroup children must be 0 at 0 kV")
+        self.assertEqual(self.page.evaluate("window.__explorer.forceGroup.children.length"), 0, "forceGroup children must be 0 at 0 kV")
+
+        # Toggle wave mode at 0 kV and toggle back; verify child count remains 0
+        toggle_btn.click()
+        self.page.wait_for_timeout(100)
+        self.assertTrue(self.page.evaluate("window.__explorer.scalarWaveGroup.visible"))
+        toggle_btn.click()
+        self.page.wait_for_timeout(100)
+        self.assertFalse(self.page.evaluate("window.__explorer.scalarWaveGroup.visible"))
+        self.assertEqual(self.page.evaluate("window.__explorer.fieldGroup.children.length"), 0, "fieldGroup children must remain 0 at 0 kV after toggle")
+        self.assertEqual(self.page.evaluate("window.__explorer.forceGroup.children.length"), 0, "forceGroup children must remain 0 at 0 kV after toggle")
+
+        # Restore voltage to 20 kV for subsequent navigation checks
+        slider.fill("20")
+        slider.dispatch_event("input")
+        self.page.wait_for_timeout(100)
+        self.assertGreater(self.page.evaluate("window.__explorer.fieldGroup.children.length"), 0)
+        self.assertGreater(self.page.evaluate("window.__explorer.forceGroup.children.length"), 0)
+
+        # WebGL Canvas visual postcondition check
+        is_webgl_ok = self.page.evaluate("""() => {
+            const canvas = document.getElementById('webgl-canvas');
+            if (!canvas) return false;
+            const gl = canvas.getContext('webgl2') || canvas.getContext('webgl');
+            return !!gl && !gl.isContextLost();
+        }""")
+        self.assertTrue(is_webgl_ok, "WebGL canvas context must be valid and not lost")
 
         # Sub-check (b): leaving Chapter 5 for Chapter 6 while toy mode active
         self.page.click("#guide-btn-next")

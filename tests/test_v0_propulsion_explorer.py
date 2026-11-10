@@ -562,8 +562,8 @@ class PropulsionExplorerJSLogicTests(unittest.TestCase):
                 raise AssertionError(f"Historical forbidden string '{pat}' found in text.")
 
         dut_force_regex = re.compile(
-            r'(?:DUT|whole[- ]device|device thrust|net DUT|Boundary A)[^.\n]{0,80}?'
-            r'((?:[+\-]|±|&plusmn;)?\s*\d+(?:\.\d+)?\s*(?:(?:±|&plusmn;)\s*\d+(?:\.\d+)?)?\s*(?:mN|μN|uN|µN|pN|&mu;N|\bN\b|mg))',
+            r'(?:DUT|whole[- ]device|device thrust|net DUT|Boundary A|capacitor measured|propulsion force|measured force|measured thrust|thrust observed|observed thrust)[^.\n;]{0,80}?'
+            r'((?:[+\-]|±|&plusmn;|<|>)?\s*\d+(?:\.\d+)?\s*(?:(?:±|&plusmn;)\s*\d+(?:\.\d+)?)?\s*(?:mN|μN|uN|µN|pN|&mu;N|\bN\b|mg))',
             re.IGNORECASE
         )
         dut_matches = dut_force_regex.findall(raw_text)
@@ -571,12 +571,23 @@ class PropulsionExplorerJSLogicTests(unittest.TestCase):
             raise AssertionError(f"Forbidden DUT force/thrust claim detected: {dut_matches}")
 
         explicit_thrust_regex = re.compile(
-            r'(?:thrust|net force)\s*[:=]\s*(?:[+\-]|±|&plusmn;)?\s*\d+(?:\.\d+)?\s*(?:mN|μN|uN|µN|pN|&mu;N|\bN\b|mg)',
+            r'(?:thrust|net force|propulsion force|measured force|measured thrust)\s*[:=]\s*(?:[+\-]|±|&plusmn;|<|>)?\s*\d+(?:\.\d+)?\s*(?:mN|μN|uN|µN|pN|&mu;N|\bN\b|mg)',
             re.IGNORECASE
         )
         explicit_matches = explicit_thrust_regex.findall(raw_text)
         if explicit_matches:
             raise AssertionError(f"Forbidden explicit thrust/force claim detected: {explicit_matches}")
+
+        def extract_sentence(text, start, end):
+            # Backward boundary: period not surrounded by digits, followed by whitespace, or newline, or HTML tag
+            s_start = 0
+            for match in re.finditer(r'(?:(?<!\d)\.(?!\d)\s+|\n+|\<br\s*/?\>|\<p\>|\</p\>)', text[:start]):
+                s_start = match.end()
+            s_end = len(text)
+            m_forward = re.search(r'(?:(?<!\d)\.(?!\d)(?:\s+|$)|[\n]|\<br\s*/?\>|\<p\>|\</p\>)', text[end:])
+            if m_forward:
+                s_end = end + m_forward.start()
+            return text[s_start:s_end].strip()
 
         for ch in chapters:
             ch_num = ch.get("chapter")
@@ -599,32 +610,66 @@ class PropulsionExplorerJSLogicTests(unittest.TestCase):
                 if force_pattern.findall(shallow):
                     raise AssertionError(f"Disallowed force value in Chapter 6 shallow: {force_pattern.findall(shallow)}")
 
+                # V0.2-R5 / R4-M2: Sentence-local / passage-level structured binding for Chapter 6 equations
                 eq_text = deeper.get("equations", "")
-                eq_matches = force_pattern.findall(eq_text)
+                eq_matches = list(force_pattern.finditer(eq_text))
+                if len(eq_matches) != 1:
+                    raise AssertionError(
+                        f"Chapter 6 equations must contain exactly 1 force token (the illustrative 5 mN aerodynamic calculation), "
+                        f"found {len(eq_matches)}: {[m.group(1) for m in eq_matches]}"
+                    )
                 for m in eq_matches:
-                    clean = re.sub(r'^(?:[+\-]|±|&plusmn;|<|>)\s*', '', m.strip())
+                    val = m.group(1)
+                    clean = re.sub(r'^(?:[+\-]|±|&plusmn;|<|>)\s*', '', val.strip())
                     if clean not in ["5 mN", "5mN"]:
-                        raise AssertionError(f"Disallowed force '{m}' in Chapter 6 equations. Only 5 mN illustrative calculation permitted.")
-                    if "d = 20 mm" not in eq_text or ("50 &mu;A" not in eq_text and "50 μA" not in eq_text) or "mobility" not in eq_text:
-                        raise AssertionError("Force '5 mN' in Chapter 6 equations lacks required contextual inputs (d=20mm, 50uA, mobility).")
+                        raise AssertionError(f"Disallowed force '{val}' in Chapter 6 equations. Only 5 mN illustrative calculation permitted.")
+                    passage = extract_sentence(eq_text, m.start(), m.end())
+                    if not ("d = 20 mm" in passage or "0.02 m" in passage):
+                        raise AssertionError(f"Passage '{passage}' lacking gap input 'd = 20 mm'.")
+                    if not ("50 &mu;A" in passage or "50 μA" in passage):
+                        raise AssertionError(f"Passage '{passage}' lacking corona current '50 μA'.")
+                    if not ("mobility" in eq_text and ("spurious aerodynamic thrust" in passage or "aerodynamic thrust" in passage)):
+                        raise AssertionError(f"Passage '{passage}' lacking aerodynamic thrust qualification.")
+                    if re.search(r'\b(?:DUT|whole[- ]device|device thrust|net DUT|Boundary A|capacitor measured|propulsion force|measured force|measured thrust|thrust observed|observed thrust)\b', passage, re.IGNORECASE):
+                        raise AssertionError(f"Passage contains forbidden device propulsion claim: '{passage}'")
 
+                # V0.2-R5 / R4-M2: Sentence-local / passage-level structured binding for Chapter 6 specifications
                 spec_text = deeper.get("specifications", "")
-                spec_matches = force_pattern.findall(spec_text)
+                spec_matches = list(force_pattern.finditer(spec_text))
+                if len(spec_matches) != 1:
+                    raise AssertionError(
+                        f"Chapter 6 specifications must contain exactly 1 force token (< 0.1 μN balance resolution target), "
+                        f"found {len(spec_matches)}: {[m.group(1) for m in spec_matches]}"
+                    )
                 for m in spec_matches:
-                    clean = re.sub(r'^(?:[+\-]|±|&plusmn;|<|>)\s*', '', m.strip())
+                    val = m.group(1)
+                    clean = re.sub(r'^(?:[+\-]|±|&plusmn;|<|>)\s*', '', val.strip())
                     if clean not in ["0.1 &mu;N", "0.1 μN", "0.1&mu;N", "0.1μN"]:
-                        raise AssertionError(f"Disallowed force '{m}' in Chapter 6 specifications. Only < 0.1 μN resolution target permitted.")
-                    if "resolution" not in spec_text or "<" not in spec_text:
-                        raise AssertionError(f"Force '{m}' in Chapter 6 specifications must be strictly bound as a balance resolution target ('< 0.1').")
+                        raise AssertionError(f"Disallowed force '{val}' in Chapter 6 specifications. Only < 0.1 μN resolution target permitted.")
+                    passage = extract_sentence(spec_text, m.start(), m.end())
+                    if "resolution" not in passage or "<" not in passage:
+                        raise AssertionError(f"Force '{val}' in passage '{passage}' must be strictly bound as a balance resolution target ('< 0.1').")
+                    if re.search(r'\b(?:DUT|whole[- ]device|device thrust|net DUT|Boundary A|capacitor measured|propulsion force|measured force|measured thrust|thrust observed|observed thrust)\b', passage, re.IGNORECASE):
+                        raise AssertionError(f"Passage contains forbidden device propulsion claim: '{passage}'")
 
+                # V0.2-R5 / R4-M2: Sentence-local / passage-level structured binding for Chapter 6 hypotheses
                 hyp_text = research.get("hypotheses", "")
-                hyp_matches = force_pattern.findall(hyp_text)
+                hyp_matches = list(force_pattern.finditer(hyp_text))
+                if len(hyp_matches) != 2:
+                    raise AssertionError(
+                        f"Chapter 6 hypotheses must contain exactly 2 force tokens (Tajmar 2020 ±0.3 mg and ±3 μN limits), "
+                        f"found {len(hyp_matches)}: {[m.group(1) for m in hyp_matches]}"
+                    )
                 for m in hyp_matches:
-                    clean = re.sub(r'^(?:[+\-]|±|&plusmn;|<|>)\s*', '', m.strip())
+                    val = m.group(1)
+                    clean = re.sub(r'^(?:[+\-]|±|&plusmn;|<|>)\s*', '', val.strip())
                     if clean not in ["0.3 mg", "0.3mg", "3 &mu;N", "3 μN", "3&mu;N", "3μN"]:
-                        raise AssertionError(f"Disallowed force '{m}' in Chapter 6 hypotheses. Only Tajmar 2020 citation values permitted.")
-                    if "Tajmar" not in hyp_text or "null" not in hyp_text:
-                        raise AssertionError(f"Force '{m}' in Chapter 6 hypotheses must be bound to Tajmar null measurement citation.")
+                        raise AssertionError(f"Disallowed force '{val}' in Chapter 6 hypotheses. Only Tajmar 2020 citation values permitted.")
+                    passage = extract_sentence(hyp_text, m.start(), m.end())
+                    if "Tajmar" not in passage or "null" not in passage:
+                        raise AssertionError(f"Force '{val}' in passage '{passage}' must be bound to Tajmar null measurement citation.")
+                    if re.search(r'\b(?:DUT|whole[- ]device|device thrust|net DUT|Boundary A|capacitor measured|propulsion force|measured force|measured thrust|thrust observed|observed thrust)\b', passage, re.IGNORECASE):
+                        raise AssertionError(f"Passage contains forbidden device propulsion claim: '{passage}'")
 
                 unc_matches = force_pattern.findall(research.get("uncertainties", ""))
                 if unc_matches:
@@ -685,7 +730,11 @@ class PropulsionExplorerJSLogicTests(unittest.TestCase):
         ch1["surface"] += " Thrust observed: +5 mN."
         with self.assertRaises(AssertionError) as ctx:
             self._validate_contextual_evidence_policy(m3["six_chapters"], raw_text=json.dumps(m3, ensure_ascii=False))
-        self.assertTrue("Disallowed numeric force" in str(ctx.exception) or "Forbidden explicit thrust" in str(ctx.exception))
+        self.assertTrue(
+            "Disallowed numeric force" in str(ctx.exception)
+            or "Forbidden DUT force" in str(ctx.exception)
+            or "Forbidden explicit thrust" in str(ctx.exception)
+        )
 
         # Mutation 4: Inject allowlisted '+5 mN' into Chapter 6 surface in JSON (context bypass attempt)
         m4 = copy.deepcopy(self.provenance)
@@ -718,6 +767,54 @@ class PropulsionExplorerJSLogicTests(unittest.TestCase):
         with self.assertRaises(AssertionError) as ctx:
             self._validate_contextual_evidence_policy(m7["six_chapters"], raw_text=json.dumps(m7, ensure_ascii=False))
         self.assertTrue("Forbidden DUT force" in str(ctx.exception) or "Forbidden explicit thrust" in str(ctx.exception))
+
+        # Mutation 8 (V0.2-R5 / R4-M2): Inject spurious DUT measurement 'Capacitor measured propulsion force: +5 mN' into Chapter 6 equations in JSON
+        m8 = copy.deepcopy(self.provenance)
+        ch6_8 = next(c for c in m8["six_chapters"] if c["chapter"] == 6)
+        ch6_8["deeper"]["equations"] += " Capacitor measured propulsion force: +5 mN."
+        with self.assertRaises(AssertionError) as ctx:
+            self._validate_contextual_evidence_policy(m8["six_chapters"], raw_text=json.dumps(m8, ensure_ascii=False))
+        self.assertTrue(
+            "Chapter 6 equations must contain exactly 1 force token" in str(ctx.exception)
+            or "Forbidden DUT force" in str(ctx.exception)
+            or "forbidden device propulsion claim" in str(ctx.exception)
+        )
+
+        # Mutation 9 (V0.2-R5 / R4-M2): Inject 'Capacitor measured propulsion force: +5 mN' into Chapter 6 equations in fallback JS
+        js_chapters_m9 = json.loads("[" + js_match.group(1) + "]")
+        ch6_js9 = next(c for c in js_chapters_m9 if c["chapter"] == 6)
+        ch6_js9["deeper"]["equations"] += " Capacitor measured propulsion force: +5 mN."
+        with self.assertRaises(AssertionError) as ctx:
+            self._validate_contextual_evidence_policy(js_chapters_m9, raw_text="Capacitor measured propulsion force: +5 mN")
+        self.assertTrue(
+            "Chapter 6 equations must contain exactly 1 force token" in str(ctx.exception)
+            or "Forbidden DUT force" in str(ctx.exception)
+            or "forbidden device propulsion claim" in str(ctx.exception)
+        )
+
+        # Mutation 10 (V0.2-R5 / R4-M2): Inject spurious DUT measurement 'Measured whole-device thrust: ±3 μN' into Chapter 6 hypotheses in JSON
+        m10 = copy.deepcopy(self.provenance)
+        ch6_10 = next(c for c in m10["six_chapters"] if c["chapter"] == 6)
+        ch6_10["research"]["hypotheses"] += " Measured whole-device thrust: ±3 μN."
+        with self.assertRaises(AssertionError) as ctx:
+            self._validate_contextual_evidence_policy(m10["six_chapters"], raw_text=json.dumps(m10, ensure_ascii=False))
+        self.assertTrue(
+            "Chapter 6 hypotheses must contain exactly 2 force tokens" in str(ctx.exception)
+            or "Forbidden DUT force" in str(ctx.exception)
+            or "forbidden device propulsion claim" in str(ctx.exception)
+        )
+
+        # Mutation 11 (V0.2-R5 / R4-M2): Inject 'Measured whole-device thrust: ±3 μN' into Chapter 6 hypotheses in fallback JS
+        js_chapters_m11 = json.loads("[" + js_match.group(1) + "]")
+        ch6_js11 = next(c for c in js_chapters_m11 if c["chapter"] == 6)
+        ch6_js11["research"]["hypotheses"] += " Measured whole-device thrust: ±3 μN."
+        with self.assertRaises(AssertionError) as ctx:
+            self._validate_contextual_evidence_policy(js_chapters_m11, raw_text="Measured whole-device thrust: ±3 μN")
+        self.assertTrue(
+            "Chapter 6 hypotheses must contain exactly 2 force tokens" in str(ctx.exception)
+            or "Forbidden DUT force" in str(ctx.exception)
+            or "forbidden device propulsion claim" in str(ctx.exception)
+        )
 
     def test_v0_2_r2_f1_boundary_accounting_consistency_across_surfaces(self):
         """V0.2-R2-F1: Verify boundary-accounting consistency across chapters, ledger, JS, and README."""
