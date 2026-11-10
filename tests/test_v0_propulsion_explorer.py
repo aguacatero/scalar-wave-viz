@@ -534,59 +534,190 @@ class PropulsionExplorerJSLogicTests(unittest.TestCase):
         self.assertIn("case ']':", self.js)
         self.assertIn("case ' ':", self.js)
 
-    def test_v0_2_r2_m3_generalized_numeric_force_evidence_policy(self):
-        """V0.2-R2-M3: Generalized allowlist check for numeric force values across all chapters and JS fallback."""
+    @staticmethod
+    def _validate_contextual_evidence_policy(chapters, raw_text=""):
+        """V0.2-R4 (R3-M1): Contextual evidence policy validation.
+        Enforces strict contextual binding of numeric force tokens:
+        - Chapters 1–5: ZERO physical force values allowed (no N, mN, μN, mg).
+        - Chapter 6:
+          * 5 mN: ONLY in deeper.equations, bound to ion wind calculation with declared inputs (d=20mm, 50uA, mobility).
+          * < 0.1 μN / 0.1 &mu;N: ONLY in deeper.specifications, bound to balance resolution target (< 0.1 μN).
+          * ±0.3 mg ≈ ±3 μN: ONLY in research.hypotheses, bound to Tajmar null measurement citation.
+          * All other Chapter 6 fields: ZERO physical force values allowed.
+        - Arbitrary DUT thrust / net force claims: Strictly forbidden across all surfaces.
+        - Historical forbidden strings: Strictly forbidden.
+        """
         import re
 
-        # Regex matching numeric values followed by force/mass units (N, mN, μN, mg, etc.)
         force_pattern = re.compile(
-            r'([+\-]?\d+(?:\.\d+)?\s*(?:±|&plusmn;)?\s*(?:\d+(?:\.\d+)?)?\s*(?:mN|μN|uN|µN|pN|&mu;N|\bN\b|mg))'
+            r'((?:[+\-]|±|&plusmn;)?\s*\d+(?:\.\d+)?\s*(?:(?:±|&plusmn;)\s*\d+(?:\.\d+)?)?\s*(?:mN|μN|uN|µN|pN|&mu;N|\bN\b|mg))'
         )
 
-        # Allowlisted numeric force mentions with explicit provenance:
-        # 1. '0.3 mg' / '3 &mu;N' / '3 μN': Tajmar & Schreiber (2020) null limit citation
-        # 2. '5 mN': Parameterized illustrative ion wind formula with declared inputs (d=20mm, I=50uA)
-        # 3. '0.1 &mu;N' / '0.1 μN': Micro-Newton balance specification
-        allowlist = {
-            "0.3 mg", "0.3mg",
-            "3 &mu;N", "3 μN", "3&mu;N", "3μN",
-            "5 mN", "5mN",
-            "0.1 &mu;N", "0.1 μN", "0.1&mu;N", "0.1μN"
-        }
-
-        # 1. Scan JSON six_chapters
-        for ch in self.provenance.get("six_chapters", []):
-            ch_str = json.dumps(ch)
-            matches = force_pattern.findall(ch_str)
-            for m in matches:
-                normalized = m.strip()
-                # Remove leading + or - for comparison if present
-                clean_norm = normalized.lstrip("+-").strip()
-                self.assertTrue(
-                    any(clean_norm.startswith(allowed) or clean_norm == allowed for allowed in allowlist),
-                    f"Disallowed numeric force '{m}' in Chapter {ch.get('chapter')}. Only allowlisted external citations/toy examples permitted."
-                )
-
-        # 2. Scan JS fallback six_chapters
-        js_match = re.search(r'six_chapters:\s*\[(.*?)\]\s*,\s*four_questions', self.js, re.DOTALL)
-        self.assertIsNotNone(js_match, "Fallback six_chapters must be present in explorer.js")
-        js_chapters = js_match.group(1)
-        matches_js = force_pattern.findall(js_chapters)
-        for m in matches_js:
-            clean_norm = m.strip().lstrip("+-").strip()
-            self.assertTrue(
-                any(clean_norm.startswith(allowed) or clean_norm == allowed for allowed in allowlist),
-                f"Disallowed numeric force '{m}' in explorer.js fallback chapters."
-            )
-
-        # 3. Verify unsourced DUT force claims are strictly forbidden
         forbidden_claims = [
             "+0.045 N", "-0.038 N", "-0.005 N", "-0.002 N",
             "0.000 N identically", "0.00 ± 0.05", "0.00 \\pm 0.05", "F = 0.00"
         ]
         for pat in forbidden_claims:
-            self.assertNotIn(pat, json.dumps(self.provenance))
-            self.assertNotIn(pat, self.js)
+            if pat in raw_text:
+                raise AssertionError(f"Historical forbidden string '{pat}' found in text.")
+
+        dut_force_regex = re.compile(
+            r'(?:DUT|whole[- ]device|device thrust|net DUT|Boundary A)[^.\n]{0,80}?'
+            r'((?:[+\-]|±|&plusmn;)?\s*\d+(?:\.\d+)?\s*(?:(?:±|&plusmn;)\s*\d+(?:\.\d+)?)?\s*(?:mN|μN|uN|µN|pN|&mu;N|\bN\b|mg))',
+            re.IGNORECASE
+        )
+        dut_matches = dut_force_regex.findall(raw_text)
+        if dut_matches:
+            raise AssertionError(f"Forbidden DUT force/thrust claim detected: {dut_matches}")
+
+        explicit_thrust_regex = re.compile(
+            r'(?:thrust|net force)\s*[:=]\s*(?:[+\-]|±|&plusmn;)?\s*\d+(?:\.\d+)?\s*(?:mN|μN|uN|µN|pN|&mu;N|\bN\b|mg)',
+            re.IGNORECASE
+        )
+        explicit_matches = explicit_thrust_regex.findall(raw_text)
+        if explicit_matches:
+            raise AssertionError(f"Forbidden explicit thrust/force claim detected: {explicit_matches}")
+
+        for ch in chapters:
+            ch_num = ch.get("chapter")
+            if ch_num in [1, 2, 3, 4, 5]:
+                ch_str = json.dumps(ch, ensure_ascii=False)
+                matches = force_pattern.findall(ch_str)
+                if matches:
+                    raise AssertionError(
+                        f"Disallowed numeric force {matches} in Chapter {ch_num}. "
+                        f"Chapters 1–5 must contain zero physical force tokens."
+                    )
+            elif ch_num == 6:
+                surface = ch.get("surface", "")
+                shallow = ch.get("shallow", "")
+                deeper = ch.get("deeper", {})
+                research = ch.get("research", {})
+
+                if force_pattern.findall(surface):
+                    raise AssertionError(f"Disallowed force value in Chapter 6 surface: {force_pattern.findall(surface)}")
+                if force_pattern.findall(shallow):
+                    raise AssertionError(f"Disallowed force value in Chapter 6 shallow: {force_pattern.findall(shallow)}")
+
+                eq_text = deeper.get("equations", "")
+                eq_matches = force_pattern.findall(eq_text)
+                for m in eq_matches:
+                    clean = re.sub(r'^(?:[+\-]|±|&plusmn;|<|>)\s*', '', m.strip())
+                    if clean not in ["5 mN", "5mN"]:
+                        raise AssertionError(f"Disallowed force '{m}' in Chapter 6 equations. Only 5 mN illustrative calculation permitted.")
+                    if "d = 20 mm" not in eq_text or ("50 &mu;A" not in eq_text and "50 μA" not in eq_text) or "mobility" not in eq_text:
+                        raise AssertionError("Force '5 mN' in Chapter 6 equations lacks required contextual inputs (d=20mm, 50uA, mobility).")
+
+                spec_text = deeper.get("specifications", "")
+                spec_matches = force_pattern.findall(spec_text)
+                for m in spec_matches:
+                    clean = re.sub(r'^(?:[+\-]|±|&plusmn;|<|>)\s*', '', m.strip())
+                    if clean not in ["0.1 &mu;N", "0.1 μN", "0.1&mu;N", "0.1μN"]:
+                        raise AssertionError(f"Disallowed force '{m}' in Chapter 6 specifications. Only < 0.1 μN resolution target permitted.")
+                    if "resolution" not in spec_text or "<" not in spec_text:
+                        raise AssertionError(f"Force '{m}' in Chapter 6 specifications must be strictly bound as a balance resolution target ('< 0.1').")
+
+                hyp_text = research.get("hypotheses", "")
+                hyp_matches = force_pattern.findall(hyp_text)
+                for m in hyp_matches:
+                    clean = re.sub(r'^(?:[+\-]|±|&plusmn;|<|>)\s*', '', m.strip())
+                    if clean not in ["0.3 mg", "0.3mg", "3 &mu;N", "3 μN", "3&mu;N", "3μN"]:
+                        raise AssertionError(f"Disallowed force '{m}' in Chapter 6 hypotheses. Only Tajmar 2020 citation values permitted.")
+                    if "Tajmar" not in hyp_text or "null" not in hyp_text:
+                        raise AssertionError(f"Force '{m}' in Chapter 6 hypotheses must be bound to Tajmar null measurement citation.")
+
+                unc_matches = force_pattern.findall(research.get("uncertainties", ""))
+                if unc_matches:
+                    raise AssertionError(f"Disallowed force value in Chapter 6 uncertainties: {unc_matches}")
+                ctrl_matches = force_pattern.findall(research.get("controls", ""))
+                if ctrl_matches:
+                    raise AssertionError(f"Disallowed force value in Chapter 6 controls: {ctrl_matches}")
+
+    def test_v0_2_r2_m3_generalized_numeric_force_evidence_policy(self):
+        """V0.2-R2-M3 & V0.2-R4-M1: Contextual evidence policy check for numeric forces across JSON and JS fallback."""
+        import re
+
+        # 1. Validate JSON six_chapters and raw provenance text
+        self._validate_contextual_evidence_policy(
+            self.provenance.get("six_chapters", []),
+            raw_text=json.dumps(self.provenance, ensure_ascii=False)
+        )
+
+        # 2. Validate JS fallback six_chapters and full JS text
+        js_match = re.search(r'six_chapters:\s*\[(.*?)\]\s*,\s*four_questions', self.js, re.DOTALL)
+        self.assertIsNotNone(js_match, "Fallback six_chapters must be present in explorer.js")
+        js_chapters = json.loads("[" + js_match.group(1) + "]")
+        self._validate_contextual_evidence_policy(
+            js_chapters,
+            raw_text=self.js
+        )
+
+    def test_v0_2_r4_mutation_tests_reject_dut_force_claims(self):
+        """V0.2-R4-M1: Mutation tests verifying failure when DUT force claims are injected into JSON or fallback JS."""
+        import copy
+        import re
+
+        # Baseline: clean data passes
+        self._validate_contextual_evidence_policy(
+            self.provenance.get("six_chapters", []),
+            raw_text=json.dumps(self.provenance, ensure_ascii=False)
+        )
+
+        # Mutation 1: Inject '+5 mN' into Chapter 4 shallow text in JSON
+        m1 = copy.deepcopy(self.provenance)
+        ch4 = next(c for c in m1["six_chapters"] if c["chapter"] == 4)
+        ch4["shallow"] += " Measured whole-device thrust: +5 mN."
+        with self.assertRaises(AssertionError) as ctx:
+            self._validate_contextual_evidence_policy(m1["six_chapters"], raw_text=json.dumps(m1, ensure_ascii=False))
+        self.assertTrue("Disallowed numeric force" in str(ctx.exception) or "Forbidden DUT force" in str(ctx.exception))
+
+        # Mutation 2: Inject '±3 μN' into Chapter 4 shallow text in JSON
+        m2 = copy.deepcopy(self.provenance)
+        ch4 = next(c for c in m2["six_chapters"] if c["chapter"] == 4)
+        ch4["shallow"] += " DUT net force: ±3 μN."
+        with self.assertRaises(AssertionError) as ctx:
+            self._validate_contextual_evidence_policy(m2["six_chapters"], raw_text=json.dumps(m2, ensure_ascii=False))
+        self.assertTrue("Disallowed numeric force" in str(ctx.exception) or "Forbidden DUT force" in str(ctx.exception))
+
+        # Mutation 3: Inject '+5 mN' into Chapter 1 in JSON
+        m3 = copy.deepcopy(self.provenance)
+        ch1 = next(c for c in m3["six_chapters"] if c["chapter"] == 1)
+        ch1["surface"] += " Thrust observed: +5 mN."
+        with self.assertRaises(AssertionError) as ctx:
+            self._validate_contextual_evidence_policy(m3["six_chapters"], raw_text=json.dumps(m3, ensure_ascii=False))
+        self.assertTrue("Disallowed numeric force" in str(ctx.exception) or "Forbidden explicit thrust" in str(ctx.exception))
+
+        # Mutation 4: Inject allowlisted '+5 mN' into Chapter 6 surface in JSON (context bypass attempt)
+        m4 = copy.deepcopy(self.provenance)
+        ch6 = next(c for c in m4["six_chapters"] if c["chapter"] == 6)
+        ch6["surface"] += " Measured whole-device thrust: +5 mN."
+        with self.assertRaises(AssertionError) as ctx:
+            self._validate_contextual_evidence_policy(m4["six_chapters"], raw_text=json.dumps(m4, ensure_ascii=False))
+        self.assertTrue("Disallowed force value in Chapter 6 surface" in str(ctx.exception) or "Forbidden DUT force" in str(ctx.exception))
+
+        # Mutation 5: Inject '+5 mN' into Chapter 4 fallback JS in explorer.js
+        js_match = re.search(r'six_chapters:\s*\[(.*?)\]\s*,\s*four_questions', self.js, re.DOTALL)
+        js_chapters = json.loads("[" + js_match.group(1) + "]")
+        ch4_js = next(c for c in js_chapters if c["chapter"] == 4)
+        ch4_js["shallow"] += " Measured whole-device thrust: +5 mN."
+        with self.assertRaises(AssertionError) as ctx:
+            self._validate_contextual_evidence_policy(js_chapters, raw_text="Measured whole-device thrust: +5 mN")
+        self.assertTrue("Disallowed numeric force" in str(ctx.exception) or "Forbidden DUT force" in str(ctx.exception))
+
+        # Mutation 6: Inject '±3 μN' into Chapter 4 fallback JS in explorer.js
+        js_chapters2 = json.loads("[" + js_match.group(1) + "]")
+        ch4_js2 = next(c for c in js_chapters2 if c["chapter"] == 4)
+        ch4_js2["shallow"] += " DUT net force: ±3 μN."
+        with self.assertRaises(AssertionError) as ctx:
+            self._validate_contextual_evidence_policy(js_chapters2, raw_text="DUT net force: ±3 μN")
+        self.assertTrue("Disallowed numeric force" in str(ctx.exception) or "Forbidden DUT force" in str(ctx.exception))
+
+        # Mutation 7: Inject force claim into ledger in JSON
+        m7 = copy.deepcopy(self.provenance)
+        m7["force_accounting_ledger"]["boundary_a_isolated_dut"]["whole_body_thrust_status"] = "Measured whole-device thrust: +5 mN"
+        with self.assertRaises(AssertionError) as ctx:
+            self._validate_contextual_evidence_policy(m7["six_chapters"], raw_text=json.dumps(m7, ensure_ascii=False))
+        self.assertTrue("Forbidden DUT force" in str(ctx.exception) or "Forbidden explicit thrust" in str(ctx.exception))
 
     def test_v0_2_r2_f1_boundary_accounting_consistency_across_surfaces(self):
         """V0.2-R2-F1: Verify boundary-accounting consistency across chapters, ledger, JS, and README."""

@@ -1459,7 +1459,7 @@ class PropulsionExplorerBrowserSmokeTests(unittest.TestCase):
         self.assertEqual(len(self.page_errors), 0, f"Mobile scrolling and ledger navigation threw errors: {self.page_errors}")
 
     def test_v0_2_r1_m4_chapter5_scalar_wave_contrast_toggle_and_badge(self):
-        """V0.2-R1-M4 & V0.2-R2-M2: Chapter 5 mutually exclusive 3D mathematical scalar-wave contrast view."""
+        """V0.2-R1-M4, V0.2-R2-M2, & V0.2-R4-M2: Chapter 5 mutually exclusive 3D mathematical scalar-wave contrast view."""
         # Navigate to Chapter 5
         self.page.click(".chapter-step-btn[data-index='4']")
         self.page.wait_for_timeout(100)
@@ -1470,9 +1470,11 @@ class PropulsionExplorerBrowserSmokeTests(unittest.TestCase):
         self.assertTrue(toggle_btn.is_visible(), "Chapter 5 wave contrast button must be visible")
         self.assertIn("Switch to Mathematical Scalar Wave Toy View", toggle_btn.inner_text())
 
-        # Initial state: vector field streamlines visible, toy wave hidden
+        # Initial state: vector field streamlines visible, toy wave hidden, geometry visible
         field_vis_before = self.page.evaluate("window.__explorer.fieldGroup.visible")
         self.assertTrue(field_vis_before, "Vector field lines must be initially visible in Chapter 5")
+        geom_vis_before = self.page.evaluate("window.__explorer.geometryGroup.visible")
+        self.assertTrue(geom_vis_before, "Capacitor geometry must be initially visible in Chapter 5")
         wave_vis_before = self.page.evaluate("window.__explorer.scalarWaveGroup.visible")
         self.assertFalse(wave_vis_before, "Scalar wave group must be initially hidden in Chapter 5")
 
@@ -1489,9 +1491,11 @@ class PropulsionExplorerBrowserSmokeTests(unittest.TestCase):
         self.assertIn("NOT emitted by or coupled to capacitor apparatus", badge_text)
         self.assertIn("Switch Back to Electrostatic Vector Field", toggle_btn.inner_text())
 
-        # Mutually exclusive verification: field lines HIDDEN, toy wave VISIBLE
+        # Mutually exclusive and isolated scene verification: field lines and capacitor HIDDEN, toy wave VISIBLE
         field_vis_active = self.page.evaluate("window.__explorer.fieldGroup.visible")
         self.assertFalse(field_vis_active, "Vector field streamlines must be hidden when scalar wave toy view is active")
+        geom_vis_active = self.page.evaluate("window.__explorer.geometryGroup.visible")
+        self.assertFalse(geom_vis_active, "Capacitor geometry mesh must be hidden/isolated when scalar wave toy view is active")
         wave_vis_active = self.page.evaluate("window.__explorer.scalarWaveGroup.visible")
         self.assertTrue(wave_vis_active, "3D scalar wave group must be visible when contrast is toggled on")
 
@@ -1501,13 +1505,99 @@ class PropulsionExplorerBrowserSmokeTests(unittest.TestCase):
         self.assertTrue("hidden" in (badge.get_attribute("class") or ""), "Badge must be hidden when switched back")
         self.assertIn("Switch to Mathematical Scalar Wave Toy View", toggle_btn.inner_text())
 
-        # Restoration verification: field lines RESTORED, toy wave HIDDEN
+        # Restoration verification: field lines RESTORED, geometry RESTORED, toy wave HIDDEN
         field_vis_restored = self.page.evaluate("window.__explorer.fieldGroup.visible")
         self.assertTrue(field_vis_restored, "Vector field streamlines must be restored when switched back")
+        geom_vis_restored = self.page.evaluate("window.__explorer.geometryGroup.visible")
+        self.assertTrue(geom_vis_restored, "Capacitor geometry must be restored when switched back")
         wave_vis_restored = self.page.evaluate("window.__explorer.scalarWaveGroup.visible")
         self.assertFalse(wave_vis_restored, "3D scalar wave group must be hidden when contrast is toggled off")
 
         self.assertEqual(len(self.page_errors), 0, f"Chapter 5 wave contrast threw errors: {self.page_errors}")
+
+    def test_v0_2_r4_f1_layer_state_preservation_and_chapter_synchronization(self):
+        """V0.2-R4-F1: Layer state preservation across wave contrast toggle, chapter transitions, and user overrides."""
+        # 1. Navigate to Chapter 5
+        self.page.click(".chapter-step-btn[data-index='4']")
+        self.page.wait_for_timeout(100)
+        self.assertIn("What Are Scalar Waves?", self.page.locator("#guide-chapter-title").inner_text())
+
+        # Sub-check (a): user-disabled field surviving wave on/off
+        chk_fields = self.page.locator("#toggle-fields")
+        self.assertTrue(chk_fields.is_checked(), "toggle-fields should initially be checked in Chapter 5")
+        self.assertTrue(self.page.evaluate("window.__explorer.fieldGroup.visible"), "fieldGroup should be visible")
+
+        # User unchecks toggle-fields
+        chk_fields.uncheck()
+        self.assertFalse(chk_fields.is_checked(), "toggle-fields should now be unchecked")
+        self.assertFalse(self.page.evaluate("window.__explorer.fieldGroup.visible"), "fieldGroup must be hidden when unchecked")
+
+        # Toggle wave mode ON
+        toggle_btn = self.page.locator("#guide-body #btn-toggle-wave-contrast")
+        toggle_btn.click()
+        self.page.wait_for_timeout(100)
+        self.assertTrue(self.page.evaluate("window.__explorer.scalarWaveGroup.visible"), "scalarWaveGroup must be visible")
+        self.assertFalse(self.page.evaluate("window.__explorer.geometryGroup.visible"), "geometryGroup must be hidden in wave mode")
+        self.assertFalse(self.page.evaluate("window.__explorer.fieldGroup.visible"), "fieldGroup must remain hidden")
+        self.assertFalse(chk_fields.is_checked(), "toggle-fields preference must remain unchecked")
+
+        # Toggle wave mode OFF: user preference (unchecked) must survive!
+        toggle_btn.click()
+        self.page.wait_for_timeout(100)
+        self.assertFalse(self.page.evaluate("window.__explorer.scalarWaveGroup.visible"), "scalarWaveGroup must be hidden")
+        self.assertTrue(self.page.evaluate("window.__explorer.geometryGroup.visible"), "geometryGroup must be restored")
+        self.assertFalse(chk_fields.is_checked(), "toggle-fields must remain unchecked")
+        self.assertFalse(self.page.evaluate("window.__explorer.fieldGroup.visible"), "fieldGroup must remain false because user unchecked it")
+
+        # Re-enable field for subsequent checks
+        chk_fields.check()
+        self.assertTrue(self.page.evaluate("window.__explorer.fieldGroup.visible"), "fieldGroup should be visible when rechecked")
+
+        # Sub-check (c): voltage/layer changes during toy mode
+        toggle_btn.click()
+        self.page.wait_for_timeout(100)
+        self.assertTrue(self.page.evaluate("window.__explorer.scalarWaveGroup.visible"), "scalarWaveGroup visible")
+        self.assertFalse(self.page.evaluate("window.__explorer.fieldGroup.visible"), "fieldGroup hidden")
+        self.assertFalse(self.page.evaluate("window.__explorer.geometryGroup.visible"), "geometryGroup hidden")
+
+        # Change voltage slider while toy mode is active
+        slider = self.page.locator("#slider-voltage")
+        slider.fill("35")
+        slider.dispatch_event("input")
+        self.page.wait_for_timeout(100)
+        self.assertFalse(self.page.evaluate("window.__explorer.fieldGroup.visible"), "fieldGroup must NOT reappear on voltage change during toy mode")
+        self.assertFalse(self.page.evaluate("window.__explorer.forceGroup.visible"), "forceGroup must NOT reappear on voltage change during toy mode")
+        self.assertFalse(self.page.evaluate("window.__explorer.geometryGroup.visible"), "geometryGroup must NOT reappear during toy mode")
+        self.assertTrue(self.page.evaluate("window.__explorer.scalarWaveGroup.visible"), "scalarWaveGroup remains visible")
+
+        # Toggle layer checkbox while toy mode is active
+        chk_fields.check()
+        self.assertFalse(self.page.evaluate("window.__explorer.fieldGroup.visible"), "fieldGroup must NOT reappear on layer checkbox click during toy mode")
+        chk_geom = self.page.locator("#toggle-geometry")
+        chk_geom.check()
+        self.assertFalse(self.page.evaluate("window.__explorer.geometryGroup.visible"), "geometryGroup must NOT reappear during toy mode")
+
+        # Sub-check (b): leaving Chapter 5 for Chapter 6 while toy mode active
+        self.page.click("#guide-btn-next")
+        self.page.wait_for_timeout(100)
+        self.assertIn("How Could We Test the Hypothesis?", self.page.locator("#guide-chapter-title").inner_text())
+
+        # Chapter 6 layers: field is FALSE, geometry is TRUE
+        self.assertFalse(chk_fields.is_checked(), "toggle-fields must be false in Chapter 6")
+        self.assertFalse(self.page.evaluate("window.__explorer.fieldGroup.visible"), "fieldGroup must be false in Chapter 6")
+        self.assertFalse(self.page.evaluate("window.__explorer.scalarWaveGroup.visible"), "scalarWaveGroup must be auto-reset to false when leaving Chapter 5")
+        self.assertTrue(self.page.evaluate("window.__explorer.geometryGroup.visible"), "geometryGroup must be true in Chapter 6")
+
+        # Sub-check (d): return navigation to Chapter 5
+        self.page.click("#guide-btn-prev")
+        self.page.wait_for_timeout(100)
+        self.assertIn("What Are Scalar Waves?", self.page.locator("#guide-chapter-title").inner_text())
+        self.assertTrue(chk_fields.is_checked(), "toggle-fields must be restored to true in Chapter 5")
+        self.assertTrue(self.page.evaluate("window.__explorer.fieldGroup.visible"), "fieldGroup must be visible in Chapter 5")
+        self.assertTrue(self.page.evaluate("window.__explorer.geometryGroup.visible"), "geometryGroup must be visible in Chapter 5")
+        self.assertFalse(self.page.evaluate("window.__explorer.scalarWaveGroup.visible"), "scalarWaveGroup must remain false upon return until explicitly clicked")
+
+        self.assertEqual(len(self.page_errors), 0, f"Layer state test encountered page errors: {self.page_errors}")
 
 
 if __name__ == "__main__":

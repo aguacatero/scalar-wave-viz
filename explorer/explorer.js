@@ -366,6 +366,49 @@
   let hoveredObject = null;
   let lastFocusedElement = null;
 
+  // --- Authoritative Layer Visibility Predicates (V0.2-R4 / R3-F1 & R3-M2) ---
+  function shouldShowGeometry() {
+    if (isScalarWaveContrastActive) return false;
+    const tGeom = document.getElementById('toggle-geometry');
+    return tGeom ? tGeom.checked : true;
+  }
+
+  function shouldShowFieldLines() {
+    if (isScalarWaveContrastActive) return false;
+    if (currentVoltageKV <= 0.0) return false;
+    const tFields = document.getElementById('toggle-fields');
+    return tFields ? tFields.checked : false;
+  }
+
+  function shouldShowForces() {
+    if (isScalarWaveContrastActive) return false;
+    if (currentVoltageKV <= 0.0) return false;
+    const tForces = document.getElementById('toggle-forces');
+    return tForces ? tForces.checked : false;
+  }
+
+  function shouldShowEnclosure() {
+    if (isScalarWaveContrastActive) return false;
+    const tEnclosure = document.getElementById('toggle-enclosure');
+    return tEnclosure ? tEnclosure.checked : true;
+  }
+
+  function syncAllLayerVisibilities() {
+    if (isScalarWaveContrastActive) {
+      if (geometryGroup) geometryGroup.visible = false;
+      if (annotationGroup) annotationGroup.visible = false;
+      if (fieldGroup) fieldGroup.visible = false;
+      if (forceGroup) forceGroup.visible = false;
+      if (enclosureGroup) enclosureGroup.visible = false;
+    } else {
+      if (geometryGroup) geometryGroup.visible = shouldShowGeometry();
+      if (annotationGroup) annotationGroup.visible = shouldShowGeometry();
+      if (fieldGroup) fieldGroup.visible = shouldShowFieldLines();
+      if (forceGroup) forceGroup.visible = shouldShowForces();
+      if (enclosureGroup) enclosureGroup.visible = shouldShowEnclosure();
+    }
+  }
+
   // Parameters
   let currentVoltageKV = 20.0;
   let currentEpsR = 3.8;
@@ -551,6 +594,12 @@
       enclosureGroup: enclosureGroup,
       scalarWaveGroup: scalarWaveGroup,
       toggleScalarWaveContrast: toggleScalarWaveContrast,
+      isScalarWaveContrastActive: () => isScalarWaveContrastActive,
+      syncAllLayerVisibilities: syncAllLayerVisibilities,
+      shouldShowFieldLines: shouldShowFieldLines,
+      shouldShowGeometry: shouldShowGeometry,
+      shouldShowForces: shouldShowForces,
+      shouldShowEnclosure: shouldShowEnclosure,
       getPickableObjects: () => pickableObjects,
       getPickedObject: getPickedObject,
       getComponentScreenCoords: getComponentScreenCoords,
@@ -760,12 +809,12 @@
       disposeHierarchy(obj);
     }
 
-    if (currentVoltageKV <= 0.0) {
+    if (currentVoltageKV <= 0.0 || isScalarWaveContrastActive) {
       fieldGroup.visible = false;
       return;
     }
 
-    fieldGroup.visible = document.getElementById('toggle-fields').checked;
+    fieldGroup.visible = shouldShowFieldLines();
 
     const voltageRatio = currentVoltageKV / 20.0;
     const opacity = Math.min(0.9, 0.35 + voltageRatio * 0.45);
@@ -870,12 +919,12 @@
       disposeHierarchy(obj);
     }
 
-    if (currentVoltageKV <= 0.0) {
+    if (currentVoltageKV <= 0.0 || isScalarWaveContrastActive) {
       forceGroup.visible = false;
       return;
     }
 
-    forceGroup.visible = document.getElementById('toggle-forces').checked;
+    forceGroup.visible = shouldShowForces();
 
     // V0-R3-M4: Bounded legibility encoding for schematic vectors
     const ARROW_MIN_LEN = 6.0;   // Clean legibility minimum for nonzero V
@@ -995,11 +1044,11 @@
   }
 
   // --- Mathematical Scalar Wave 3D Contrast Visualizer ---
-  // Remediated for V0.2-R1-M4:
-  // - Displays concentric undulating scalar wavefront shells centered on the electrode interaction zone
+  // Remediated for V0.2-R1-M4, V0.2-R2-M2, V0.2-R4 (R3-F1 & R3-M2):
+  // - Displays concentric undulating scalar wavefront shells in an isolated abstract reference space
   // - Mathematical toy visualization of ∇²ψ - (1/c²)∂²t ψ = 0 (from wave_3d.ipynb)
   // - Strictly qualified: NOT coupled to capacitor thrust; does not depict propellantless propulsion
-  // - V0.2-R2-M2: Centered at world origin (0, 0, 0) as abstract mathematical reference space (not emitted by electrodes)
+  // - Centered at world origin (0, 0, 0) with distinct abstract coordinate axes; physical capacitor is hidden
   function createScalarWaveVisual() {
     while (scalarWaveGroup.children.length > 0) {
       const obj = scalarWaveGroup.children[0];
@@ -1011,7 +1060,26 @@
     const shellCount = 6;
     const baseRadius = 10;
     const radiusStep = 8;
+    const maxRadius = baseRadius + (shellCount - 1) * radiusStep;
     const centerPos = new THREE.Vector3(0, 0, 0); // Abstract reference space origin
+
+    // Abstract reference frame / coordinate ring indicator
+    // Demonstrates that this scene represents an abstract mathematical space, isolated from the physical capacitor
+    const ringGeom = new THREE.RingGeometry(baseRadius - 2, maxRadius + 2, 64);
+    const ringMat = new THREE.MeshBasicMaterial({
+      color: 0x6366f1,
+      wireframe: true,
+      transparent: true,
+      opacity: 0.15,
+      side: THREE.DoubleSide
+    });
+    const ringMesh = new THREE.Mesh(ringGeom, ringMat);
+    ringMesh.rotation.x = Math.PI / 2;
+    ringMesh.position.copy(centerPos);
+    scalarWaveGroup.add(ringMesh);
+
+    const axesHelper = new THREE.AxesHelper(maxRadius);
+    scalarWaveGroup.add(axesHelper);
 
     for (let i = 0; i < shellCount; i++) {
       const r = baseRadius + i * radiusStep;
@@ -1062,18 +1130,14 @@
       scalarWaveGroup.visible = isScalarWaveContrastActive;
     }
 
-    // Mutually exclusive view (V0.2-R2-M2):
-    // When scalar wave toy view is active, hide conventional electrostatic field streamlines.
-    // When scalar wave view is inactive, restore fieldGroup based on current voltage and layer setting.
-    if (fieldGroup) {
-      if (isScalarWaveContrastActive) {
-        fieldGroup.visible = false;
-      } else {
-        const tField = document.getElementById('toggle-field');
-        const fieldEnabled = tField ? tField.checked : true;
-        fieldGroup.visible = fieldEnabled && (currentVoltageKV > 0);
-      }
-    }
+    // Mutually exclusive view & visual scene isolation (V0.2-R4 / R3-F1 & R3-M2):
+    // When scalar wave toy view is active:
+    // - Hide physical capacitor electrode geometry (geometryGroup.visible = false, annotationGroup.visible = false)
+    // - Hide conventional electrostatic field streamlines (fieldGroup.visible = false)
+    // - Hide mechanical forces and enclosure (forceGroup.visible = false, enclosureGroup.visible = false)
+    // When scalar wave view is deactivated:
+    // - Restore all scene groups according to authoritative predicates (checkboxes, active chapter, voltage)
+    syncAllLayerVisibilities();
 
     const waveBadge = document.getElementById('scalar-wave-badge');
     if (waveBadge) {
@@ -1635,6 +1699,11 @@
     if (freeBtn) freeBtn.textContent = "🔍 Explore Freely";
 
     // Scene Synchronization:
+    // Auto-reset wave contrast if user leaves chapter 5 (V0.2-R4 / R3-F1)
+    if (chapter.chapter !== 5 && isScalarWaveContrastActive) {
+      toggleScalarWaveContrast(false);
+    }
+
     // A. Camera Smooth Animation
     if (chapter.camera && chapter.target) {
       animateCameraTo(
@@ -1651,23 +1720,12 @@
       const tForces = document.getElementById('toggle-forces');
       const tEnclosure = document.getElementById('toggle-enclosure');
 
-      if (tGeom) {
-        tGeom.checked = chapter.layers.geometry;
-        geometryGroup.visible = chapter.layers.geometry;
-        if (annotationGroup) annotationGroup.visible = chapter.layers.geometry;
-      }
-      if (tFields) {
-        tFields.checked = chapter.layers.field;
-        fieldGroup.visible = chapter.layers.field && (currentVoltageKV > 0 || chapter.voltage_kv > 0);
-      }
-      if (tForces) {
-        tForces.checked = chapter.layers.forces;
-        forceGroup.visible = chapter.layers.forces && (currentVoltageKV > 0 || chapter.voltage_kv > 0);
-      }
-      if (tEnclosure) {
-        tEnclosure.checked = chapter.layers.chamber;
-        enclosureGroup.visible = chapter.layers.chamber;
-      }
+      if (tGeom) tGeom.checked = chapter.layers.geometry;
+      if (tFields) tFields.checked = chapter.layers.field;
+      if (tForces) tForces.checked = chapter.layers.forces;
+      if (tEnclosure) tEnclosure.checked = chapter.layers.chamber;
+
+      syncAllLayerVisibilities();
     }
 
     // C. Voltage Synchronization
@@ -1716,11 +1774,6 @@
       btnWaveContrast.onclick = function() {
         toggleScalarWaveContrast();
       };
-    }
-
-    // Auto-reset wave contrast if user leaves chapter 5
-    if (chapter.chapter !== 5 && isScalarWaveContrastActive) {
-      toggleScalarWaveContrast(false);
     }
   }
 
@@ -1998,23 +2051,19 @@
       btn.addEventListener('click', () => switchTab(btn.dataset.tab));
     });
 
-    // Layer Toggles
-    document.getElementById('toggle-geometry').addEventListener('change', (e) => {
-      geometryGroup.visible = e.target.checked;
-      if (annotationGroup) annotationGroup.visible = e.target.checked;
+    // Layer Toggles (V0.2-R4 / R3-F1: authoritative predicates prevent re-enabling during wave mode)
+    document.getElementById('toggle-geometry').addEventListener('change', () => {
+      geometryGroup.visible = shouldShowGeometry();
+      if (annotationGroup) annotationGroup.visible = shouldShowGeometry();
     });
-    document.getElementById('toggle-fields').addEventListener('change', (e) => {
-      if (currentVoltageKV > 0) {
-        fieldGroup.visible = e.target.checked;
-      }
+    document.getElementById('toggle-fields').addEventListener('change', () => {
+      fieldGroup.visible = shouldShowFieldLines();
     });
-    document.getElementById('toggle-forces').addEventListener('change', (e) => {
-      if (currentVoltageKV > 0) {
-        forceGroup.visible = e.target.checked;
-      }
+    document.getElementById('toggle-forces').addEventListener('change', () => {
+      forceGroup.visible = shouldShowForces();
     });
-    document.getElementById('toggle-enclosure').addEventListener('change', (e) => {
-      enclosureGroup.visible = e.target.checked;
+    document.getElementById('toggle-enclosure').addEventListener('change', () => {
+      enclosureGroup.visible = shouldShowEnclosure();
     });
     document.getElementById('toggle-wireframe').addEventListener('change', (e) => {
       const isWire = e.target.checked;
