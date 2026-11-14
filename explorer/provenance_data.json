@@ -1,13 +1,13 @@
 {
   "metadata": {
     "project": "Scalar Wave Viz",
-    "application": "Propulsion Explorer 3D (V0)",
-    "version": "0.5.0-r5",
+    "application": "Propulsion Explorer 3D (V0.2)",
+    "version": "0.6.0-v0.2",
     "citation": "Exodus Propulsion Technologies US11511891B2 FIGS. 4-8",
     "scientific_disposition": "EDUCATIONAL_3D_EXPLORER_NO_UNVERIFIED_THRUST",
     "evidence_grade": "PROVISIONAL_ILLUSTRATIVE_SCENE",
-    "date": "2026-11-02",
-    "note": "V0 displays qualitative schematic force directions and illustrative field paths. No quantitative force magnitudes are established or claimed."
+    "date": "2026-11-09",
+    "note": "V0.2 introduces the nonblocking three-panel Learn Physics Backwards experience with the Iceberg Model (Surface, Shallow, Deeper, Research Depth)."
   },
   "four_questions": {
     "what_am_i_seeing": "An illustrative 3D model of an asymmetric electrostatic electrode pair inspired by Exodus Propulsion Technologies patent US11511891B2 (FIGS. 4–8). It depicts a tapered knife-edge blade cathode, an opposing planar ground counter-electrode, solid dielectric potting, and a surrounding grounded conductive test chamber.",
@@ -22,12 +22,12 @@
       "role": "Active cathode with sharp tapered knife-edge",
       "citation": "US11511891B2, FIGS. 4–8; col. 6 lines 15–45 (tapered blade cathode)",
       "material": "High-conductivity copper / brass",
-      "default_potential_v": -20000.0,
+      "default_potential_v": -20000,
       "provenance_badge": "PUBLISHED HYPOTHESIS",
       "dimensions_mm": {
-        "width": 30.0,
+        "width": 30,
         "height": 25.4,
-        "thickness": 3.0,
+        "thickness": 3,
         "tip_radius": 0.1
       },
       "tip_radius_modeled_in_mesh": false,
@@ -44,11 +44,11 @@
       "role": "Planar collector electrode held at reference ground potential (0 V)",
       "citation": "US11511891B2, FIGS. 4–8; col. 6 lines 46–60",
       "material": "Polished aluminum plate / collector mesh",
-      "default_potential_v": 0.0,
+      "default_potential_v": 0,
       "provenance_badge": "ESTABLISHED MODEL",
       "dimensions_mm": {
-        "width": 4.0,
-        "height": 40.0,
+        "width": 4,
+        "height": 40,
         "depth": 50.8
       },
       "surface_gap_definition": "Surface-to-surface distance d from knife edge (x=0) to near planar face (x=d). With plate thickness 4 mm, center is at x=d+2.0 mm.",
@@ -67,9 +67,9 @@
       "default_eps_r": 3.8,
       "provenance_badge": "WHAT-IF PARAMETER",
       "dimensions_mm": {
-        "width": 16.0,
-        "height": 30.0,
-        "depth": 45.0
+        "width": 16,
+        "height": 30,
+        "depth": 45
       },
       "system_boundary": "DEVICE_UNDER_TEST",
       "force_nature": "Dielectric virtual-work polarization stress toward highest field gradient",
@@ -88,9 +88,9 @@
       "default_potential_v": null,
       "provenance_badge": "ESTABLISHED MODEL",
       "dimensions_mm": {
-        "width": 90.0,
-        "height": 8.0,
-        "depth": 90.0
+        "width": 90,
+        "height": 8,
+        "depth": 90
       },
       "system_boundary": "DEVICE_UNDER_TEST",
       "force_nature": "Internal mechanical constraint holding electrodes apart against electrostatic attraction",
@@ -104,12 +104,12 @@
       "role": "Faraday shield, vacuum chamber boundary, and capacitive return boundary",
       "citation": "Standard vacuum chamber / grounded enclosure",
       "material": "Stainless steel chamber",
-      "default_potential_v": 0.0,
+      "default_potential_v": 0,
       "provenance_badge": "ESTABLISHED MODEL",
       "dimensions_mm": {
-        "width": 160.0,
-        "height": 120.0,
-        "depth": 160.0
+        "width": 160,
+        "height": 120,
+        "depth": 160
       },
       "system_boundary": "EXTERNAL_ENVIRONMENT",
       "force_nature": "Wall reaction traction from image charges induced on external chamber boundary",
@@ -123,22 +123,46 @@
       "name": "Isolated Device Under Test (DUT Control Volume)",
       "description": "Suspended assembly consisting of blade cathode, ground electrode, dielectric potting, and mechanical mount.",
       "internal_actions": [
-        {"element": "Blade Electrode", "direction": "+X (Forward traction)", "nature": "Local electrostatic attraction"},
-        {"element": "Ground Electrode", "direction": "-X (Reaction traction)", "nature": "Newton's 3rd law electrostatic partner"},
-        {"element": "Dielectric Potting", "direction": "-X (Polarization stress)", "nature": "Internal dielectric energy gradient"},
-        {"element": "Structural Mount", "direction": "+X (Constraint force)", "nature": "Rigid structural equilibrium"}
+        {
+          "element": "Blade Electrode",
+          "direction": "+X (Forward traction)",
+          "nature": "Local electrostatic attraction"
+        },
+        {
+          "element": "Ground Electrode",
+          "direction": "-X (Reaction traction)",
+          "nature": "Newton's 3rd law electrostatic partner"
+        },
+        {
+          "element": "Dielectric Potting",
+          "direction": "-X (Polarization stress)",
+          "nature": "Internal dielectric energy gradient"
+        },
+        {
+          "element": "Structural Mount",
+          "direction": "+X (Constraint force)",
+          "nature": "Rigid structural equilibrium"
+        }
       ],
-      "internal_stress_sum": "BALANCED (Net internal forces sum to zero)",
-      "external_environmental_coupling": "UNVERIFIED_PENDING_CHAMBER_CALIBRATION",
+      "internal_stress_sum": "BALANCED (Internal pairwise forces sum identically to zero)",
+      "external_environmental_coupling": "UNVERIFIED_PENDING_CHAMBER_CALIBRATION (Unknown: neither assumed zero nor assumed non-zero)",
       "whole_body_thrust_status": "NOT MEASURED / NOT ESTABLISHED",
-      "scientific_disclaimer": "Local force on the blade electrode is an internal electrostatic stress. A suspended test article experiences zero net propellantless thrust in conventional electrodynamics."
+      "scientific_disclaimer": "Internal electrostatic stresses between electrodes, dielectric, and mount balance in pairs (sum F_internal = 0). Any net force on the suspended DUT equals external coupling (F_DUT,net = F_external), which is unknown pending calibrated enclosure geometry and produces zero propellantless thrust in conventional electrodynamics."
     },
     "boundary_b_external_environment": {
       "name": "External Test Environment",
       "description": "Surrounding chamber walls, vacuum tank, power feedthroughs, and laboratory ground.",
       "interactions": [
-        {"element": "Chamber Enclosure Walls", "direction": "-X (Wall reaction)", "nature": "Capacitive image charges on vacuum tank walls"},
-        {"element": "Power Leads / Fixture", "direction": "Variable", "nature": "Lorentz and electrostatic lead coupling"}
+        {
+          "element": "Chamber Enclosure Walls",
+          "direction": "-X (Wall reaction)",
+          "nature": "Capacitive image charges on vacuum tank walls"
+        },
+        {
+          "element": "Power Leads / Fixture",
+          "direction": "Variable",
+          "nature": "Lorentz and electrostatic lead coupling"
+        }
       ],
       "environmental_momentum_exchange": "Coupling to chamber walls can transfer momentum to the external building frame, which must not be confused with propellantless thrust."
     },
@@ -151,7 +175,7 @@
   "null_controls": [
     {
       "name": "High-Vacuum Control (< 10^-5 Torr)",
-      "purpose": "Eliminate corona discharge, aerodynamic ion wind, and air convection",
+      "purpose": "Suppress and test for corona discharge, aerodynamic ion wind, and air convection artifacts (not proof of absolute absence at finite pressure)",
       "reference": "Tajmar & Schreiber (2020), J. Electrostat."
     },
     {
@@ -168,6 +192,218 @@
       "name": "Isolated Center-of-Mass Torsion Balance",
       "purpose": "Measure net force on entire closed system including power source, avoiding lead-wire artifacts.",
       "reference": "Tajmar & Schreiber (2020)"
+    }
+  ],
+  "six_chapters": [
+    {
+      "chapter": 1,
+      "title": "Meet the Device",
+      "annotation": "🎯 Component Focus: Asymmetric blade wedge opposite planar ground collector",
+      "highlight_component": "blade_electrode",
+      "camera": {
+        "x": 90,
+        "y": 50,
+        "z": 110
+      },
+      "target": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "layers": {
+        "geometry": true,
+        "field": false,
+        "forces": false,
+        "chamber": true
+      },
+      "voltage_kv": 0,
+      "surface": "Look at the 3D scene: you are inspecting an <strong>asymmetric high-voltage electrode assembly</strong> inspired by Exodus Propulsion Technologies patent US11511891B2 (FIGS. 4–8).",
+      "shallow": "Notice the two main electrical components: a sharp <strong style='color:var(--color-blade)'>red knife-edge blade cathode</strong> and a flat <strong style='color:var(--color-ground)'>green ground collector plate</strong>. Between them sits a semitransparent <strong style='color:var(--color-dielectric)'>blue dielectric potting block</strong> (an insulator that prevents high-voltage electrical breakdown). The entire assembly is mounted on an insulating stand inside a grounded stainless steel chamber.<br><br><strong>Everyday Analogy:</strong> Like the nozzle and hose of a garden sprayer, the physical shape is asymmetric on purpose. But simply making an object asymmetric does not mean electrical fields will push the whole assembly forward!",
+      "deeper": {
+        "equations": "Dirichlet potential boundary conditions: &Phi;<sub>blade</sub> = -20 kV, &Phi;<sub>ground</sub> = 0 V, &Phi;<sub>chamber</sub> = 0 V. In charge-free vacuum, electric potential satisfies Laplace's equation: &nabla;<sup>2</sup>&Phi; = 0.",
+        "specifications": "Blade wedge: copper/brass, knife-edge apex along x = 0, y &isin; [-12.7, +12.7] mm, source-specified tip radius r &approx; 0.1 mm (modeled as idealized sharp wedge). Ground plate: aluminum collector 4.0 mm &times; 40.0 mm &times; 50.8 mm. Dielectric: epoxy potting (&epsilon;<sub>r</sub> = 3.8, 16 mm &times; 30 mm &times; 45 mm).",
+        "citations": "US Patent <a href='https://patents.google.com/patent/US11511891B2/en' target='_blank' rel='noopener noreferrer'>US11511891B2</a> FIGS. 4–8 (tapered blade cathode); FIGS. 6B, 21, 23A (dielectric potting medium 600); Jackson, <a href='https://cds.cern.ch/record/490749' target='_blank' rel='noopener noreferrer'><em>Classical Electrodynamics</em></a>, Ch. 1."
+      },
+      "research": {
+        "hypotheses": "Patent US11511891B2 claims an 'asymmetric electrostatic pressure' effect produces a net unidirectional force on the apparatus.",
+        "uncertainties": "Sharp conductor knife-edges create extreme local field gradients (E &prop; 1/r) that can cause field electron emission, corona discharge, or micro-arcing if not suppressed by ultra-high vacuum or solid dielectric potting.",
+        "controls": "Dimensional inspection, surface roughness verification, and vacuum outgassing characterization must precede electrical energization."
+      }
+    },
+    {
+      "chapter": 2,
+      "title": "Turn on the Electricity",
+      "annotation": "⚡ Field Activated: Streamlines bunch tightly at the knife-edge tip (E ∝ 1/r)",
+      "highlight_component": "blade_electrode",
+      "camera": {
+        "x": 35,
+        "y": 18,
+        "z": 55
+      },
+      "target": {
+        "x": 5,
+        "y": 0,
+        "z": 0
+      },
+      "layers": {
+        "geometry": true,
+        "field": true,
+        "forces": false,
+        "chamber": true
+      },
+      "voltage_kv": 20,
+      "surface": "Negative high voltage (-20 kV) is now applied to the red blade cathode while the green collector plate remains at ground (0 V). Luminous <strong style='color:var(--color-field)'>cyan electric field streamlines</strong> immediately fill the gap.",
+      "shallow": "Notice how tightly the field lines crowd together near the razor-sharp knife-edge apex. Conventional electric field vectors point from higher potential (ground, 0 V) toward lower potential (cathode, -20 kV).<br><br><strong>Everyday Analogy:</strong> Think of a wide river suddenly channeled through a tiny gap between rocks—the water accelerates dramatically and creates intense pressure in the narrow opening. In the exact same way, electric charges crowd intensely into the sharp knife-edge tip, creating a fierce electric field concentration.",
+      "deeper": {
+        "equations": "Electric field vector: <b>E</b> = -&nabla;&Phi;. In an idealized 2D conductive wedge model with exterior half-angle &alpha;, the analytic electrostatic field scales near the apex as E &prop; V / r<sup>1 - &pi;/(2&alpha;)</sup> (Jackson &sect;2.11). For sharp knife edges (r &rarr; 0), unrounded models exhibit a mathematical singularity; in physical devices, dielectric potting and finite tip radii are required to suppress field emission and dielectric breakdown. No validated 3D peak field magnitude is claimed for this visual scene.",
+        "specifications": "Equipotential surfaces form concentric contours around the knife edge. Animated streamline directional markers demonstrate orientation of <b>E</b> (strictly schematic orientation indicators pointing Ground 0 V &rarr; Blade -20 kV—not physical charge transport or wave propagation). Extinguished identically at 0 V.",
+        "citations": "Jackson, <a href='https://cds.cern.ch/record/490749' target='_blank' rel='noopener noreferrer'><em>Classical Electrodynamics</em></a>, &sect;2.11 (Fields near sharp edges and conical points); US Patent <a href='https://patents.google.com/patent/US11511891B2/en' target='_blank' rel='noopener noreferrer'>US11511891B2</a> col. 6 lines 15–45."
+      },
+      "research": {
+        "hypotheses": "H0: Conventional Maxwell electrostatics. Field energy U = &frac12;&epsilon;<sub>0</sub> &int; |<b>E</b>|<sup>2</sup> dV is stored purely in the electrostatic field.",
+        "uncertainties": "In ambient air, sharp conductor tips may reach the dielectric breakdown threshold of air (~3 kV/mm) and trigger corona ionization, depending on edge sharpness and surface finish; peak field strength and corona onset have NOT been calculated or verified for this visual scene. In high vacuum (< 10⁻⁵ Torr relative to atmospheric 760 Torr), gas particle density drops by about eight orders of magnitude (~7.88 orders at 10⁻⁵ Torr), suppressing gas-phase ion collisions and aerodynamic forces.",
+        "controls": "Verify voltage scaling E &prop; V and field extinction at 0 V. Sweep voltage to confirm quadratic energy dependence U &prop; V<sup>2</sup>."
+      }
+    },
+    {
+      "chapter": 3,
+      "title": "Follow the Forces",
+      "annotation": "⚖️ Action & Reaction: Mutual blade–ground pairwise attraction; net forces include surrounding dielectric & walls",
+      "highlight_component": "ground_electrode",
+      "camera": {
+        "x": 0,
+        "y": 65,
+        "z": 85
+      },
+      "target": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "layers": {
+        "geometry": true,
+        "field": true,
+        "forces": true,
+        "chamber": true
+      },
+      "voltage_kv": 20,
+      "surface": "<strong style='color:var(--color-force)'>Golden force arrows</strong> now appear on the blade, the ground plate, the dielectric potting, and the chamber walls.",
+      "shallow": "The electric field exerts mechanical traction on the blade cathode pulling it toward the ground plate (+X direction). Between the blade and ground plate, the direct pairwise electrostatic interaction is mutually attractive: the blade pulls on the plate, and the plate pulls back on the blade with equal and opposite force. However, the total force on any single electrode also includes dielectric polarization, mounting fixtures, and chamber walls. Internal pairwise forces cancel in pairs, but the net force on individual parts depends on the entire surrounding geometry!<br><br><strong>Everyday Analogy:</strong> Two strong neodymium magnets on a table attract each other with equal and opposite pairwise forces. They pull toward one another, but internal attraction alone cannot slide the whole table across the room!",
+      "deeper": {
+        "equations": "Maxwell stress tensor in vacuum: T<sub>ij</sub> = &epsilon;<sub>0</sub> (E<sub>i</sub>E<sub>j</sub> - &frac12;|<b>E</b>|<sup>2</sup>&delta;<sub>ij</sub>). Along the x-axis: T<sub>xx</sub> = &frac12;&epsilon;<sub>0</sub>(E<sub>x</sub><sup>2</sup> - E<sub>y</sub><sup>2</sup> - E<sub>z</sub><sup>2</sup>). The total electrostatic force on conductor k is <b>F</b><sub>k</sub> = &conint;<sub>&part;V<sub>k</sub></sub> <b>T</b>&middot;<b>n̂</b> dA. Quadratic voltage scaling: <b>F</b> &prop; V<sup>2</sup>.",
+        "specifications": "Local surface traction <b>t</b> = <b>T</b>&middot;<b>n̂</b> = &frac12;&epsilon;<sub>0</sub>|<b>E</b>|<sup>2</sup><b>n̂</b> pulls outward perpendicular to conductor surfaces. Sharp blade edge experiences high peak traction over narrow apex; ground plate experiences lower traction distributed over large area.",
+        "citations": "Feynman, Leighton, Sands, <a href='https://www.feynmanlectures.caltech.edu/II_08.html' target='_blank' rel='noopener noreferrer'><em>The Feynman Lectures on Physics</em>, Vol. II, Ch. 8</a> (Electrostatic Energy &amp; Stress Tensor); US Patent <a href='https://patents.google.com/patent/US11511891B2/en' target='_blank' rel='noopener noreferrer'>US11511891B2</a> col. 6 lines 50–68."
+      },
+      "research": {
+        "hypotheses": "H1: The patent argues that because the field is geometrically asymmetric, the electrostatic forces on the two electrodes will not balance.",
+        "uncertainties": "Failure to account for dielectric polarization surface forces and chamber wall image-charge coupling leads to incorrect net force claims.",
+        "controls": "Evaluate the Maxwell stress surface integral over a closed boundary enclosing the test electrodes and dielectric to quantify boundary flux; in an uncalibrated enclosure, this boundary flux is unknown pending complete geometry (it reflects external coupling to chamber walls and feedthroughs rather than propellantless propulsion)."
+      }
+    },
+    {
+      "chapter": 4,
+      "title": "Can the Whole Device Move?",
+      "annotation": "🚫 Action-Reaction Balance: Internal pairwise forces cancel (∑F_internal = 0); DUT net force = F_external (unknown pending geometry)",
+      "highlight_component": "dielectric_block",
+      "camera": {
+        "x": 100,
+        "y": 60,
+        "z": 120
+      },
+      "target": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "layers": {
+        "geometry": true,
+        "field": false,
+        "forces": true,
+        "chamber": true
+      },
+      "voltage_kv": 20,
+      "surface": "Inspect the <strong>Action-Reaction Force Ledger</strong> in the right-hand panel. Look at <strong>Boundary A (Device Under Test)</strong>.",
+      "shallow": "Can you lift yourself off the ground by pulling upward on your own shoelaces? Absolutely not! Your hands pull up on your shoes, but your shoulders and spine push down on your legs with the exact same force. Internal pairwise forces always cancel out completely.<br><br>In this electrical device, Newton's third law requires that internal pairwise interactions between all components sum identically to zero:<br><br><span class='math-formula'>&sum; <b>F</b><sub>internal</sub> = <b>F</b><sub>blade,int</sub> + <b>F</b><sub>ground,int</sub> + <b>F</b><sub>dielectric,int</sub> + <b>F</b><sub>mount,int</sub> = <b>0</b></span><br><br>Any net force on the suspended Device Under Test (DUT) as a whole would equal the sum of external environmental interactions (chamber wall image charges, lead wires, ambient gas): <span class='math-formula'><b>F</b><sub>DUT,net</sub> = <b>F</b><sub>external</sub></span> (which remains unknown pending calibrated geometry, neither assumed to be zero nor asserted to be non-zero).<br><br><em>Hypothetical arithmetic toy illustration (not measured or computed for this apparatus): If the blade hypothetically experienced +5 units of forward attraction toward the ground plate, the opposing internal reactions on ground and dielectric balance out to zero net internal force (&sum; F_internal = 0).</em><br><br><button type='button' class='action-btn' id='btn-chapter4-open-ledger' style='width:100%; margin-top:0.75rem; background: var(--bg-card-hover); border-color: var(--color-force);'>⚖️ Open Action-Reaction Force Ledger &rarr;</button>",
+      "deeper": {
+        "equations": "Internal pairwise momentum conservation: &sum; <b>F</b><sub>internal</sub> = <b>0</b> identically. Net electrostatic force on the DUT (Boundary A): <b>F</b><sub>DUT</sub> = &conint;<sub>&part;V<sub>A</sub></sub> <b>T</b>&middot;<b>n̂</b> dA = <b>F</b><sub>external</sub>. This boundary surface integral is UNKNOWN pending calibrated geometry and boundary solver (it is NOT assumed to be identically zero or non-zero, because external fields from surrounding conductive chamber walls or feedthroughs may penetrate Boundary A). Total momentum is strictly conserved across the complete closed universe (Boundary C enclosing the entire laboratory where <b>E</b> &rarr; <b>0</b> at infinity): &conint;<sub>&part;V<sub>&infin;</sub></sub> <b>T</b>&middot;<b>n̂</b> dA = <b>0</b>.",
+        "specifications": "Boundary A encloses Blade, Ground, Dielectric, and Support Mount. Internal pairwise electrostatic forces sum identically to zero (&sum; <b>F</b><sub>internal</sub> = <b>0</b>), while external environmental coupling (<b>F</b><sub>DUT,net</sub> = <b>F</b><sub>external</sub>) remains UNVERIFIED / UNKNOWN pending calibrated chamber geometry. Boundary B accounts for grounded enclosure chamber walls. Boundary C (the closed universe) preserves total momentum.",
+        "citations": "Griffiths, <a href='https://www.cambridge.org/highereducation/books/introduction-to-electrodynamics/1A74EE8421AC2F9758BFDEB9E40A2F39' target='_blank' rel='noopener noreferrer'><em>Introduction to Electrodynamics</em></a>, 4th ed., &sect;8.2.2 (Conservation of Momentum); Newton's <em>Principia</em> (Lex III)."
+      },
+      "research": {
+        "hypotheses": "H0 (Conventional Physics): Isolated electrostatic devices cannot produce propellantless thrust. Momentum is conserved strictly.",
+        "uncertainties": "Claims of net thrust often confuse local electrode traction with whole-device propulsion, or neglect external chamber image-charge coupling and power-lead forces.",
+        "controls": "Test entire self-contained article on an isolated torsion pendulum with complete optical center-of-mass tracking."
+      }
+    },
+    {
+      "chapter": 5,
+      "title": "What Are Scalar Waves?",
+      "annotation": "🌊 Wave Contrast: Visual Scalar Wave contrast (toy equation) vs vector electrostatic field lines",
+      "highlight_component": "dielectric_block",
+      "camera": {
+        "x": 60,
+        "y": 90,
+        "z": 90
+      },
+      "target": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "layers": {
+        "geometry": true,
+        "field": true,
+        "forces": false,
+        "chamber": true
+      },
+      "voltage_kv": 20,
+      "surface": "This project explores both conventional electrostatics and mathematical scalar waves. What is the fundamental physical and visual difference?",
+      "shallow": "<strong>What is a scalar?</strong> A scalar is simply a single number at each point in space—like temperature on a weather map, or electrical voltage. In contrast, electric and magnetic fields are <strong>vectors</strong> (arrows with both magnitude and direction).<br><br><strong>What is a scalar wave?</strong> Sound in air is a scalar pressure wave. Water height on a pond is a scalar wave. In math, we can easily simulate oscillating waves of numbers moving on a grid.<br><br><strong>Does this 3D electrode produce scalar waves?</strong> <strong style='color:var(--badge-unverified)'>NO.</strong> This apparatus models <em>conventional electrostatic vector fields</em>. It is NOT a scalar wave thruster. Calling an electric capacitor a 'scalar wave engine' is like calling a battery a 'gravity generator'—just because both involve electricity does not make them a new force of nature!<br><br><button type='button' class='action-btn' id='btn-toggle-wave-contrast' style='width:100%; margin-top:0.75rem; background: var(--bg-card-hover); border-color: var(--color-field);'>🌊 Switch to Mathematical Scalar Wave Toy View</button>",
+      "deeper": {
+        "equations": "Electromagnetic 4-potential A<sup>&mu;</sup> = (&Phi;/c, <b>A</b>). In Lorenz gauge &part;<sub>&mu;</sub>A<sup>&mu;</sup> = 0, Maxwell's equations decouple into &Square;A<sup>&mu;</sup> = &mu;<sub>0</sub>J<sup>&mu;</sup>. While mathematically scalar d'Alembert wave equations, gauge invariance guarantees physical radiated modes are transverse vector photons (spin-1) with zero physical scalar radiation.",
+        "specifications": "A genuine physical scalar field &phi; would require: (1) an invariant Lagrangian &Lscr;<sub>&phi;</sub> = &frac12;&part;<sub>&mu;</sub>&phi;&part;<sup>&mu;</sup>&phi; - V(&phi;), (2) an established coupling to matter/fields &Square;&phi; = g F<sub>&mu;&nu;</sub>F<sup>&mu;&nu;</sup>, and (3) a validated stress-energy tensor T<sup>&mu;&nu;</sup><sub>&phi;</sub> carrying physical momentum &Delta;p = &int; T<sup>0i</sup><sub>&phi;</sub> d<sup>3</sup>x.",
+        "citations": "Jackson, <a href='https://cds.cern.ch/record/490749' target='_blank' rel='noopener noreferrer'><em>Classical Electrodynamics</em></a>, &sect;6.3 &amp; &sect;6.4 (Gauge Transformations &amp; Retarded Potentials); Peskin &amp; Schroeder, <a href='https://www.routledge.com/An-Introduction-To-Quantum-Field-Theory/Peskin-Schroeder/p/book/9780201503975' target='_blank' rel='noopener noreferrer'><em>An Introduction to Quantum Field Theory</em></a>, Ch. 2."
+      },
+      "research": {
+        "hypotheses": "H_scalar: A novel scalar electrodynamic field couples to asymmetric high voltage and radiates momentum without propellant.",
+        "uncertainties": "No physical scalar field coupled to macroscopic electrostatics has ever been detected. Toy simulations in wave_3d.ipynb use unverified arbitrary material parameters and do not establish physical propulsion.",
+        "controls": "Calibrated RF and scalar detectors with directional sensitivity to distinguish genuine field radiation from RF noise, thermal emission, or room reflections."
+      }
+    },
+    {
+      "chapter": 6,
+      "title": "How Could We Test the Hypothesis?",
+      "annotation": "🔬 Testing Reality: High vacuum (< 10⁻⁵ Torr) and torsion balance required to rule out ion wind and image forces",
+      "highlight_component": "enclosure_walls",
+      "camera": {
+        "x": 130,
+        "y": 80,
+        "z": 150
+      },
+      "target": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "layers": {
+        "geometry": true,
+        "field": false,
+        "forces": false,
+        "chamber": true
+      },
+      "voltage_kv": 20,
+      "surface": "Science does not accept propulsion claims based on computer renderings, patent text, or enthusiastic videos. <strong>How do we test whether an effect is real?</strong>",
+      "shallow": "If someone claims an electrical device produces thrust without throwing propellant, we must place the entire self-contained device (with battery and wireless controller) inside a sealed metal vacuum chamber suspended from a microscopic torsion pendulum.<br><br><strong>Everyday Analogy:</strong> If you suspect someone is blowing air through a secret fan, put them inside a sealed glass box where all the air has been pumped out. If the force drops when the air is gone, it was just a fan all along!",
+      "deeper": {
+        "equations": "Corona ion wind aerodynamic thrust in air: F<sub>ion</sub> &approx; (I &middot; d) / &mu;, where I is leakage current, d is electrode gap distance, and &mu; is ion mobility in air (&approx; 2 &times; 10<sup>-4</sup> m<sup>2</sup>/(V&middot;s)). Sample illustrative calculation: with d = 20 mm (0.02 m) and a 50 &mu;A corona current, F &approx; (50 &times; 10<sup>-6</sup> &times; 0.02) / (2 &times; 10<sup>-4</sup>) = 5 mN of spurious aerodynamic thrust in ambient air. In high vacuum at 10<sup>-5</sup> Torr (relative to 760 Torr ambient), gas density drops by about eight orders of magnitude (~7.88 orders of magnitude, or over 8 orders below 7.6 &times; 10<sup>-6</sup> Torr), suppressing gas-phase ion collisions and aerodynamic drag.",
+        "specifications": "Apparatus: Double-pendulum or torsion balance with sub-micro-Newton resolution (< 0.1 &mu;N). Stainless steel vacuum chamber at P < 10<sup>-5</sup> Torr. Fiber-optic telemetry, wireless on-board battery, and Faraday cage electrostatic shielding.",
+        "citations": "Tajmar &amp; Schreiber (2020), <a href='https://doi.org/10.1016/j.elstat.2020.103477' target='_blank' rel='noopener noreferrer'>\"Put strong limits on all proposed theories so far assessing electrostatic propulsion: Does a charged high-voltage capacitor produce thrust?\"</a>, <em>Journal of Electrostatics</em> 107, 103477, DOI: 10.1016/j.elstat.2020.103477; US Patent <a href='https://patents.google.com/patent/US11511891B2/en' target='_blank' rel='noopener noreferrer'>US11511891B2</a> col. 8."
+      },
+      "research": {
+        "hypotheses": "Null Hypothesis H0: An isolated asymmetric capacitor produces zero net propellantless thrust in high vacuum. Measured weight/force changes reflect experimental noise and confounding artifacts (e.g. Tajmar & Schreiber 2020 resolved null weight changes to &plusmn;0.3 mg &approx; &plusmn;3 &mu;N under studied configurations).",
+        "uncertainties": "Confounding artifacts: electrostatic image forces on chamber walls, Lorentz forces from Earth's magnetic field on power leads, thermal outgassing convection, and vibrational coupling.",
+        "controls": "Five Mandatory Null Controls: (1) Vacuum sweep 10<sup>3</sup> &rarr; 10<sup>-6</sup> Torr, (2) Voltage polarity reversal (+20 kV vs -20 kV), (3) 180&deg; physical orientation flip on balance arm, (4) Chamber wall spacing sweep, (5) Symmetrical dummy load control."
+      }
     }
   ]
 }

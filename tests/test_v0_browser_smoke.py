@@ -164,7 +164,8 @@ class PropulsionExplorerBrowserSmokeTests(unittest.TestCase):
         self.assertTrue(canvas.is_visible())
 
         legend_blade = self.page.locator("#legend-blade-label").inner_text()
-        self.assertIn("Blade (-20.0 kV)", legend_blade)
+        self.assertIn("Blade", legend_blade)
+        self.assertIn("0.0 kV", legend_blade)
 
     def test_keyboard_navigation_no_exceptions(self):
         """V0-R1-F3 / V0-R2-M3: verify all 10 keyboard shortcuts execute cleanly without throwing errors."""
@@ -181,6 +182,8 @@ class PropulsionExplorerBrowserSmokeTests(unittest.TestCase):
     def test_what_if_sliders_dom_synchronization(self):
         """V0-R1-M1 / V0-R2-M3: verify What-If sliders update DOM values and extinguish at 0 V."""
         self.page.click("#tab-btn-sandbox")
+        # Ensure force layer is enabled for What-If sandbox testing
+        self.page.evaluate("() => { const el = document.getElementById('toggle-forces'); if (el) { el.checked = true; } }")
         self.assertTrue(self.page.locator("#tab-sandbox").is_visible())
 
         # Voltage down to 0 kV
@@ -377,6 +380,11 @@ class PropulsionExplorerBrowserSmokeTests(unittest.TestCase):
         """
         # Switch to Sandbox tab
         self.page.click("#tab-btn-sandbox")
+        # Ensure force layer is enabled for What-If sandbox testing
+        self.page.evaluate("() => { const el = document.getElementById('toggle-forces'); if (el) { el.checked = true; } }")
+        self.page.fill("#slider-voltage", "20")
+        self.page.dispatch_event("#slider-voltage", "input")
+        self.page.wait_for_timeout(30)
 
         # Install prototype disposal tracking hooks
         self.page.evaluate("""() => {
@@ -441,6 +449,8 @@ class PropulsionExplorerBrowserSmokeTests(unittest.TestCase):
         5. Arrow endpoints stay strictly inside enclosure chamber [-80, 80] mm.
         """
         self.page.click("#tab-btn-sandbox")
+        # Ensure force layer is enabled for What-If sandbox testing
+        self.page.evaluate("() => { const el = document.getElementById('toggle-forces'); if (el) { el.checked = true; } }")
 
         # 1. At 0 kV: extinguished
         self.page.fill("#slider-voltage", "0")
@@ -529,14 +539,26 @@ class PropulsionExplorerBrowserSmokeTests(unittest.TestCase):
         self.assertIn(result.get("id"), {"blade_electrode", "dielectric_block", "ground_electrode", "support_mount"})
 
     def test_guided_tour_and_help_modals(self):
-        """V0-R1-M4: verify Guided Tour and Help modals open, trap focus, and dismiss on Escape."""
-        self.page.click("#btn-start-tour")
-        tour_modal = self.page.locator("#tour-modal")
-        self.assertTrue(tour_modal.is_visible())
+        """V0.2 regression: verify nonblocking Guided Learning panel and Help modal."""
+        # V0.2: Learning panel is open and nonblocking by default
+        learning_panel = self.page.locator("#learning-panel")
+        self.assertTrue(learning_panel.is_visible())
 
-        self.page.click("#tour-btn-close")
-        self.assertFalse(tour_modal.is_visible())
+        # Verify no centered darkened tour-modal exists
+        self.assertEqual(self.page.locator("#tour-modal").count(), 0)
 
+        # Toggle learning panel collapse and expand
+        self.page.click("#btn-toggle-guide")
+        self.page.wait_for_timeout(300)
+        has_collapsed = self.page.evaluate("() => document.getElementById('app-layout').classList.contains('guide-collapsed')")
+        self.assertTrue(has_collapsed)
+
+        self.page.click("#btn-toggle-guide")
+        self.page.wait_for_timeout(300)
+        has_collapsed_after = self.page.evaluate("() => document.getElementById('app-layout').classList.contains('guide-collapsed')")
+        self.assertFalse(has_collapsed_after)
+
+        # Help modal opens and traps focus, dismisses on Escape
         self.page.click("#btn-toggle-help")
         help_modal = self.page.locator("#help-modal")
         self.assertTrue(help_modal.is_visible())
@@ -567,6 +589,8 @@ class PropulsionExplorerBrowserSmokeTests(unittest.TestCase):
         3. UI inspector retains tip radius metadata and surface gap notes.
         """
         self.page.click("#tab-btn-sandbox")
+        # Ensure force layer is enabled for What-If sandbox testing
+        self.page.evaluate("() => { const el = document.getElementById('toggle-forces'); if (el) { el.checked = true; } }")
 
         gap_settings = [16, 25, 50]
         for gap in gap_settings:
@@ -636,6 +660,8 @@ class PropulsionExplorerBrowserSmokeTests(unittest.TestCase):
         ]
 
         self.page.click("#tab-btn-sandbox")
+        # Ensure force layer is enabled for What-If sandbox testing
+        self.page.evaluate("() => { const el = document.getElementById('toggle-forces'); if (el) { el.checked = true; } }")
         for v, expected_trend, expected_arrow in test_voltages:
             self.page.fill("#slider-voltage", str(v))
             self.page.dispatch_event("#slider-voltage", "input")
@@ -651,6 +677,8 @@ class PropulsionExplorerBrowserSmokeTests(unittest.TestCase):
                 self.assertIn(expected_trend, force_text, f"Expected '{expected_trend}' at V={v} kV; got: '{force_text}'")
                 self.assertIn(expected_arrow, force_text, f"Expected '{expected_arrow}' at V={v} kV; got: '{force_text}'")
             self.page.click("#tab-btn-sandbox")
+        # Ensure force layer is enabled for What-If sandbox testing
+        self.page.evaluate("() => { const el = document.getElementById('toggle-forces'); if (el) { el.checked = true; } }")
 
     def test_chip_bar_component_quick_select(self):
         """V0.1 regression: verify accessible component quick-select chip bar selects all 5 components."""
@@ -780,6 +808,8 @@ class PropulsionExplorerBrowserSmokeTests(unittest.TestCase):
         pin_label = self.page.locator("#label-pin-blade_electrode .label-pin-text")
 
         self.page.click("#tab-btn-sandbox")
+        # Ensure force layer is enabled for What-If sandbox testing
+        self.page.evaluate("() => { const el = document.getElementById('toggle-forces'); if (el) { el.checked = true; } }")
 
         test_voltages = [
             ("0", "Blade (0 V OFF)"),
@@ -801,6 +831,12 @@ class PropulsionExplorerBrowserSmokeTests(unittest.TestCase):
 
     def test_inspector_role_and_status_at_zero_and_energized_voltage(self):
         """V0.1-R1-M2 regression: inspector card qualifies multi-body forces and specifies unenergized 0 V state."""
+        # Set voltage to nominal 20 kV
+        self.page.click("#tab-btn-sandbox")
+        self.page.fill("#slider-voltage", "20")
+        self.page.dispatch_event("#slider-voltage", "input")
+        self.page.wait_for_timeout(30)
+
         # Select ground electrode at nominal 20 kV
         self.page.click("#tab-btn-layers")
         self.page.click(".component-item-btn[data-id='ground_electrode']")
@@ -832,16 +868,16 @@ class PropulsionExplorerBrowserSmokeTests(unittest.TestCase):
         """V0.1-R1-F2 regression: electric field legend qualifies schematic orientation and distinguishes 0 V extinction."""
         legend_field = self.page.locator("#legend-field-label")
 
-        # At default 20 kV
-        self.assertIn("Schematic Orientation Only, Not Computed |E| Magnitude or Charge Flow", legend_field.inner_text())
+        # At initial 0 kV (Chapter 1)
+        self.assertIn("Electric Field Direction (OFF at 0 V — Zero Field)", legend_field.inner_text())
 
-        # At 0 kV
+        # At energized 20 kV (Chapter 2 or sandbox)
         self.page.click("#tab-btn-sandbox")
-        self.page.fill("#slider-voltage", "0")
+        self.page.fill("#slider-voltage", "20")
         self.page.dispatch_event("#slider-voltage", "input")
         self.page.wait_for_timeout(30)
 
-        self.assertIn("Electric Field Direction (OFF at 0 V — Zero Field)", legend_field.inner_text())
+        self.assertIn("Schematic Orientation Only, Not Computed |E| Magnitude or Charge Flow", legend_field.inner_text())
 
         self.assertEqual(len(self.page_errors), 0, f"Field legend check threw errors: {self.page_errors}")
 
@@ -1178,6 +1214,533 @@ class PropulsionExplorerBrowserSmokeTests(unittest.TestCase):
         self.page.set_viewport_size({"width": 1280, "height": 800})
         self.page.wait_for_timeout(40)
         self.assertEqual(len(self.page_errors), 0, f"Enlarged pins regression test threw errors: {self.page_errors}")
+
+    def test_v0_2_six_chapter_navigation_and_scene_synchronization(self):
+        """V0.2 regression: verify 6-chapter guided tour navigation and dynamic scene synchronization."""
+        # 1. Chapter 1: Initial state
+        title_el = self.page.locator("#guide-chapter-title")
+        self.assertIn("1. Meet the Device", title_el.inner_text())
+        self.assertIn("Component Focus", self.page.locator("#scene-annotation-card").inner_text())
+
+        # Chapter 1 prev button is disabled
+        self.assertTrue(self.page.locator("#guide-btn-prev").is_disabled())
+
+        # 2. Navigate to Chapter 2: Turn on the Electricity
+        self.page.click("#guide-btn-next")
+        self.page.wait_for_timeout(200)
+        self.assertIn("2. Turn on the Electricity", title_el.inner_text())
+        self.assertIn("Streamlines", self.page.locator("#scene-annotation-card").inner_text())
+        # Check scene voltage synchronized to 20 kV
+        val_voltage = self.page.locator("#val-voltage").inner_text()
+        self.assertIn("-20.0 kV", val_voltage)
+        # Check field lines visible
+        field_vis = self.page.evaluate("() => window.__explorer.fieldGroup.visible")
+        self.assertTrue(field_vis)
+
+        # 3. Navigate to Chapter 3: Follow the Forces
+        self.page.click("#guide-btn-next")
+        self.page.wait_for_timeout(200)
+        self.assertIn("3. Follow the Forces", title_el.inner_text())
+        self.assertIn("Action & Reaction", self.page.locator("#scene-annotation-card").inner_text())
+        forces_vis = self.page.evaluate("() => window.__explorer.forceGroup.visible")
+        self.assertTrue(forces_vis)
+
+        # 4. Navigate to Chapter 4: Can the Whole Device Move?
+        self.page.click("#guide-btn-next")
+        self.page.wait_for_timeout(200)
+        self.assertIn("4. Can the Whole Device Move?", title_el.inner_text())
+        self.assertIn("Action-Reaction Balance", self.page.locator("#scene-annotation-card").inner_text())
+        # Check Force Ledger tab automatically activated
+        ledger_panel = self.page.locator("#tab-ledger")
+        self.assertTrue(ledger_panel.is_visible())
+        self.assertEqual(self.page.locator("#tab-btn-ledger").get_attribute("aria-selected"), "true")
+
+        # 5. Navigate to Chapter 5: What are Scalar Waves?
+        self.page.click("#guide-btn-next")
+        self.page.wait_for_timeout(200)
+        self.assertIn("5. What", title_el.inner_text())
+        self.assertIn("Scalar Wave", self.page.locator("#scene-annotation-card").inner_text())
+
+        # 6. Navigate to Chapter 6: How Could We Test It?
+        self.page.click("#guide-btn-next")
+        self.page.wait_for_timeout(200)
+        self.assertIn("6. How Could We Test", title_el.inner_text())
+        self.assertIn("Testing Reality", self.page.locator("#scene-annotation-card").inner_text())
+        next_btn = self.page.locator("#guide-btn-next")
+        self.assertEqual(next_btn.inner_text(), "Finish Tour")
+
+        # Stepper direct jump back to Chapter 2
+        self.page.click(".chapter-step-btn[data-chapter='1']")
+        self.page.wait_for_timeout(200)
+        self.assertIn("2. Turn on the Electricity", title_el.inner_text())
+
+        # Back button returns to Chapter 1
+        self.page.click("#guide-btn-prev")
+        self.page.wait_for_timeout(200)
+        self.assertIn("1. Meet the Device", title_el.inner_text())
+
+        self.assertEqual(len(self.page_errors), 0, f"Chapter navigation threw errors: {self.page_errors}")
+
+    def test_v0_2_progressive_disclosure_iceberg_details_and_explore_freely(self):
+        """V0.2 regression: verify Iceberg disclosures, equations, citations, and Explore Freely mode."""
+        guide_body = self.page.locator("#guide-body")
+        self.assertTrue(guide_body.locator(".iceberg-surface").is_visible())
+        self.assertTrue(guide_body.locator(".iceberg-shallow").is_visible())
+
+        # Deeper details disclosure
+        deeper = guide_body.locator(".iceberg-deeper")
+        self.assertFalse(deeper.evaluate("el => el.open"))
+        guide_body.locator(".iceberg-deeper summary").evaluate("el => el.click()")
+        self.page.wait_for_timeout(50)
+        self.assertTrue(deeper.evaluate("el => el.open"))
+        self.assertIn("Jackson", deeper.inner_text())
+
+        # Research details disclosure
+        research = guide_body.locator(".iceberg-research")
+        self.assertFalse(research.evaluate("el => el.open"))
+        guide_body.locator(".iceberg-research summary").evaluate("el => el.click()")
+        self.page.wait_for_timeout(50)
+        self.assertTrue(research.evaluate("el => el.open"))
+        self.assertIn("Hypothesis Tested", research.inner_text())
+        self.assertIn("US11511891B2", research.inner_text())
+
+        # Explore Freely mode
+        self.page.click("#guide-btn-free")
+        self.page.wait_for_timeout(100)
+        self.assertIn("FREE EXPLORATION", guide_body.inner_text().upper())
+        resume_btn = self.page.locator("#btn-resume-guide")
+        self.assertTrue(resume_btn.is_visible())
+
+        # Resume guide returns to chapter
+        resume_btn.click()
+        self.page.wait_for_timeout(100)
+        self.assertIn("Meet the Device", self.page.locator("#guide-chapter-title").inner_text())
+
+        # Pause / Resume streamline pulse animation
+        pause_btn = self.page.locator("#guide-btn-pause")
+        pause_btn.click()
+        self.assertIn("Resume", pause_btn.inner_text())
+        pause_btn.click()
+        self.assertIn("Pause", pause_btn.inner_text())
+
+        # Reset Tour
+        self.page.click("#guide-btn-reset")
+        self.page.wait_for_timeout(100)
+        self.assertIn("1. Meet the Device", self.page.locator("#guide-chapter-title").inner_text())
+
+        self.assertEqual(len(self.page_errors), 0, f"Iceberg and explore freely threw errors: {self.page_errors}")
+
+    def test_v0_2_mobile_tabs_responsive_layout(self):
+        """V0.2 regression: verify mobile tab navigation between Guide and Controls preserves 3D model visibility."""
+        # Test on iPhone 12/13/14 viewport (390x844)
+        self.page.set_viewport_size({"width": 390, "height": 844})
+        self.page.wait_for_timeout(100)
+
+        # Tabs should be visible
+        mobile_tabs = self.page.locator(".mobile-panel-tabs")
+        self.assertTrue(mobile_tabs.is_visible())
+
+        # 3D Canvas should be visible and at top of layout
+        canvas = self.page.locator("#webgl-canvas")
+        self.assertTrue(canvas.is_visible())
+        canvas_box = canvas.bounding_box()
+        self.assertLess(canvas_box["y"], 220, "3D viewport must sit at the top of the mobile layout under header")
+
+        # Initial mobile state: Guide is visible, Controls hidden
+        self.assertTrue(self.page.locator("#learning-panel").is_visible())
+        self.assertFalse(self.page.locator("#sidebar-container").is_visible())
+
+        # Switch to Controls
+        self.page.click("#mobile-tab-controls")
+        self.page.wait_for_timeout(100)
+        self.assertFalse(self.page.locator("#learning-panel").is_visible())
+        self.assertTrue(self.page.locator("#sidebar-container").is_visible())
+
+        # Switch back to Guide
+        self.page.click("#mobile-tab-guide")
+        self.page.wait_for_timeout(100)
+        self.assertTrue(self.page.locator("#learning-panel").is_visible())
+        self.assertFalse(self.page.locator("#sidebar-container").is_visible())
+
+        # Restore desktop viewport
+        self.page.set_viewport_size({"width": 1280, "height": 800})
+        self.page.wait_for_timeout(50)
+        self.assertEqual(len(self.page_errors), 0, f"Mobile tabs threw errors: {self.page_errors}")
+
+    def test_v0_2_r1_m1_rendered_math_and_clickable_citations(self):
+        """V0.2-R1-M1 regression: deeper layer renders clean semantic math without raw TeX delimiters and provides clickable links."""
+        # Open Chapter 2 (contains field formulas and citations)
+        self.page.click(".chapter-step-btn[data-index='1']")
+        self.page.wait_for_timeout(100)
+
+        guide_body = self.page.locator("#guide-body")
+        deeper = guide_body.locator(".iceberg-deeper")
+        deeper.locator("summary").evaluate("el => el.click()")
+        self.page.wait_for_timeout(50)
+
+        deeper_html = deeper.inner_html()
+        # Assert no raw TeX delimiters
+        self.assertNotIn(r"\(", deeper_html, "Raw LaTeX '\\(' found in rendered deeper HTML")
+        self.assertNotIn(r"\)", deeper_html, "Raw LaTeX '\\)' found in rendered deeper HTML")
+
+        # Assert clickable citation hyperlinks
+        citations_links = deeper.locator(".iceberg-content p:has-text('Primary Citations') a")
+        link_count = citations_links.count()
+        self.assertGreater(link_count, 0, "Deeper citations must contain clickable hyperlinks")
+        for i in range(link_count):
+            href = citations_links.nth(i).get_attribute("href")
+            self.assertTrue(href.startswith("https://") or href.startswith("http://"), f"Invalid citation href: {href}")
+            self.assertEqual(citations_links.nth(i).get_attribute("target"), "_blank")
+
+        self.assertEqual(len(self.page_errors), 0, f"Rendered math & links threw errors: {self.page_errors}")
+
+    def test_v0_2_r1_m3_mobile_deep_scrolling_and_ledger_navigation(self):
+        """V0.2-R1-M3 & V0.2-R2-M3: mobile layout has reachable scrollable footer and bidirectional ledger navigation."""
+        for vp in [{"width": 375, "height": 667}, {"width": 390, "height": 844}]:
+            self.page.set_viewport_size(vp)
+            self.page.wait_for_timeout(100)
+
+            # Navigate to Chapter 4 (Can the Whole Device Move?)
+            self.page.click(".chapter-step-btn[data-index='3']")
+            self.page.wait_for_timeout(100)
+
+            # Open Action-Reaction Force Ledger from inside chapter content
+            open_ledger_btn = self.page.locator("#guide-body #btn-chapter4-open-ledger")
+            self.assertTrue(open_ledger_btn.is_visible(), "Chapter 4 open ledger button must be visible on mobile")
+            open_ledger_btn.click()
+            self.page.wait_for_timeout(150)
+
+            # Assert sidebar container and force ledger card are visible
+            sidebar = self.page.locator("#sidebar-container")
+            self.assertTrue(sidebar.is_visible(), "Sidebar container must be visible after clicking open ledger button")
+            ledger_card = self.page.locator("#force-ledger-card")
+            self.assertTrue(ledger_card.is_visible(), "Force ledger card must be visible")
+
+            # Click return to guide button
+            back_btn = self.page.locator("#btn-ledger-back-to-guide")
+            self.assertTrue(back_btn.is_visible(), "Return to guide button must be visible in ledger on mobile")
+            back_btn.click()
+            self.page.wait_for_timeout(150)
+
+            # Assert learning panel is visible again
+            learning_panel = self.page.locator("#learning-panel")
+            self.assertTrue(learning_panel.is_visible(), "Learning panel must be visible after returning from ledger")
+
+            # Expand deeper and research disclosures
+            deeper = learning_panel.locator(".iceberg-deeper")
+            deeper.locator("summary").evaluate("el => el.click()")
+            research = learning_panel.locator(".iceberg-research")
+            research.locator("summary").evaluate("el => el.click()")
+            self.page.wait_for_timeout(50)
+
+            # V0.2-R2-M3: Explicitly scroll to .guide-footer and assert bounding-box visibility postcondition
+            footer = self.page.locator(".guide-footer")
+            footer.scroll_into_view_if_needed()
+            self.page.wait_for_timeout(100)
+            self.assertTrue(footer.is_visible(), f"Guide footer must be visible on mobile viewport {vp}")
+            box = footer.bounding_box()
+            self.assertIsNotNone(box, "Guide footer bounding box must exist")
+            self.assertGreater(box["y"] + box["height"], 0, "Guide footer must be vertically on screen")
+            self.assertLess(box["y"], vp["height"], "Guide footer top must be inside mobile viewport height")
+
+            # Verify footer buttons are visible and functional
+            next_btn = self.page.locator("#guide-btn-next")
+            reset_btn = self.page.locator("#guide-btn-reset")
+            self.assertTrue(next_btn.is_visible(), "Next button must be visible in scrolled footer")
+            self.assertTrue(reset_btn.is_visible(), "Reset button must be visible in scrolled footer")
+
+            next_btn.click()
+            self.page.wait_for_timeout(100)
+            self.assertIn("5. What Are Scalar Waves?", self.page.locator("#guide-chapter-title").inner_text())
+
+        # Restore desktop viewport
+        self.page.set_viewport_size({"width": 1280, "height": 800})
+        self.page.wait_for_timeout(50)
+        self.assertEqual(len(self.page_errors), 0, f"Mobile scrolling and ledger navigation threw errors: {self.page_errors}")
+
+    def test_v0_2_r1_m4_chapter5_scalar_wave_contrast_toggle_and_badge(self):
+        """V0.2-R1-M4, V0.2-R2-M2, & V0.2-R4-M2: Chapter 5 mutually exclusive 3D mathematical scalar-wave contrast view."""
+        # Navigate to Chapter 5
+        self.page.click(".chapter-step-btn[data-index='4']")
+        self.page.wait_for_timeout(100)
+        self.assertIn("What Are Scalar Waves?", self.page.locator("#guide-chapter-title").inner_text())
+
+        # Toggle button should be visible with initial switch-to label
+        toggle_btn = self.page.locator("#guide-body #btn-toggle-wave-contrast")
+        self.assertTrue(toggle_btn.is_visible(), "Chapter 5 wave contrast button must be visible")
+        self.assertIn("Switch to Mathematical Scalar Wave Toy View", toggle_btn.inner_text())
+
+        # Initial state: vector field streamlines visible, toy wave hidden, geometry visible
+        field_vis_before = self.page.evaluate("window.__explorer.fieldGroup.visible")
+        self.assertTrue(field_vis_before, "Vector field lines must be initially visible in Chapter 5")
+        geom_vis_before = self.page.evaluate("window.__explorer.geometryGroup.visible")
+        self.assertTrue(geom_vis_before, "Capacitor geometry must be initially visible in Chapter 5")
+        wave_vis_before = self.page.evaluate("window.__explorer.scalarWaveGroup.visible")
+        self.assertFalse(wave_vis_before, "Scalar wave group must be initially hidden in Chapter 5")
+
+        badge = self.page.locator("#scalar-wave-badge")
+        self.assertTrue("hidden" in (badge.get_attribute("class") or ""), "Badge must be initially hidden")
+
+        # Click to toggle on mutually exclusive scalar wave toy view
+        toggle_btn.click()
+        self.page.wait_for_timeout(100)
+        self.assertFalse("hidden" in (badge.get_attribute("class") or ""), "Badge must be displayed")
+        badge_text = badge.inner_text()
+        self.assertIn("MATHEMATICAL SCALAR WAVE VIEW (ABSTRACT TOY MODEL)", badge_text)
+        self.assertIn("Vector streamlines hidden", badge_text)
+        self.assertIn("NOT emitted by or coupled to capacitor apparatus", badge_text)
+        self.assertIn("Switch Back to Electrostatic Vector Field", toggle_btn.inner_text())
+
+        # Mutually exclusive and isolated scene verification: field lines and capacitor HIDDEN, toy wave VISIBLE
+        field_vis_active = self.page.evaluate("window.__explorer.fieldGroup.visible")
+        self.assertFalse(field_vis_active, "Vector field streamlines must be hidden when scalar wave toy view is active")
+        geom_vis_active = self.page.evaluate("window.__explorer.geometryGroup.visible")
+        self.assertFalse(geom_vis_active, "Capacitor geometry mesh must be hidden/isolated when scalar wave toy view is active")
+        wave_vis_active = self.page.evaluate("window.__explorer.scalarWaveGroup.visible")
+        self.assertTrue(wave_vis_active, "3D scalar wave group must be visible when contrast is toggled on")
+
+        # Click again to switch back
+        toggle_btn.click()
+        self.page.wait_for_timeout(100)
+        self.assertTrue("hidden" in (badge.get_attribute("class") or ""), "Badge must be hidden when switched back")
+        self.assertIn("Switch to Mathematical Scalar Wave Toy View", toggle_btn.inner_text())
+
+        # Restoration verification: field lines RESTORED, geometry RESTORED, toy wave HIDDEN
+        field_vis_restored = self.page.evaluate("window.__explorer.fieldGroup.visible")
+        self.assertTrue(field_vis_restored, "Vector field streamlines must be restored when switched back")
+        geom_vis_restored = self.page.evaluate("window.__explorer.geometryGroup.visible")
+        self.assertTrue(geom_vis_restored, "Capacitor geometry must be restored when switched back")
+        wave_vis_restored = self.page.evaluate("window.__explorer.scalarWaveGroup.visible")
+        self.assertFalse(wave_vis_restored, "3D scalar wave group must be hidden when contrast is toggled off")
+
+        self.assertEqual(len(self.page_errors), 0, f"Chapter 5 wave contrast threw errors: {self.page_errors}")
+
+    def test_v0_2_r4_f1_layer_state_preservation_and_chapter_synchronization(self):
+        """V0.2-R4-F1: Layer state preservation across wave contrast toggle, chapter transitions, and user overrides."""
+        # 1. Navigate to Chapter 5
+        self.page.click(".chapter-step-btn[data-index='4']")
+        self.page.wait_for_timeout(100)
+        self.assertIn("What Are Scalar Waves?", self.page.locator("#guide-chapter-title").inner_text())
+
+        # Sub-check (a): user-disabled field surviving wave on/off
+        chk_fields = self.page.locator("#toggle-fields")
+        self.assertTrue(chk_fields.is_checked(), "toggle-fields should initially be checked in Chapter 5")
+        self.assertTrue(self.page.evaluate("window.__explorer.fieldGroup.visible"), "fieldGroup should be visible")
+
+        # User unchecks toggle-fields
+        chk_fields.uncheck()
+        self.assertFalse(chk_fields.is_checked(), "toggle-fields should now be unchecked")
+        self.assertFalse(self.page.evaluate("window.__explorer.fieldGroup.visible"), "fieldGroup must be hidden when unchecked")
+
+        # Toggle wave mode ON
+        toggle_btn = self.page.locator("#guide-body #btn-toggle-wave-contrast")
+        toggle_btn.click()
+        self.page.wait_for_timeout(100)
+        self.assertTrue(self.page.evaluate("window.__explorer.scalarWaveGroup.visible"), "scalarWaveGroup must be visible")
+        self.assertFalse(self.page.evaluate("window.__explorer.geometryGroup.visible"), "geometryGroup must be hidden in wave mode")
+        self.assertFalse(self.page.evaluate("window.__explorer.fieldGroup.visible"), "fieldGroup must remain hidden")
+        self.assertFalse(chk_fields.is_checked(), "toggle-fields preference must remain unchecked")
+
+        # Toggle wave mode OFF: user preference (unchecked) must survive!
+        toggle_btn.click()
+        self.page.wait_for_timeout(100)
+        self.assertFalse(self.page.evaluate("window.__explorer.scalarWaveGroup.visible"), "scalarWaveGroup must be hidden")
+        self.assertTrue(self.page.evaluate("window.__explorer.geometryGroup.visible"), "geometryGroup must be restored")
+        self.assertFalse(chk_fields.is_checked(), "toggle-fields must remain unchecked")
+        self.assertFalse(self.page.evaluate("window.__explorer.fieldGroup.visible"), "fieldGroup must remain false because user unchecked it")
+
+        # Re-enable field for subsequent checks
+        chk_fields.check()
+        self.assertTrue(self.page.evaluate("window.__explorer.fieldGroup.visible"), "fieldGroup should be visible when rechecked")
+
+        # Sub-check (c): voltage/layer changes during toy mode (V0.2-R5 / R4-F1 & R4-M1)
+        toggle_btn.click()
+        self.page.wait_for_timeout(100)
+        self.assertTrue(self.page.evaluate("window.__explorer.scalarWaveGroup.visible"), "scalarWaveGroup visible")
+        self.assertFalse(self.page.evaluate("window.__explorer.fieldGroup.visible"), "fieldGroup hidden")
+        self.assertFalse(self.page.evaluate("window.__explorer.geometryGroup.visible"), "geometryGroup hidden")
+
+        # Change voltage and gap sliders while toy mode is active
+        slider = self.page.locator("#slider-voltage")
+        slider.fill("35")
+        slider.dispatch_event("input")
+        slider_gap = self.page.locator("#slider-gap")
+        slider_gap.fill("30")
+        slider_gap.dispatch_event("input")
+        self.page.wait_for_timeout(100)
+
+        # Groups must remain hidden during toy mode even after slider events
+        self.assertFalse(self.page.evaluate("window.__explorer.fieldGroup.visible"), "fieldGroup must NOT reappear on voltage change during toy mode")
+        self.assertFalse(self.page.evaluate("window.__explorer.forceGroup.visible"), "forceGroup must NOT reappear on voltage change during toy mode")
+        self.assertFalse(self.page.evaluate("window.__explorer.geometryGroup.visible"), "geometryGroup must NOT reappear during toy mode")
+        self.assertTrue(self.page.evaluate("window.__explorer.scalarWaveGroup.visible"), "scalarWaveGroup remains visible")
+
+        # V0.2-R5 / R4-M1: Execute real unchecked -> checked and checked -> unchecked transitions during toy mode
+        chk_geom = self.page.locator("#toggle-geometry")
+        chk_forces = self.page.locator("#toggle-forces")
+
+        # 1. Uncheck then check toggle-fields
+        chk_fields.uncheck()
+        self.assertFalse(chk_fields.is_checked(), "toggle-fields must be unchecked after uncheck()")
+        self.assertFalse(self.page.evaluate("window.__explorer.fieldGroup.visible"), "fieldGroup must remain false in toy mode")
+        chk_fields.check()
+        self.assertTrue(chk_fields.is_checked(), "toggle-fields must be checked after check()")
+        self.assertFalse(self.page.evaluate("window.__explorer.fieldGroup.visible"), "fieldGroup must still be hidden during toy mode despite checkbox=true")
+
+        # 2. Uncheck then check toggle-geometry
+        chk_geom.uncheck()
+        self.assertFalse(chk_geom.is_checked(), "toggle-geometry must be unchecked after uncheck()")
+        self.assertFalse(self.page.evaluate("window.__explorer.geometryGroup.visible"), "geometryGroup must remain false in toy mode")
+        chk_geom.check()
+        self.assertTrue(chk_geom.is_checked(), "toggle-geometry must be checked after check()")
+        self.assertFalse(self.page.evaluate("window.__explorer.geometryGroup.visible"), "geometryGroup must still be hidden during toy mode despite checkbox=true")
+
+        # 3. Uncheck then check toggle-forces
+        chk_forces.uncheck()
+        self.assertFalse(chk_forces.is_checked(), "toggle-forces must be unchecked after uncheck()")
+        self.assertFalse(self.page.evaluate("window.__explorer.forceGroup.visible"), "forceGroup must remain false in toy mode")
+        chk_forces.check()
+        self.assertTrue(chk_forces.is_checked(), "toggle-forces must be checked after check()")
+        self.assertFalse(self.page.evaluate("window.__explorer.forceGroup.visible"), "forceGroup must still be hidden during toy mode despite checkbox=true")
+
+        # V0.2-R5 / R4-F1: Deactivate toy mode; verify objects are restored with nonzero child counts
+        toggle_btn.click()
+        self.page.wait_for_timeout(100)
+        self.assertFalse(self.page.evaluate("window.__explorer.scalarWaveGroup.visible"), "scalarWaveGroup must be hidden after toggle off")
+        self.assertTrue(self.page.evaluate("window.__explorer.geometryGroup.visible"), "geometryGroup must be restored")
+        self.assertTrue(self.page.evaluate("window.__explorer.fieldGroup.visible"), "fieldGroup must be visible")
+        self.assertTrue(self.page.evaluate("window.__explorer.forceGroup.visible"), "forceGroup must be visible")
+
+        field_child_count = self.page.evaluate("window.__explorer.fieldGroup.children.length")
+        self.assertGreater(field_child_count, 0, f"fieldGroup must have rebuilt/restored streamline children at 35 kV, got {field_child_count}")
+        force_child_count = self.page.evaluate("window.__explorer.forceGroup.children.length")
+        self.assertGreater(force_child_count, 0, f"forceGroup must have rebuilt/restored force vector children at 35 kV, got {force_child_count}")
+
+        # V0.2-R5 / R4-F1: Test zero voltage behavior
+        slider.fill("0")
+        slider.dispatch_event("input")
+        self.page.wait_for_timeout(100)
+        self.assertFalse(self.page.evaluate("window.__explorer.fieldGroup.visible"), "fieldGroup must be hidden at 0 kV")
+        self.assertFalse(self.page.evaluate("window.__explorer.forceGroup.visible"), "forceGroup must be hidden at 0 kV")
+        self.assertEqual(self.page.evaluate("window.__explorer.fieldGroup.children.length"), 0, "fieldGroup children must be 0 at 0 kV")
+        self.assertEqual(self.page.evaluate("window.__explorer.forceGroup.children.length"), 0, "forceGroup children must be 0 at 0 kV")
+
+        # Toggle wave mode at 0 kV and toggle back; verify child count remains 0
+        toggle_btn.click()
+        self.page.wait_for_timeout(100)
+        self.assertTrue(self.page.evaluate("window.__explorer.scalarWaveGroup.visible"))
+        toggle_btn.click()
+        self.page.wait_for_timeout(100)
+        self.assertFalse(self.page.evaluate("window.__explorer.scalarWaveGroup.visible"))
+        self.assertEqual(self.page.evaluate("window.__explorer.fieldGroup.children.length"), 0, "fieldGroup children must remain 0 at 0 kV after toggle")
+        self.assertEqual(self.page.evaluate("window.__explorer.forceGroup.children.length"), 0, "forceGroup children must remain 0 at 0 kV after toggle")
+
+        # Restore voltage to 20 kV for subsequent navigation checks
+        slider.fill("20")
+        slider.dispatch_event("input")
+        self.page.wait_for_timeout(100)
+        self.assertGreater(self.page.evaluate("window.__explorer.fieldGroup.children.length"), 0)
+        self.assertGreater(self.page.evaluate("window.__explorer.forceGroup.children.length"), 0)
+
+        # WebGL Canvas visual postcondition check
+        is_webgl_ok = self.page.evaluate("""() => {
+            const canvas = document.getElementById('webgl-canvas');
+            if (!canvas) return false;
+            const gl = canvas.getContext('webgl2') || canvas.getContext('webgl');
+            return !!gl && !gl.isContextLost();
+        }""")
+        self.assertTrue(is_webgl_ok, "WebGL canvas context must be valid and not lost")
+
+        # Sub-check (b): leaving Chapter 5 for Chapter 6 while toy mode active (V0.2-R6 / R5-M1 fix)
+        toggle_btn.click()
+        self.page.wait_for_timeout(100)
+        self.assertTrue(self.page.evaluate("window.__explorer.isScalarWaveContrastActive()"), "wave mode must be active immediately before Next")
+        self.assertTrue(self.page.evaluate("window.__explorer.scalarWaveGroup.visible"), "scalarWaveGroup must be visible before Next")
+        self.assertFalse(self.page.evaluate("window.__explorer.geometryGroup.visible"), "geometryGroup must be hidden before Next")
+        self.assertFalse(self.page.evaluate("window.__explorer.fieldGroup.visible"), "fieldGroup must be hidden before Next")
+
+        self.page.click("#guide-btn-next")
+        self.page.wait_for_timeout(100)
+        self.assertIn("How Could We Test the Hypothesis?", self.page.locator("#guide-chapter-title").inner_text())
+
+        # Chapter 6 layers: field is FALSE, geometry is TRUE, wave mode reset
+        self.assertFalse(self.page.evaluate("window.__explorer.isScalarWaveContrastActive()"), "isScalarWaveContrastActive must auto-reset when leaving Chapter 5")
+        self.assertFalse(chk_fields.is_checked(), "toggle-fields must be false in Chapter 6")
+        self.assertFalse(self.page.evaluate("window.__explorer.fieldGroup.visible"), "fieldGroup must be false in Chapter 6")
+        self.assertFalse(self.page.evaluate("window.__explorer.scalarWaveGroup.visible"), "scalarWaveGroup must be auto-reset to false when leaving Chapter 5")
+        self.assertTrue(self.page.evaluate("window.__explorer.geometryGroup.visible"), "geometryGroup must be true in Chapter 6")
+
+        # Sub-check (d): return navigation to Chapter 5
+        self.page.click("#guide-btn-prev")
+        self.page.wait_for_timeout(100)
+        self.assertIn("What Are Scalar Waves?", self.page.locator("#guide-chapter-title").inner_text())
+        self.assertTrue(chk_fields.is_checked(), "toggle-fields must be restored to true in Chapter 5")
+        self.assertTrue(self.page.evaluate("window.__explorer.fieldGroup.visible"), "fieldGroup must be visible in Chapter 5")
+        self.assertTrue(self.page.evaluate("window.__explorer.geometryGroup.visible"), "geometryGroup must be visible in Chapter 5")
+        self.assertFalse(self.page.evaluate("window.__explorer.scalarWaveGroup.visible"), "scalarWaveGroup must remain false upon return until explicitly clicked")
+
+        # Sub-check (e) (V0.2-R6 / R5-M1): Chapter 5 -> wave on -> Explore Freely -> physical sandbox -> Return to Chapter 5
+        toggle_btn = self.page.locator("#guide-body #btn-toggle-wave-contrast")
+        toggle_btn.click()
+        self.page.wait_for_timeout(100)
+        self.assertTrue(self.page.evaluate("window.__explorer.isScalarWaveContrastActive()"), "wave mode must be active before Explore Freely")
+        self.assertTrue(self.page.evaluate("window.__explorer.scalarWaveGroup.visible"), "scalarWaveGroup visible before Explore Freely")
+        self.assertFalse(self.page.evaluate("window.__explorer.geometryGroup.visible"), "geometryGroup hidden in wave mode")
+        self.assertIn("Switch Back to Electrostatic Vector Field", toggle_btn.inner_text())
+
+        self.page.click("#guide-btn-free")
+        self.page.wait_for_timeout(100)
+        self.assertFalse(self.page.evaluate("window.__explorer.isScalarWaveContrastActive()"), "Explore Freely must exit abstract wave mode")
+        self.assertFalse(self.page.evaluate("window.__explorer.scalarWaveGroup.visible"), "scalarWaveGroup must be hidden in Explore Freely")
+        self.assertTrue(self.page.locator("#scalar-wave-badge").evaluate("el => el.classList.contains('hidden')"), "scalar-wave-badge must be hidden in Explore Freely")
+        self.assertTrue(self.page.evaluate("window.__explorer.geometryGroup.visible"), "geometryGroup must be restored on entering Explore Freely")
+        self.assertTrue(self.page.evaluate("window.__explorer.fieldGroup.visible"), "fieldGroup must be restored on entering Explore Freely")
+        self.assertGreater(self.page.evaluate("window.__explorer.fieldGroup.children.length"), 0, "fieldGroup must have children in Explore Freely")
+
+        # Drive physical sandbox voltage slider in Free Exploration
+        slider.fill("30")
+        slider.dispatch_event("input")
+        self.page.wait_for_timeout(100)
+        self.assertTrue(self.page.evaluate("window.__explorer.geometryGroup.visible"), "geometryGroup stays visible during sandbox slider edit")
+        self.assertTrue(self.page.evaluate("window.__explorer.fieldGroup.visible"), "fieldGroup stays visible during sandbox slider edit")
+        self.assertGreater(self.page.evaluate("window.__explorer.fieldGroup.children.length"), 0, "fieldGroup children updated in Free Exploration")
+
+        # Return to Chapter 5 from Explore Freely
+        self.page.click("#btn-resume-guide")
+        self.page.wait_for_timeout(100)
+        self.assertIn("What Are Scalar Waves?", self.page.locator("#guide-chapter-title").inner_text())
+        self.assertFalse(self.page.evaluate("window.__explorer.isScalarWaveContrastActive()"), "wave mode remains off when returning from Explore Freely")
+        self.assertTrue(self.page.evaluate("window.__explorer.geometryGroup.visible"), "geometryGroup visible upon returning to Chapter 5")
+        self.assertTrue(self.page.evaluate("window.__explorer.fieldGroup.visible"), "fieldGroup visible upon returning to Chapter 5")
+        self.assertGreater(self.page.evaluate("window.__explorer.fieldGroup.children.length"), 0, "fieldGroup children populated upon returning to Chapter 5")
+        toggle_btn = self.page.locator("#guide-body #btn-toggle-wave-contrast")
+        self.assertIn("Switch to Mathematical Scalar Wave Toy View", toggle_btn.inner_text())
+
+        # Sub-check (f) (V0.2-R6 / R5-M1): Re-selecting Chapter 5 while wave mode is active synchronizes button label & state
+        toggle_btn.click()
+        self.page.wait_for_timeout(100)
+        self.assertTrue(self.page.evaluate("window.__explorer.isScalarWaveContrastActive()"), "wave mode must be active before re-selecting Chapter 5")
+        self.page.click(".chapter-step-btn[data-index='4']")
+        self.page.wait_for_timeout(100)
+        self.assertTrue(self.page.evaluate("window.__explorer.isScalarWaveContrastActive()"), "wave mode remains active when re-selecting Chapter 5")
+        self.assertTrue(self.page.evaluate("window.__explorer.scalarWaveGroup.visible"), "scalarWaveGroup remains visible when re-selecting Chapter 5")
+        self.assertFalse(self.page.evaluate("window.__explorer.geometryGroup.visible"), "geometryGroup remains hidden when re-selecting Chapter 5")
+        self.assertFalse(self.page.locator("#scalar-wave-badge").evaluate("el => el.classList.contains('hidden')"), "scalar-wave-badge remains visible when re-selecting Chapter 5")
+        recreated_toggle_btn = self.page.locator("#guide-body #btn-toggle-wave-contrast")
+        self.assertIn("Switch Back to Electrostatic Vector Field", recreated_toggle_btn.inner_text())
+        self.assertEqual(recreated_toggle_btn.get_attribute("aria-pressed"), "true")
+
+        # Clicking synchronized recreated button returns cleanly to physical electrostatic view
+        recreated_toggle_btn.click()
+        self.page.wait_for_timeout(100)
+        self.assertFalse(self.page.evaluate("window.__explorer.isScalarWaveContrastActive()"))
+        self.assertTrue(self.page.evaluate("window.__explorer.geometryGroup.visible"))
+        self.assertTrue(self.page.evaluate("window.__explorer.fieldGroup.visible"))
+        self.assertGreater(self.page.evaluate("window.__explorer.fieldGroup.children.length"), 0)
+        self.assertIn("Switch to Mathematical Scalar Wave Toy View", recreated_toggle_btn.inner_text())
+        self.assertEqual(recreated_toggle_btn.get_attribute("aria-pressed"), "false")
+
+        self.assertEqual(len(self.page_errors), 0, f"Layer state test encountered page errors: {self.page_errors}")
 
 
 if __name__ == "__main__":

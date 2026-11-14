@@ -78,6 +78,34 @@ class PropulsionExplorerProvenanceSchemaTests(unittest.TestCase):
         self.assertEqual(meta["evidence_grade"], "PROVISIONAL_ILLUSTRATIVE_SCENE")
         self.assertIn("US11511891B2", meta["citation"])
 
+    def test_six_chapters_iceberg_structure(self):
+        """V0.2 regression: verify six_chapters exists with 6 Iceberg chapters."""
+        self.assertIn("six_chapters", self.data)
+        chapters = self.data["six_chapters"]
+        self.assertEqual(len(chapters), 6)
+        expected_titles = [
+            "Meet the Device",
+            "Turn on the Electricity",
+            "Follow the Forces",
+            "Can the Whole Device Move?",
+            "Scalar Waves",
+            "How Could We Test",
+        ]
+        for i, ch in enumerate(chapters):
+            self.assertEqual(ch["chapter"], i + 1)
+            self.assertIn(expected_titles[i], ch["title"])
+            self.assertTrue(len(ch["surface"]) > 10)
+            self.assertTrue(len(ch["shallow"]) > 10)
+            self.assertIn("equations", ch["deeper"])
+            self.assertIn("specifications", ch["deeper"])
+            self.assertIn("citations", ch["deeper"])
+            self.assertIn("hypotheses", ch["research"])
+            self.assertIn("uncertainties", ch["research"])
+            self.assertIn("controls", ch["research"])
+            self.assertIn("annotation", ch)
+            self.assertIn("camera", ch)
+            self.assertIn("layers", ch)
+
     def test_no_invented_newton_forces_in_components(self):
         """V0-R1-F1 regression: ensure no invented numeric force quantities appear in data."""
         components = self.data["components"]
@@ -203,7 +231,7 @@ class PropulsionExplorerHTMLStructureTests(unittest.TestCase):
     def test_html_landmarks_and_metadata(self):
         self.assertIn("<!DOCTYPE html>", self.html)
         self.assertIn('<meta name="viewport"', self.html)
-        self.assertIn("Propulsion Explorer 3D (V0)", self.html)
+        self.assertIn("Propulsion Explorer 3D", self.html)
         self.assertIn('role="banner"', self.html)
         self.assertIn('role="main"', self.html)
         self.assertIn('role="complementary"', self.html)
@@ -248,10 +276,13 @@ class PropulsionExplorerHTMLStructureTests(unittest.TestCase):
         self.assertNotIn(r"\frac", self.html)
         self.assertNotIn(r"\nabla", self.html)
 
-    def test_modal_focus_trap_attributes(self):
-        """V0-R1-M4 regression: modal content has tabindex='-1' for focus capture."""
-        self.assertIn('class="tour-modal-content" tabindex="-1"', self.html)
-        self.assertIn('class="tour-modal-content help-content" tabindex="-1"', self.html)
+    def test_v0_2_learning_panel_and_help_modal_attributes(self):
+        """V0.2 regression: nonblocking learning panel and help modal focus capture."""
+        self.assertIn('id="learning-panel"', self.html)
+        self.assertIn('id="guide-body" tabindex="0"', self.html)
+        self.assertIn('class="help-modal-content" tabindex="-1"', self.html)
+        self.assertIn('id="scene-annotation-card"', self.html)
+        self.assertIn('class="mobile-panel-tabs"', self.html)
 
 
 class PropulsionExplorerJSLogicTests(unittest.TestCase):
@@ -267,6 +298,9 @@ class PropulsionExplorerJSLogicTests(unittest.TestCase):
         css_path = EXPLORER_DIR / "explorer.css"
         with open(css_path, "r", encoding="utf-8") as f:
             self.css = f.read()
+        prov_path = EXPLORER_DIR / "provenance_data.json"
+        with open(prov_path, "r", encoding="utf-8") as f:
+            self.provenance = json.load(f)
 
     def test_no_invalid_orbit_controls_method_calls(self):
         """V0-R1-F3 regression: verify nonexistent rotateLeft/rotateUp/dollyIn are NOT called."""
@@ -478,6 +512,478 @@ class PropulsionExplorerJSLogicTests(unittest.TestCase):
         self.assertGreaterEqual(data["count"], 2, "High-priority pins must survive")
         self.assertIn("blade_electrode", data["surviving"], "Highest priority blade pin must survive")
         self.assertNotIn("support_mount", data["surviving"], "Lowest priority mount pin must be suppressed in shortfall")
+
+    def test_v0_2_iceberg_progressive_disclosure_templates_in_js(self):
+        """V0.2 regression: verify Iceberg progressive disclosure template rendering in explorer.js."""
+        self.assertIn("iceberg-disclosure iceberg-deeper", self.js)
+        self.assertIn("iceberg-disclosure iceberg-research", self.js)
+        self.assertIn("iceberg-card iceberg-surface", self.js)
+        self.assertIn("iceberg-card iceberg-shallow", self.js)
+        self.assertIn("function renderChapter", self.js)
+        self.assertIn("function toggleExploreFreely", self.js)
+        self.assertIn("function toggleAnimationPause", self.js)
+        self.assertIn("function resetTour", self.js)
+        self.assertIn("function toggleLearningPanel", self.js)
+        self.assertIn("function toggleSidebar", self.js)
+
+    def test_v0_2_keyboard_shortcuts_and_controls_in_js(self):
+        """V0.2 regression: verify keyboard shortcuts for guide, sidebar, chapters, and pause."""
+        self.assertIn("case 'g':", self.js)
+        self.assertIn("case 's':", self.js)
+        self.assertIn("case '[':", self.js)
+        self.assertIn("case ']':", self.js)
+        self.assertIn("case ' ':", self.js)
+
+    @staticmethod
+    def _validate_contextual_evidence_policy(chapters, raw_text=""):
+        """V0.2-R4 (R3-M1): Contextual evidence policy validation.
+        Enforces strict contextual binding of numeric force tokens:
+        - Chapters 1–5: ZERO physical force values allowed (no N, mN, μN, mg).
+        - Chapter 6:
+          * 5 mN: ONLY in deeper.equations, bound to ion wind calculation with declared inputs (d=20mm, 50uA, mobility).
+          * < 0.1 μN / 0.1 &mu;N: ONLY in deeper.specifications, bound to balance resolution target (< 0.1 μN).
+          * ±0.3 mg ≈ ±3 μN: ONLY in research.hypotheses, bound to Tajmar null measurement citation.
+          * All other Chapter 6 fields: ZERO physical force values allowed.
+        - Arbitrary DUT thrust / net force claims: Strictly forbidden across all surfaces.
+        - Historical forbidden strings: Strictly forbidden.
+        """
+        import re
+
+        force_pattern = re.compile(
+            r'((?:[+\-]|±|&plusmn;)?\s*\d+(?:\.\d+)?\s*(?:(?:±|&plusmn;)\s*\d+(?:\.\d+)?)?\s*(?:mN|μN|uN|µN|pN|&mu;N|\bN\b|mg))'
+        )
+
+        forbidden_claims = [
+            "+0.045 N", "-0.038 N", "-0.005 N", "-0.002 N",
+            "0.000 N identically", "0.00 ± 0.05", "0.00 \\pm 0.05", "F = 0.00"
+        ]
+        for pat in forbidden_claims:
+            if pat in raw_text:
+                raise AssertionError(f"Historical forbidden string '{pat}' found in text.")
+
+        dut_force_regex = re.compile(
+            r'(?:DUT|whole[- ]device|device thrust|net DUT|Boundary A|capacitor measured|propulsion force|measured force|measured thrust|thrust observed|observed thrust)[^.\n;]{0,80}?'
+            r'((?:[+\-]|±|&plusmn;|<|>)?\s*\d+(?:\.\d+)?\s*(?:(?:±|&plusmn;)\s*\d+(?:\.\d+)?)?\s*(?:mN|μN|uN|µN|pN|&mu;N|\bN\b|mg))',
+            re.IGNORECASE
+        )
+        dut_matches = dut_force_regex.findall(raw_text)
+        if dut_matches:
+            raise AssertionError(f"Forbidden DUT force/thrust claim detected: {dut_matches}")
+
+        explicit_thrust_regex = re.compile(
+            r'(?:thrust|net force|propulsion force|measured force|measured thrust)\s*[:=]\s*(?:[+\-]|±|&plusmn;|<|>)?\s*\d+(?:\.\d+)?\s*(?:mN|μN|uN|µN|pN|&mu;N|\bN\b|mg)',
+            re.IGNORECASE
+        )
+        explicit_matches = explicit_thrust_regex.findall(raw_text)
+        if explicit_matches:
+            raise AssertionError(f"Forbidden explicit thrust/force claim detected: {explicit_matches}")
+
+        def extract_sentence(text, start, end):
+            # Backward boundary: period not surrounded by digits, followed by whitespace, or newline, or HTML tag
+            s_start = 0
+            for match in re.finditer(r'(?:(?<!\d)\.(?!\d)\s+|\n+|\<br\s*/?\>|\<p\>|\</p\>)', text[:start]):
+                s_start = match.end()
+            s_end = len(text)
+            m_forward = re.search(r'(?:(?<!\d)\.(?!\d)(?:\s+|$)|[\n]|\<br\s*/?\>|\<p\>|\</p\>)', text[end:])
+            if m_forward:
+                s_end = end + m_forward.start()
+            return text[s_start:s_end].strip()
+
+        def iter_text_leaves(obj, prefix=""):
+            if isinstance(obj, str):
+                yield prefix, obj
+            elif isinstance(obj, dict):
+                for k, v in obj.items():
+                    next_path = f"{prefix}.{k}" if prefix else str(k)
+                    yield from iter_text_leaves(v, next_path)
+            elif isinstance(obj, (list, tuple)):
+                for idx, item in enumerate(obj):
+                    next_path = f"{prefix}[{idx}]"
+                    yield from iter_text_leaves(item, next_path)
+
+        for ch in chapters:
+            ch_num = ch.get("chapter")
+            if ch_num in [1, 2, 3, 4, 5]:
+                ch_str = json.dumps(ch, ensure_ascii=False)
+                matches = force_pattern.findall(ch_str)
+                if matches:
+                    raise AssertionError(
+                        f"Disallowed numeric force {matches} in Chapter {ch_num}. "
+                        f"Chapters 1–5 must contain zero physical force tokens."
+                    )
+            elif ch_num == 6:
+                deeper = ch.get("deeper", {})
+                research = ch.get("research", {})
+
+                # V0.2-R6 / R5-M2: Recursively validate every text leaf of Chapter 6.
+                # Only the three explicitly approved paths may contain physical-force tokens.
+                approved_paths = {
+                    "deeper.equations",
+                    "deeper.specifications",
+                    "research.hypotheses",
+                }
+                for leaf_path, leaf_text in iter_text_leaves(ch):
+                    if leaf_path in approved_paths:
+                        continue
+                    leaf_matches = force_pattern.findall(leaf_text)
+                    if leaf_matches:
+                        raise AssertionError(
+                            f"Disallowed force value in Chapter 6 path '{leaf_path}': {leaf_matches}"
+                        )
+
+                # V0.2-R5 / R4-M2: Sentence-local / passage-level structured binding for Chapter 6 equations
+                eq_text = deeper.get("equations", "")
+                eq_matches = list(force_pattern.finditer(eq_text))
+                if len(eq_matches) != 1:
+                    raise AssertionError(
+                        f"Chapter 6 equations must contain exactly 1 force token (the illustrative 5 mN aerodynamic calculation), "
+                        f"found {len(eq_matches)}: {[m.group(1) for m in eq_matches]}"
+                    )
+                for m in eq_matches:
+                    val = m.group(1)
+                    clean = re.sub(r'^(?:[+\-]|±|&plusmn;|<|>)\s*', '', val.strip())
+                    if clean not in ["5 mN", "5mN"]:
+                        raise AssertionError(f"Disallowed force '{val}' in Chapter 6 equations. Only 5 mN illustrative calculation permitted.")
+                    passage = extract_sentence(eq_text, m.start(), m.end())
+                    if not ("d = 20 mm" in passage or "0.02 m" in passage):
+                        raise AssertionError(f"Passage '{passage}' lacking gap input 'd = 20 mm'.")
+                    if not ("50 &mu;A" in passage or "50 μA" in passage):
+                        raise AssertionError(f"Passage '{passage}' lacking corona current '50 μA'.")
+                    if not ("mobility" in eq_text and ("spurious aerodynamic thrust" in passage or "aerodynamic thrust" in passage)):
+                        raise AssertionError(f"Passage '{passage}' lacking aerodynamic thrust qualification.")
+                    if re.search(r'\b(?:DUT|whole[- ]device|device thrust|net DUT|Boundary A|capacitor measured|propulsion force|measured force|measured thrust|thrust observed|observed thrust)\b', passage, re.IGNORECASE):
+                        raise AssertionError(f"Passage contains forbidden device propulsion claim: '{passage}'")
+
+                # V0.2-R5 / R4-M2: Sentence-local / passage-level structured binding for Chapter 6 specifications
+                spec_text = deeper.get("specifications", "")
+                spec_matches = list(force_pattern.finditer(spec_text))
+                if len(spec_matches) != 1:
+                    raise AssertionError(
+                        f"Chapter 6 specifications must contain exactly 1 force token (< 0.1 μN balance resolution target), "
+                        f"found {len(spec_matches)}: {[m.group(1) for m in spec_matches]}"
+                    )
+                for m in spec_matches:
+                    val = m.group(1)
+                    clean = re.sub(r'^(?:[+\-]|±|&plusmn;|<|>)\s*', '', val.strip())
+                    if clean not in ["0.1 &mu;N", "0.1 μN", "0.1&mu;N", "0.1μN"]:
+                        raise AssertionError(f"Disallowed force '{val}' in Chapter 6 specifications. Only < 0.1 μN resolution target permitted.")
+                    passage = extract_sentence(spec_text, m.start(), m.end())
+                    if "resolution" not in passage or "<" not in passage:
+                        raise AssertionError(f"Force '{val}' in passage '{passage}' must be strictly bound as a balance resolution target ('< 0.1').")
+                    if re.search(r'\b(?:DUT|whole[- ]device|device thrust|net DUT|Boundary A|capacitor measured|propulsion force|measured force|measured thrust|thrust observed|observed thrust)\b', passage, re.IGNORECASE):
+                        raise AssertionError(f"Passage contains forbidden device propulsion claim: '{passage}'")
+
+                # V0.2-R5 / R4-M2: Sentence-local / passage-level structured binding for Chapter 6 hypotheses
+                hyp_text = research.get("hypotheses", "")
+                hyp_matches = list(force_pattern.finditer(hyp_text))
+                if len(hyp_matches) != 2:
+                    raise AssertionError(
+                        f"Chapter 6 hypotheses must contain exactly 2 force tokens (Tajmar 2020 ±0.3 mg and ±3 μN limits), "
+                        f"found {len(hyp_matches)}: {[m.group(1) for m in hyp_matches]}"
+                    )
+                for m in hyp_matches:
+                    val = m.group(1)
+                    clean = re.sub(r'^(?:[+\-]|±|&plusmn;|<|>)\s*', '', val.strip())
+                    if clean not in ["0.3 mg", "0.3mg", "3 &mu;N", "3 μN", "3&mu;N", "3μN"]:
+                        raise AssertionError(f"Disallowed force '{val}' in Chapter 6 hypotheses. Only Tajmar 2020 citation values permitted.")
+                    passage = extract_sentence(hyp_text, m.start(), m.end())
+                    if "Tajmar" not in passage or "null" not in passage:
+                        raise AssertionError(f"Force '{val}' in passage '{passage}' must be bound to Tajmar null measurement citation.")
+                    if re.search(r'\b(?:DUT|whole[- ]device|device thrust|net DUT|Boundary A|capacitor measured|propulsion force|measured force|measured thrust|thrust observed|observed thrust)\b', passage, re.IGNORECASE):
+                        raise AssertionError(f"Passage contains forbidden device propulsion claim: '{passage}'")
+            else:
+                ch_str = json.dumps(ch, ensure_ascii=False)
+                matches = force_pattern.findall(ch_str)
+                if matches:
+                    raise AssertionError(f"Disallowed numeric force {matches} in unexpected Chapter {ch_num}.")
+
+    def test_v0_2_r2_m3_generalized_numeric_force_evidence_policy(self):
+        """V0.2-R2-M3 & V0.2-R4-M1: Contextual evidence policy check for numeric forces across JSON and JS fallback."""
+        import re
+
+        # 1. Validate JSON six_chapters and raw provenance text
+        self._validate_contextual_evidence_policy(
+            self.provenance.get("six_chapters", []),
+            raw_text=json.dumps(self.provenance, ensure_ascii=False)
+        )
+
+        # 2. Validate JS fallback six_chapters and full JS text
+        js_match = re.search(r'six_chapters:\s*\[(.*?)\]\s*,\s*four_questions', self.js, re.DOTALL)
+        self.assertIsNotNone(js_match, "Fallback six_chapters must be present in explorer.js")
+        js_chapters = json.loads("[" + js_match.group(1) + "]")
+        self._validate_contextual_evidence_policy(
+            js_chapters,
+            raw_text=self.js
+        )
+
+    def test_v0_2_r4_mutation_tests_reject_dut_force_claims(self):
+        """V0.2-R4-M1: Mutation tests verifying failure when DUT force claims are injected into JSON or fallback JS."""
+        import copy
+        import re
+
+        # Baseline: clean data passes
+        self._validate_contextual_evidence_policy(
+            self.provenance.get("six_chapters", []),
+            raw_text=json.dumps(self.provenance, ensure_ascii=False)
+        )
+
+        # Mutation 1: Inject '+5 mN' into Chapter 4 shallow text in JSON
+        m1 = copy.deepcopy(self.provenance)
+        ch4 = next(c for c in m1["six_chapters"] if c["chapter"] == 4)
+        ch4["shallow"] += " Measured whole-device thrust: +5 mN."
+        with self.assertRaises(AssertionError) as ctx:
+            self._validate_contextual_evidence_policy(m1["six_chapters"], raw_text=json.dumps(m1, ensure_ascii=False))
+        self.assertTrue("Disallowed numeric force" in str(ctx.exception) or "Forbidden DUT force" in str(ctx.exception))
+
+        # Mutation 2: Inject '±3 μN' into Chapter 4 shallow text in JSON
+        m2 = copy.deepcopy(self.provenance)
+        ch4 = next(c for c in m2["six_chapters"] if c["chapter"] == 4)
+        ch4["shallow"] += " DUT net force: ±3 μN."
+        with self.assertRaises(AssertionError) as ctx:
+            self._validate_contextual_evidence_policy(m2["six_chapters"], raw_text=json.dumps(m2, ensure_ascii=False))
+        self.assertTrue("Disallowed numeric force" in str(ctx.exception) or "Forbidden DUT force" in str(ctx.exception))
+
+        # Mutation 3: Inject '+5 mN' into Chapter 1 in JSON
+        m3 = copy.deepcopy(self.provenance)
+        ch1 = next(c for c in m3["six_chapters"] if c["chapter"] == 1)
+        ch1["surface"] += " Thrust observed: +5 mN."
+        with self.assertRaises(AssertionError) as ctx:
+            self._validate_contextual_evidence_policy(m3["six_chapters"], raw_text=json.dumps(m3, ensure_ascii=False))
+        self.assertTrue(
+            "Disallowed numeric force" in str(ctx.exception)
+            or "Forbidden DUT force" in str(ctx.exception)
+            or "Forbidden explicit thrust" in str(ctx.exception)
+        )
+
+        # Mutation 4: Inject allowlisted '+5 mN' into Chapter 6 surface in JSON (context bypass attempt)
+        m4 = copy.deepcopy(self.provenance)
+        ch6 = next(c for c in m4["six_chapters"] if c["chapter"] == 6)
+        ch6["surface"] += " Measured whole-device thrust: +5 mN."
+        with self.assertRaises(AssertionError) as ctx:
+            self._validate_contextual_evidence_policy(m4["six_chapters"], raw_text=json.dumps(m4, ensure_ascii=False))
+        self.assertTrue("Disallowed force value in Chapter 6 path 'surface'" in str(ctx.exception) or "Forbidden DUT force" in str(ctx.exception))
+
+        # Mutation 5: Inject '+5 mN' into Chapter 4 fallback JS in explorer.js
+        js_match = re.search(r'six_chapters:\s*\[(.*?)\]\s*,\s*four_questions', self.js, re.DOTALL)
+        js_chapters = json.loads("[" + js_match.group(1) + "]")
+        ch4_js = next(c for c in js_chapters if c["chapter"] == 4)
+        ch4_js["shallow"] += " Measured whole-device thrust: +5 mN."
+        with self.assertRaises(AssertionError) as ctx:
+            self._validate_contextual_evidence_policy(js_chapters, raw_text="Measured whole-device thrust: +5 mN")
+        self.assertTrue("Disallowed numeric force" in str(ctx.exception) or "Forbidden DUT force" in str(ctx.exception))
+
+        # Mutation 6: Inject '±3 μN' into Chapter 4 fallback JS in explorer.js
+        js_chapters2 = json.loads("[" + js_match.group(1) + "]")
+        ch4_js2 = next(c for c in js_chapters2 if c["chapter"] == 4)
+        ch4_js2["shallow"] += " DUT net force: ±3 μN."
+        with self.assertRaises(AssertionError) as ctx:
+            self._validate_contextual_evidence_policy(js_chapters2, raw_text="DUT net force: ±3 μN")
+        self.assertTrue("Disallowed numeric force" in str(ctx.exception) or "Forbidden DUT force" in str(ctx.exception))
+
+        # Mutation 7: Inject force claim into ledger in JSON
+        m7 = copy.deepcopy(self.provenance)
+        m7["force_accounting_ledger"]["boundary_a_isolated_dut"]["whole_body_thrust_status"] = "Measured whole-device thrust: +5 mN"
+        with self.assertRaises(AssertionError) as ctx:
+            self._validate_contextual_evidence_policy(m7["six_chapters"], raw_text=json.dumps(m7, ensure_ascii=False))
+        self.assertTrue("Forbidden DUT force" in str(ctx.exception) or "Forbidden explicit thrust" in str(ctx.exception))
+
+        # Mutation 8 (V0.2-R5 / R4-M2): Inject spurious DUT measurement 'Capacitor measured propulsion force: +5 mN' into Chapter 6 equations in JSON
+        m8 = copy.deepcopy(self.provenance)
+        ch6_8 = next(c for c in m8["six_chapters"] if c["chapter"] == 6)
+        ch6_8["deeper"]["equations"] += " Capacitor measured propulsion force: +5 mN."
+        with self.assertRaises(AssertionError) as ctx:
+            self._validate_contextual_evidence_policy(m8["six_chapters"], raw_text=json.dumps(m8, ensure_ascii=False))
+        self.assertTrue(
+            "Chapter 6 equations must contain exactly 1 force token" in str(ctx.exception)
+            or "Forbidden DUT force" in str(ctx.exception)
+            or "forbidden device propulsion claim" in str(ctx.exception)
+        )
+
+        # Mutation 9 (V0.2-R5 / R4-M2): Inject 'Capacitor measured propulsion force: +5 mN' into Chapter 6 equations in fallback JS
+        js_chapters_m9 = json.loads("[" + js_match.group(1) + "]")
+        ch6_js9 = next(c for c in js_chapters_m9 if c["chapter"] == 6)
+        ch6_js9["deeper"]["equations"] += " Capacitor measured propulsion force: +5 mN."
+        with self.assertRaises(AssertionError) as ctx:
+            self._validate_contextual_evidence_policy(js_chapters_m9, raw_text="Capacitor measured propulsion force: +5 mN")
+        self.assertTrue(
+            "Chapter 6 equations must contain exactly 1 force token" in str(ctx.exception)
+            or "Forbidden DUT force" in str(ctx.exception)
+            or "forbidden device propulsion claim" in str(ctx.exception)
+        )
+
+        # Mutation 10 (V0.2-R5 / R4-M2): Inject spurious DUT measurement 'Measured whole-device thrust: ±3 μN' into Chapter 6 hypotheses in JSON
+        m10 = copy.deepcopy(self.provenance)
+        ch6_10 = next(c for c in m10["six_chapters"] if c["chapter"] == 6)
+        ch6_10["research"]["hypotheses"] += " Measured whole-device thrust: ±3 μN."
+        with self.assertRaises(AssertionError) as ctx:
+            self._validate_contextual_evidence_policy(m10["six_chapters"], raw_text=json.dumps(m10, ensure_ascii=False))
+        self.assertTrue(
+            "Chapter 6 hypotheses must contain exactly 2 force tokens" in str(ctx.exception)
+            or "Forbidden DUT force" in str(ctx.exception)
+            or "forbidden device propulsion claim" in str(ctx.exception)
+        )
+
+        # Mutation 11 (V0.2-R5 / R4-M2): Inject 'Measured whole-device thrust: ±3 μN' into Chapter 6 hypotheses in fallback JS
+        js_chapters_m11 = json.loads("[" + js_match.group(1) + "]")
+        ch6_js11 = next(c for c in js_chapters_m11 if c["chapter"] == 6)
+        ch6_js11["research"]["hypotheses"] += " Measured whole-device thrust: ±3 μN."
+        with self.assertRaises(AssertionError) as ctx:
+            self._validate_contextual_evidence_policy(js_chapters_m11, raw_text="Measured whole-device thrust: ±3 μN")
+        self.assertTrue(
+            "Chapter 6 hypotheses must contain exactly 2 force tokens" in str(ctx.exception)
+            or "Forbidden DUT force" in str(ctx.exception)
+            or "forbidden device propulsion claim" in str(ctx.exception)
+        )
+
+        # Mutation 12 (V0.2-R6 / R5-M2): Inject non-DUT-keyword claim 'The capacitor produces 5 mN of forward push.' into Chapter 6 annotation in JSON
+        m12 = copy.deepcopy(self.provenance)
+        ch6_12 = next(c for c in m12["six_chapters"] if c["chapter"] == 6)
+        ch6_12["annotation"] += " The capacitor produces 5 mN of forward push."
+        with self.assertRaises(AssertionError) as ctx:
+            self._validate_contextual_evidence_policy(m12["six_chapters"], raw_text=json.dumps(m12, ensure_ascii=False))
+        self.assertIn("Disallowed force value in Chapter 6 path 'annotation'", str(ctx.exception))
+
+        # Mutation 13 (V0.2-R6 / R5-M2): Inject non-DUT-keyword claim 'The capacitor produces 5 mN of forward push.' into Chapter 6 annotation in fallback JS
+        js_chapters_m13 = json.loads("[" + js_match.group(1) + "]")
+        ch6_js13 = next(c for c in js_chapters_m13 if c["chapter"] == 6)
+        ch6_js13["annotation"] += " The capacitor produces 5 mN of forward push."
+        with self.assertRaises(AssertionError) as ctx:
+            self._validate_contextual_evidence_policy(js_chapters_m13, raw_text=ch6_js13["annotation"])
+        self.assertIn("Disallowed force value in Chapter 6 path 'annotation'", str(ctx.exception))
+
+        # Mutation 14 (V0.2-R6 / R5-M2): Inject non-DUT-keyword claim 'Bench test note: 5 mN observed in fixture.' into Chapter 6 deeper.citations in JSON
+        m14 = copy.deepcopy(self.provenance)
+        ch6_14 = next(c for c in m14["six_chapters"] if c["chapter"] == 6)
+        ch6_14["deeper"]["citations"] += " Bench test note: 5 mN observed in fixture."
+        with self.assertRaises(AssertionError) as ctx:
+            self._validate_contextual_evidence_policy(m14["six_chapters"], raw_text=json.dumps(m14, ensure_ascii=False))
+        self.assertIn("Disallowed force value in Chapter 6 path 'deeper.citations'", str(ctx.exception))
+
+        # Mutation 15 (V0.2-R6 / R5-M2): Inject non-DUT-keyword claim 'Bench test note: 5 mN observed in fixture.' into Chapter 6 deeper.citations in fallback JS
+        js_chapters_m15 = json.loads("[" + js_match.group(1) + "]")
+        ch6_js15 = next(c for c in js_chapters_m15 if c["chapter"] == 6)
+        ch6_js15["deeper"]["citations"] += " Bench test note: 5 mN observed in fixture."
+        with self.assertRaises(AssertionError) as ctx:
+            self._validate_contextual_evidence_policy(js_chapters_m15, raw_text=ch6_js15["deeper"]["citations"])
+        self.assertIn("Disallowed force value in Chapter 6 path 'deeper.citations'", str(ctx.exception))
+
+    def test_v0_2_r2_f1_boundary_accounting_consistency_across_surfaces(self):
+        """V0.2-R2-F1: Verify boundary-accounting consistency across chapters, ledger, JS, and README."""
+        # Chapter 3 shallow: blade-ground attraction qualified by dielectric and walls
+        ch3 = next((c for c in self.provenance.get("six_chapters", []) if c["chapter"] == 3), None)
+        self.assertIsNotNone(ch3)
+        self.assertIn("direct pairwise electrostatic interaction is mutually attractive", ch3["shallow"])
+        self.assertIn("total force on any single electrode also includes dielectric polarization", ch3["shallow"])
+
+        # Chapter 3 research control: evaluates boundary flux rather than promising zero
+        self.assertIn("quantify boundary flux", ch3["research"]["controls"])
+        self.assertNotIn("verify that internal attractive forces sum to zero", ch3["research"]["controls"])
+
+        # Chapter 4 shallow: explicit internal pairwise sum and external coupling
+        ch4 = next((c for c in self.provenance.get("six_chapters", []) if c["chapter"] == 4), None)
+        self.assertIsNotNone(ch4)
+        self.assertIn("&sum; <b>F</b><sub>internal</sub> = <b>F</b><sub>blade,int</sub>", ch4["shallow"])
+        self.assertIn("<b>F</b><sub>DUT,net</sub> = <b>F</b><sub>external</sub>", ch4["shallow"])
+        self.assertIn("unknown pending calibrated geometry", ch4["shallow"])
+
+        # Chapter 4 deeper: Boundary A integral is UNKNOWN pending geometry
+        eqs4 = ch4["deeper"]["equations"]
+        self.assertIn("<b>F</b><sub>DUT</sub> = &conint;<sub>&part;V<sub>A</sub></sub> <b>T</b>&middot;<b>n̂</b> dA = <b>F</b><sub>external</sub>", eqs4)
+        self.assertIn("UNKNOWN pending calibrated geometry", eqs4)
+        self.assertNotIn("&conint;<sub>&part;V<sub>A</sub></sub> <b>T</b>&middot;<b>n̂</b> dA = 0", eqs4)
+        self.assertNotIn("&conint;<sub>&part;V<sub>A</sub></sub> <b>T</b>&middot;<b>n̂</b> dA &ne; 0", eqs4)
+
+        # Force Ledger Boundary A
+        ledger_a = self.provenance.get("force_accounting_ledger", {}).get("boundary_a_isolated_dut", {})
+        self.assertIn("Internal pairwise forces sum identically to zero", ledger_a.get("internal_stress_sum", ""))
+        self.assertIn("neither assumed zero nor assumed non-zero", ledger_a.get("external_environmental_coupling", ""))
+
+        # README consistency check: no assertion of != 0 pending geometry
+        with open("README.md", "r") as f:
+            readme = f.read()
+        self.assertNotIn("\\oint_{\\partial V_A} \\mathbf{T}\\cdot\\hat{\\mathbf{n}}\\,dA \\neq 0", readme)
+        self.assertIn("unknown pending calibrated geometry, neither assumed to be zero nor asserted to be non-zero", readme)
+
+    def test_v0_2_r2_m1_corona_onset_and_vacuum_ratio_provenance(self):
+        """V0.2-R2-M1: Qualified corona onset and accurate vacuum density ratio across all surfaces."""
+        # Chapter 2 uncertainties
+        ch2 = next((c for c in self.provenance.get("six_chapters", []) if c["chapter"] == 2), None)
+        self.assertIsNotNone(ch2)
+        u2 = ch2["research"]["uncertainties"]
+        self.assertIn("sharp conductor tips may reach the dielectric breakdown threshold", u2)
+        self.assertIn("peak field strength and corona onset have NOT been calculated or verified", u2)
+        self.assertIn("about eight orders of magnitude (~7.88 orders at 10⁻⁵ Torr)", u2)
+
+        # Chapter 6 deeper equations and citations
+        ch6 = next((c for c in self.provenance.get("six_chapters", []) if c["chapter"] == 6), None)
+        self.assertIsNotNone(ch6)
+        eqs6 = ch6["deeper"]["equations"]
+        self.assertIn("about eight orders of magnitude (~7.88 orders of magnitude", eqs6)
+        citations6 = ch6["deeper"]["citations"]
+        self.assertIn("Put strong limits on all proposed theories so far assessing electrostatic propulsion", citations6)
+        self.assertIn("Journal of Electrostatics", citations6)
+        self.assertIn("10.1016/j.elstat.2020.103477", citations6)
+
+        # Null controls: no categorical "Eliminate" for finite pressure
+        null_ctrls = self.provenance.get("null_controls", [])
+        vac_ctrl = next((c for c in null_ctrls if "High-Vacuum" in c["name"]), None)
+        self.assertIsNotNone(vac_ctrl)
+        self.assertIn("Suppress and test for", vac_ctrl["purpose"])
+        self.assertNotIn("Eliminate corona discharge", vac_ctrl["purpose"])
+
+        # Help modal in index.html has accurate Tajmar citation
+        self.assertIn("Journal of Electrostatics", self.html)
+        self.assertIn("10.1016/j.elstat.2020.103477", self.html)
+        self.assertNotIn("CEAS Space Journal", self.html)
+
+    def test_v0_2_r1_m1_semantic_math_and_clickable_citations(self):
+        """V0.2-R1-M1: Semantic math formatting and clickable citation hyperlinks."""
+        self.assertIn("function cleanMathHtml", self.js)
+
+        for ch in self.provenance.get("six_chapters", []):
+            deeper = ch["deeper"]
+            # No raw unescaped LaTeX delimiters in equations
+            self.assertNotIn("\\(", deeper["equations"], f"Raw LaTeX '\\(' found in chapter {ch['chapter']} equations")
+            self.assertNotIn("\\)", deeper["equations"], f"Raw LaTeX '\\)' found in chapter {ch['chapter']} equations")
+
+            # Citations must contain valid hyperlinks
+            citations = deeper["citations"]
+            self.assertIn("<a href=", citations, f"Citation in chapter {ch['chapter']} must contain clickable link")
+            self.assertIn("target='_blank'", citations, f"Citation in chapter {ch['chapter']} must open in new tab")
+            self.assertIn("rel='noopener noreferrer'", citations, f"Citation in chapter {ch['chapter']} must have rel='noopener noreferrer'")
+
+    def test_v0_2_r1_m3_mobile_scrollable_layout_and_ledger_navigation(self):
+        """V0.2-R1-M3: Mobile layout has no clipping overflow constraints and provides ledger navigation."""
+        # CSS mobile overrides
+        self.assertIn("height: auto !important;", self.css)
+        self.assertIn("max-height: none !important;", self.css)
+        self.assertIn("overflow: visible !important;", self.css)
+        self.assertIn("overflow-y: auto !important;", self.css)
+
+        # HTML elements
+        self.assertIn("id=\"force-ledger-card\"", self.html)
+        self.assertIn("id=\"btn-ledger-back-to-guide\"", self.html)
+
+        # JS wirings
+        self.assertIn("btn-chapter4-open-ledger", self.js)
+        self.assertIn("btn-ledger-back-to-guide", self.js)
+
+    def test_v0_2_r2_m2_mathematical_scalar_wave_mutually_exclusive_view(self):
+        """V0.2-R2-M2: 3D scene provides mutually exclusive scalar wave toy view centered at origin."""
+        # HTML badge
+        self.assertIn("id=\"scalar-wave-badge\"", self.html)
+        self.assertIn("MATHEMATICAL SCALAR WAVE VIEW (ABSTRACT TOY MODEL)", self.html)
+        self.assertIn("Vector streamlines hidden", self.html)
+        self.assertIn("NOT emitted by or coupled to capacitor apparatus", self.html)
+
+        # JS group, origin centering, and mutually exclusive toggling
+        self.assertIn("scalarWaveGroup", self.js)
+        self.assertIn("function createScalarWaveVisual", self.js)
+        self.assertIn("new THREE.Vector3(0, 0, 0)", self.js)
+        self.assertIn("function updateScalarWaveAnimation", self.js)
+        self.assertIn("function toggleScalarWaveContrast", self.js)
+        self.assertIn("fieldGroup.visible = false;", self.js)
+        self.assertIn("btn-toggle-wave-contrast", self.js)
 
 
 

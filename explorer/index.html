@@ -3,8 +3,8 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Propulsion Explorer 3D (V0) — V0.1 Visual Experience &amp; UX Polish — Scalar Wave Viz</title>
-  <meta name="description" content="A polished, beginner-friendly 3D visual laboratory for exploring electric fields, local Maxwell stress, and whole-body force accounting in an Exodus-inspired electrode assembly.">
+  <title>Propulsion Explorer 3D (V0.2) — Learn Physics Backwards — Scalar Wave Viz</title>
+  <meta name="description" content="A visual-first 3D laboratory for exploring electric fields, local Maxwell stress, and whole-body force accounting with the Iceberg learning model.">
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⚡</text></svg>">
   <link rel="stylesheet" href="explorer.css">
 </head>
@@ -12,8 +12,8 @@
   <!-- Header / Navigation Bar -->
   <header class="app-header" role="banner">
     <div class="header-left">
-      <h1 class="app-title">Propulsion Explorer <span class="badge-version">V0.1</span></h1>
-      <p class="app-subtitle">Scalar Wave Viz — 3D Laboratory for Field &amp; Force Understanding</p>
+      <h1 class="app-title">Propulsion Explorer <span class="badge-version">V0.2</span></h1>
+      <p class="app-subtitle">Scalar Wave Viz — Learn Physics Backwards (3D Laboratory)</p>
     </div>
     <div class="header-center">
       <span class="provenance-pill pill-provisional" id="global-provenance-badge" title="This scene is an illustrative educational 3D model. Unverified whole-body thrust is not established.">
@@ -21,28 +21,98 @@
       </span>
     </div>
     <div class="header-right">
-      <button id="btn-start-tour" class="btn btn-primary" aria-label="Start interactive 4-question tour">
+      <button id="btn-toggle-guide" class="btn btn-primary" aria-label="Toggle guided learning panel" aria-pressed="true">
+        <span class="btn-icon">📖</span> <span class="btn-text">Guided Tour</span>
+      </button>
+      <button id="btn-start-tour" class="btn btn-primary" aria-label="Start interactive guided tour" style="display:none;" aria-hidden="true">
         <span class="btn-icon">💡</span> Start Guided Tour
       </button>
       <button id="btn-reset-view" class="btn btn-secondary" aria-label="Reset 3D camera to default position">
-        <span class="btn-icon">🔄</span> Reset View
+        <span class="btn-icon">🔄</span> <span class="btn-text">Reset View</span>
       </button>
-      <button id="btn-toggle-help" class="btn btn-secondary" aria-label="Open 4 questions and physics background">
-        <span class="btn-icon">❓</span> Help &amp; Questions
+      <button id="btn-toggle-controls" class="btn btn-secondary" aria-label="Toggle controls and inspector panel" aria-pressed="true">
+        <span class="btn-icon">⚙️</span> <span class="btn-text">Controls</span>
+      </button>
+      <button id="btn-toggle-help" class="btn btn-secondary" aria-label="Open keyboard shortcuts and physics reference">
+        <span class="btn-icon">❓</span> <span class="btn-text">Help</span>
       </button>
     </div>
   </header>
 
-  <!-- Main Viewport and Sidebar Container -->
-  <main class="app-layout" role="main">
-    <!-- 3D Canvas Area -->
+  <!-- Main Viewport and Three-Panel Layout -->
+  <main class="app-layout" id="app-layout" role="main">
+    <!-- Mobile/Narrow Tab Bar (Visible on mobile/narrow viewports to switch between Guide & Controls) -->
+    <nav class="mobile-panel-tabs" role="tablist" aria-label="Mobile Panel Selection">
+      <button class="mobile-tab-btn active" role="tab" id="mobile-tab-guide" aria-selected="true" aria-controls="learning-panel">
+        📖 Guided Tour
+      </button>
+      <button class="mobile-tab-btn" role="tab" id="mobile-tab-controls" aria-selected="false" aria-controls="sidebar-container">
+        ⚙️ Controls &amp; Inspector
+      </button>
+    </nav>
+
+    <!-- LEFT PANEL: Guided Learning (The Iceberg Model) -->
+    <aside class="learning-panel" id="learning-panel" role="region" aria-label="Guided Physics Learning Journey">
+      <!-- Guided Panel Header -->
+      <div class="guide-header">
+        <div class="guide-header-top">
+          <span class="guide-badge">ICEBERG LEARNING MODEL</span>
+          <span class="guide-step-count" id="guide-step-count">Chapter 1 of 6</span>
+          <span id="tour-step-count" style="display:none;">Step 1 of 6</span>
+        </div>
+        <h2 class="guide-chapter-title" id="guide-chapter-title">1. Meet the Device</h2>
+        <span id="tour-step-title" style="display:none;">1. Meet the Device</span>
+        <!-- Chapter Stepper Buttons (Quick Jump) -->
+        <div class="chapter-stepper" role="tablist" aria-label="Jump to Chapter">
+          <button class="chapter-step-btn active" data-chapter="0" data-index="0" title="Chapter 1: Meet the Device" aria-label="Chapter 1: Meet the Device">1</button>
+          <button class="chapter-step-btn" data-chapter="1" data-index="1" title="Chapter 2: Turn on the Electricity" aria-label="Chapter 2: Turn on the Electricity">2</button>
+          <button class="chapter-step-btn" data-chapter="2" data-index="2" title="Chapter 3: Follow the Forces" aria-label="Chapter 3: Follow the Forces">3</button>
+          <button class="chapter-step-btn" data-chapter="3" data-index="3" title="Chapter 4: Can the Whole Device Move?" aria-label="Chapter 4: Can the Whole Device Move?">4</button>
+          <button class="chapter-step-btn" data-chapter="4" data-index="4" title="Chapter 5: What are Scalar Waves?" aria-label="Chapter 5: What are Scalar Waves?">5</button>
+          <button class="chapter-step-btn" data-chapter="5" data-index="5" title="Chapter 6: How Could We Test It?" aria-label="Chapter 6: How Could We Test It?">6</button>
+        </div>
+      </div>
+
+      <!-- Scrollable Guide Body (Rendered with progressive disclosure Iceberg layers) -->
+      <div class="guide-body" id="guide-body" tabindex="0">
+        <!-- Rendered dynamically by explorer.js -->
+      </div>
+      <div id="tour-step-body" style="display:none;"></div>
+
+      <!-- Guide Navigation Footer -->
+      <div class="guide-footer">
+        <div class="guide-nav-row">
+          <button id="guide-btn-prev" class="btn btn-secondary guide-nav-btn" aria-label="Previous chapter">
+            ◀ Back
+          </button>
+          <button id="tour-btn-prev" style="display:none;" aria-hidden="true">Prev</button>
+          <button id="guide-btn-next" class="btn btn-primary guide-nav-btn" aria-label="Next chapter">
+            Next ▶
+          </button>
+          <button id="tour-btn-next" style="display:none;" aria-hidden="true">Next</button>
+        </div>
+        <div class="guide-utility-row">
+          <button id="guide-btn-pause" class="btn btn-sm btn-ghost" title="Pause or resume streamline pulses and animations">
+            <span id="pause-icon">⏸️</span> <span id="pause-text">Pause</span>
+          </button>
+          <button id="guide-btn-free" class="btn btn-sm btn-ghost" title="Pause guided tour and explore freely in sandbox mode">
+            🔍 Explore Freely
+          </button>
+          <button id="guide-btn-reset" class="btn btn-sm btn-ghost" title="Reset guided tour to Chapter 1">
+            🔄 Reset Tour
+          </button>
+        </div>
+      </div>
+    </aside>
+
+    <!-- CENTER PANEL: Unobstructed 3D Visualization Viewport -->
     <div class="viewport-container" id="viewport-container" tabindex="0" aria-label="Interactive 3D electrode assembly view. Use mouse drag to rotate, wheel to zoom, or arrow keys for keyboard navigation.">
       <canvas id="webgl-canvas"></canvas>
 
       <!-- Loading Overlay -->
       <div id="loading-overlay" class="loading-overlay">
         <div class="spinner"></div>
-        <p class="loading-text">Initializing 3D Propulsion Explorer...</p>
+        <p class="loading-text">Initializing 3D Propulsion Explorer V0.2...</p>
       </div>
 
       <!-- View Preset HUD Overlay -->
@@ -53,7 +123,13 @@
         <button class="hud-btn" data-view="top" title="Top Plan View X-Z (Key: Z)">Top (X-Z)</button>
         <span class="hud-separator" aria-hidden="true"></span>
         <button class="hud-btn hud-btn-action" id="btn-toggle-labels" title="Toggle 3D Component Labels (Key: L)" aria-pressed="true">🏷️ Labels</button>
-        <button class="hud-btn hud-btn-action" id="btn-toggle-sidebar" title="Toggle Sidebar Panel (Key: S)" aria-pressed="false">◨ Sidebar</button>
+        <button class="hud-btn hud-btn-action" id="btn-toggle-sidebar" title="Toggle Right Controls Panel (Key: S)" aria-pressed="false">⚙️ Controls</button>
+      </div>
+
+      <!-- Nonblocking Scene-Synchronized Annotation Card (Visual Callout) -->
+      <div class="scene-annotation-card" id="scene-annotation-card" role="status" aria-live="polite">
+        <span class="annotation-icon" id="annotation-icon">🎯</span>
+        <span class="annotation-text" id="annotation-text">Chapter 1: Meet the asymmetric electrode geometry</span>
       </div>
 
       <!-- Component Quick-Select Bar (Accessible 1-Click Selection & Mobile Touch Friendly) -->
@@ -85,16 +161,23 @@
       </div>
 
       <!-- Layer Legend Overlay -->
-      <div class="layer-legend-hud" aria-label="Scene Legend">
+      <div class="layer-legend-hud" aria-label="Scene Legend" id="layer-legend-hud">
         <div class="legend-item"><span class="legend-swatch swatch-blade"></span> <span id="legend-blade-label">Blade (-20.0 kV)</span></div>
         <div class="legend-item"><span class="legend-swatch swatch-ground"></span> <span id="legend-ground-label">Ground (0.0 V)</span></div>
         <div class="legend-item"><span class="legend-swatch swatch-dielectric"></span> <span id="legend-dielectric-label">Dielectric (&epsilon;<sub>r</sub> = 3.8 — Visual Proxy Only)</span></div>
         <div class="legend-item"><span class="legend-swatch swatch-field"></span> <span id="legend-field-label">Electric Field Direction (Ground 0 V &rarr; Blade -20 kV; Schematic Orientation Only, Not Computed |E| Magnitude or Charge Flow)</span></div>
         <div class="legend-item"><span class="legend-swatch swatch-force"></span> <span id="legend-force-label">Schematic Vectors (Bounded 6–30 mm; F &prop; V<sup>2</sup>)</span></div>
       </div>
+
+      <!-- Mathematical Scalar Wave Contrast Overlay Badge (V0.2-R2-M2 / V0.2-R4) -->
+      <div id="scalar-wave-badge" class="scalar-wave-badge hidden" role="status" aria-live="polite">
+        <span class="badge-title">🌊 MATHEMATICAL SCALAR WAVE VIEW (ABSTRACT TOY MODEL)</span>
+        <span class="badge-sub">Toy Equation: &nabla;<sup>2</sup>&psi; &minus; (1/c<sup>2</sup>)&part;<sub>t</sub><sup>2</sup>&psi; = 0 (Vector streamlines hidden)</span>
+        <span class="badge-disclaimer">Physical capacitor model hidden &bull; Abstract reference space &bull; NOT emitted by or coupled to capacitor apparatus &bull; No thrust</span>
+      </div>
     </div>
 
-    <!-- Right Sidebar: Interactive Controls, Science Ledger, and Inspector -->
+    <!-- RIGHT PANEL: Interactive Controls, Science Ledger, and Inspector -->
     <aside class="sidebar-container" id="sidebar-container" role="complementary">
       <!-- Tabs for Sidebar Panels -->
       <nav class="sidebar-tabs" role="tablist">
@@ -156,7 +239,8 @@
 
       <!-- Tab 2: Whole-Body Force Ledger (Action-Reaction Accounting) -->
       <section class="tab-panel" id="tab-ledger" role="tabpanel" aria-labelledby="tab-btn-ledger">
-        <div class="panel-card">
+        <div class="panel-card" id="force-ledger-card">
+          <button type="button" class="action-btn link-btn mobile-only-btn" id="btn-ledger-back-to-guide" style="display:none; margin-bottom:0.75rem; font-size:0.8rem; text-align:left;">&larr; Return to Guided Learning</button>
           <h2 class="card-title">Whole-Body Force Ledger</h2>
           <p class="card-desc">Explicit distinction between the suspended test article (DUT) and the external vacuum chamber.</p>
 
@@ -205,16 +289,17 @@
           <div class="ledger-boundary-block">
             <div class="boundary-header">
               <h3 class="boundary-title">Boundary B: External Test Environment</h3>
-              <span class="boundary-badge external-badge">EXTERNAL LAB FRAME</span>
+              <span class="boundary-badge boundary-badge-ext">LABORATORY CHAMBER</span>
             </div>
-            <p class="boundary-desc">Vacuum tank walls, power leads, and laboratory ground.</p>
+            <p class="boundary-desc">Vacuum tank walls, feedthroughs, mounting stands, and surroundings coupled via electrostatic image forces.</p>
+
             <div class="ledger-table-wrapper">
               <table class="ledger-table" aria-label="External Environment Ledger">
                 <thead>
                   <tr>
                     <th scope="col">External Element</th>
                     <th scope="col">Direction</th>
-                    <th scope="col">Interaction Nature</th>
+                    <th scope="col">Coupling Mechanism</th>
                   </tr>
                 </thead>
                 <tbody id="ledger-ext-tbody">
@@ -319,72 +404,65 @@
           </div>
         </div>
       </section>
+
+      <!-- Epistemic Status Card -->
+      <div class="thrust-status-card" role="note" aria-label="Whole-Body Thrust Measurement Status">
+        <div class="status-header">
+          <span class="status-icon">⚠️</span>
+          <span class="status-title">WHOLE-BODY THRUST STATUS</span>
+        </div>
+        <p class="status-verdict">NOT MEASURED / NOT ESTABLISHED</p>
+        <p class="status-detail">This 3D scene is an educational and exploratory visual model. Internal electrostatic forces balance to zero. Propellantless propulsion has not been demonstrated.</p>
+      </div>
     </aside>
   </main>
 
-  <!-- Interactive Guided Tour Modal Overlay -->
-  <div id="tour-modal" class="tour-modal hidden" role="dialog" aria-modal="true" aria-labelledby="tour-step-title">
-    <div class="tour-modal-content" tabindex="-1">
-      <div class="tour-header">
-        <span class="tour-step-count" id="tour-step-count">Step 1 of 4</span>
-        <h2 class="tour-step-title" id="tour-step-title">What am I seeing?</h2>
-        <button id="tour-btn-close" class="modal-close-btn" aria-label="Close guided tour">&times;</button>
+  <!-- Help & Shortcuts Modal Dialog -->
+  <div id="help-modal" class="help-modal hidden" role="dialog" aria-modal="true" aria-labelledby="help-title">
+    <div class="help-modal-content" tabindex="-1">
+      <div class="modal-header">
+        <h2 class="modal-title" id="help-title">Propulsion Explorer — Help &amp; Keyboard Shortcuts</h2>
+        <button id="help-btn-close" class="modal-close-btn" aria-label="Close help dialog">&times;</button>
       </div>
-      <div class="tour-body" id="tour-step-body">
-        <!-- Populated by JS with clean HTML math -->
-      </div>
-      <div class="tour-footer">
-        <button id="tour-btn-prev" class="btn btn-secondary">Previous</button>
-        <div class="tour-dots" id="tour-dots">
-          <span class="dot active"></span>
-          <span class="dot"></span>
-          <span class="dot"></span>
-          <span class="dot"></span>
-        </div>
-        <button id="tour-btn-next" class="btn btn-primary">Next</button>
-      </div>
-    </div>
-  </div>
-
-  <!-- Help & Four Questions Modal -->
-  <div id="help-modal" class="tour-modal hidden" role="dialog" aria-modal="true" aria-labelledby="help-title">
-    <div class="tour-modal-content help-content" tabindex="-1">
-      <div class="tour-header">
-        <h2 class="tour-step-title" id="help-title">Propulsion Explorer — The Four Questions</h2>
-        <button id="help-btn-close" class="modal-close-btn" aria-label="Close help">&times;</button>
-      </div>
-      <div class="tour-body help-body">
-        <section class="qa-block">
-          <h3>1. What am I seeing?</h3>
-          <p>An illustrative 3D model of an asymmetric electrostatic electrode assembly inspired by Exodus Propulsion Technologies patent US11511891B2 (FIGS. 4–8). It features an asymmetric high-voltage knife-edge blade cathode opposite a planar ground counter-electrode inside a grounded conductive enclosure.</p>
+      <div class="modal-body">
+        <section class="help-section">
+          <h3>The Iceberg Learning Model</h3>
+          <p>This laboratory explains physics from the surface down:</p>
+          <ul>
+            <li><strong>Surface:</strong> Direct 3D visual demonstration of the physical setup.</li>
+            <li><strong>Shallow depth:</strong> Plain-language explanations with tangible everyday analogies.</li>
+            <li><strong>Deeper:</strong> Expandable sections containing exact Maxwell stress tensor formulas, definitions, and patent citations.</li>
+            <li><strong>Research depth:</strong> Expandable sections detailing competing mechanisms (corona ion wind, chamber wall coupling), uncertainties, and discriminating vacuum null controls.</li>
+          </ul>
         </section>
-        <section class="qa-block">
-          <h3>2. Why does it happen?</h3>
-          <p>Sharp conductor edges concentrate electric field lines (<i>E</i> &prop; 1/<i>r</i>). Maxwell electrostatic stress exerts tension pulling on the blade tip. In general 3D electrostatics, the vacuum stress tensor component is <i>T<sub>xx</sub></i> = &epsilon;<sub>0</sub>(<i>E<sub>x</sub></i><sup>2</sup> &minus; &frac12;|<b>E</b>|<sup>2</sup>) = &frac12;&epsilon;<sub>0</sub>(<i>E<sub>x</sub></i><sup>2</sup> &minus; <i>E<sub>y</sub></i><sup>2</sup> &minus; <i>E<sub>z</sub></i><sup>2</sup>); the simplified formula &frac12;&epsilon;<sub>0</sub><i>E<sub>x</sub></i><sup>2</sup> is a 1D approximation strictly valid only where transverse fields vanish (<i>E<sub>y</sub></i> = <i>E<sub>z</sub></i> = 0). Conventional electric field vectors <b>E</b> = -&nabla;&Phi; point from higher potential (0 V, ground) toward lower potential (-20 kV, cathode). By Newton's third law, opposing reaction forces act on the ground electrode, the dielectric potting, and surrounding chamber walls.</p>
+        <section class="help-section qa-block">
+          <h3>Physics Reference: Four Questions</h3>
+          <p><strong>1. What am I seeing?</strong> An illustrative 3D model of an asymmetric electrostatic electrode assembly inspired by Exodus patent US11511891B2 (FIGS. 4–8).</p>
+          <p><strong>2. Why does it happen?</strong> Sharp conductor edges concentrate electric field lines (<i>E</i> &prop; 1/<i>r</i>). Maxwell electrostatic stress exerts tension pulling on the blade tip. In general 3D electrostatics, the vacuum stress tensor component is <i>T<sub>xx</sub></i> = &epsilon;<sub>0</sub>(<i>E<sub>x</sub></i><sup>2</sup> &minus; &frac12;|<b>E</b>|<sup>2</sup>) = &frac12;&epsilon;<sub>0</sub>(<i>E<sub>x</sub></i><sup>2</sup> &minus; <i>E<sub>y</sub></i><sup>2</sup> &minus; <i>E<sub>z</sub></i><sup>2</sup>); the simplified formula &frac12;&epsilon;<sub>0</sub><i>E<sub>x</sub></i><sup>2</sup> is a 1D approximation strictly valid only where transverse fields vanish (<i>E<sub>y</sub></i> = <i>E<sub>z</sub></i> = 0). Conventional electric field vectors <b>E</b> = -&nabla;&Phi; point from higher potential (0 V, ground) toward lower potential (-20 kV, cathode). By Newton's third law, opposing reaction forces act on the ground electrode, the dielectric potting, and surrounding chamber walls.</p>
+          <p><strong>3. What changes it?</strong> Applied voltage scales electrostatic force quadratically (<i>F</i> &prop; <i>V</i><sup>2</sup>). Taper sharpness increases local peak field gradients. Dielectric permittivity alters polarization traction. Chamber wall proximity alters image-charge boundary coupling.</p>
+          <p><strong>4. How could we test it?</strong> Discriminating null controls in high vacuum: reverse electrode orientation, symmetric dummy electrodes, and solid shielding.</p>
         </section>
-        <section class="qa-block">
-          <h3>3. What changes it?</h3>
-          <p>Applied voltage scales electrostatic force quadratically (<i>F</i> &prop; <i>V</i><sup>2</sup>). Taper sharpness increases local peak field gradients. Dielectric permittivity alters polarization traction. Chamber wall proximity alters image-charge boundary coupling.</p>
-        </section>
-        <section class="qa-block">
-          <h3>4. How could we test it?</h3>
-          <p>To determine if net thrust exists, the entire isolated test article must be mounted on a calibrated micro-Newton torsion balance in high vacuum (&lt; 10<sup>-5</sup> Torr). Discriminating null controls must isolate corona ion wind, outgassing, electrostatic wall forces, and thermal convection (Tajmar &amp; Schreiber 2020).</p>
-        </section>
-        <section class="qa-block shortcuts-block">
+        <section class="help-section shortcuts-block">
           <h3>Keyboard Shortcuts</h3>
           <ul>
             <li><kbd>&larr;</kbd> <kbd>&rarr;</kbd> : Orbit camera horizontally (Azimuth)</li>
             <li><kbd>&uarr;</kbd> <kbd>&darr;</kbd> : Orbit camera vertically (Polar angle)</li>
             <li><kbd>+</kbd> / <kbd>-</kbd> : Zoom in / out (Dolly)</li>
-            <li><kbd>R</kbd> : Reset camera to isometric view</li>
-            <li><kbd>L</kbd> : Toggle 3D component labels</li>
-            <li><kbd>S</kbd> : Toggle sidebar (Full-screen canvas mode)</li>
-            <li><kbd>1</kbd> : Toggle Geometry layer</li>
-            <li><kbd>2</kbd> : Toggle Electric Field layer</li>
-            <li><kbd>3</kbd> : Toggle Action &amp; Reaction Vectors layer</li>
-            <li><kbd>Tab</kbd> / <kbd>Shift+Tab</kbd> : Navigate selectable elements</li>
-            <li><kbd>Esc</kbd> : Dismiss open modal dialog</li>
+            <li><kbd>R</kbd> : Reset camera to default isometric view</li>
+            <li><kbd>G</kbd> : Toggle Left Guided Learning Panel</li>
+            <li><kbd>S</kbd> : Toggle Right Controls &amp; Inspector Panel</li>
+            <li><kbd>L</kbd> : Toggle 3D Component Billboard Labels</li>
+            <li><kbd>[</kbd> / <kbd>]</kbd> : Previous / Next chapter in guided learning</li>
+            <li><kbd>Space</kbd> : Pause / Resume streamline pulse animation</li>
+            <li><kbd>1</kbd> / <kbd>2</kbd> / <kbd>3</kbd> : Toggle Geometry / Field / Force layers</li>
+            <li><kbd>I</kbd> / <kbd>X</kbd> / <kbd>Y</kbd> / <kbd>Z</kbd> : Camera view presets (Isometric, Side, Front, Top)</li>
+            <li><kbd>Esc</kbd> : Dismiss open dialog or return from modal</li>
           </ul>
+        </section>
+        <section class="help-section">
+          <h3>Scientific Honesty &amp; Sources</h3>
+          <p>This application separates established electrostatics, mathematical scalar waves, published patent hypotheses, and experimental null controls. The 3D scene depicts conventional electrostatics; it does not demonstrate scalar-wave propulsion or net thrust.</p>
+          <p><strong>Primary References:</strong> US11511891B2 (Exodus Propulsion Technologies); Jackson, <em>Classical Electrodynamics</em>; Tajmar &amp; Schreiber (2020), <em>Journal of Electrostatics</em> 107, 103477, DOI: <a href="https://doi.org/10.1016/j.elstat.2020.103477" target="_blank" rel="noopener noreferrer">10.1016/j.elstat.2020.103477</a>.</p>
         </section>
       </div>
     </div>
