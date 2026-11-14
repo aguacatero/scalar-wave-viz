@@ -1651,12 +1651,20 @@ class PropulsionExplorerBrowserSmokeTests(unittest.TestCase):
         }""")
         self.assertTrue(is_webgl_ok, "WebGL canvas context must be valid and not lost")
 
-        # Sub-check (b): leaving Chapter 5 for Chapter 6 while toy mode active
+        # Sub-check (b): leaving Chapter 5 for Chapter 6 while toy mode active (V0.2-R6 / R5-M1 fix)
+        toggle_btn.click()
+        self.page.wait_for_timeout(100)
+        self.assertTrue(self.page.evaluate("window.__explorer.isScalarWaveContrastActive()"), "wave mode must be active immediately before Next")
+        self.assertTrue(self.page.evaluate("window.__explorer.scalarWaveGroup.visible"), "scalarWaveGroup must be visible before Next")
+        self.assertFalse(self.page.evaluate("window.__explorer.geometryGroup.visible"), "geometryGroup must be hidden before Next")
+        self.assertFalse(self.page.evaluate("window.__explorer.fieldGroup.visible"), "fieldGroup must be hidden before Next")
+
         self.page.click("#guide-btn-next")
         self.page.wait_for_timeout(100)
         self.assertIn("How Could We Test the Hypothesis?", self.page.locator("#guide-chapter-title").inner_text())
 
-        # Chapter 6 layers: field is FALSE, geometry is TRUE
+        # Chapter 6 layers: field is FALSE, geometry is TRUE, wave mode reset
+        self.assertFalse(self.page.evaluate("window.__explorer.isScalarWaveContrastActive()"), "isScalarWaveContrastActive must auto-reset when leaving Chapter 5")
         self.assertFalse(chk_fields.is_checked(), "toggle-fields must be false in Chapter 6")
         self.assertFalse(self.page.evaluate("window.__explorer.fieldGroup.visible"), "fieldGroup must be false in Chapter 6")
         self.assertFalse(self.page.evaluate("window.__explorer.scalarWaveGroup.visible"), "scalarWaveGroup must be auto-reset to false when leaving Chapter 5")
@@ -1670,6 +1678,67 @@ class PropulsionExplorerBrowserSmokeTests(unittest.TestCase):
         self.assertTrue(self.page.evaluate("window.__explorer.fieldGroup.visible"), "fieldGroup must be visible in Chapter 5")
         self.assertTrue(self.page.evaluate("window.__explorer.geometryGroup.visible"), "geometryGroup must be visible in Chapter 5")
         self.assertFalse(self.page.evaluate("window.__explorer.scalarWaveGroup.visible"), "scalarWaveGroup must remain false upon return until explicitly clicked")
+
+        # Sub-check (e) (V0.2-R6 / R5-M1): Chapter 5 -> wave on -> Explore Freely -> physical sandbox -> Return to Chapter 5
+        toggle_btn = self.page.locator("#guide-body #btn-toggle-wave-contrast")
+        toggle_btn.click()
+        self.page.wait_for_timeout(100)
+        self.assertTrue(self.page.evaluate("window.__explorer.isScalarWaveContrastActive()"), "wave mode must be active before Explore Freely")
+        self.assertTrue(self.page.evaluate("window.__explorer.scalarWaveGroup.visible"), "scalarWaveGroup visible before Explore Freely")
+        self.assertFalse(self.page.evaluate("window.__explorer.geometryGroup.visible"), "geometryGroup hidden in wave mode")
+        self.assertIn("Switch Back to Electrostatic Vector Field", toggle_btn.inner_text())
+
+        self.page.click("#guide-btn-free")
+        self.page.wait_for_timeout(100)
+        self.assertFalse(self.page.evaluate("window.__explorer.isScalarWaveContrastActive()"), "Explore Freely must exit abstract wave mode")
+        self.assertFalse(self.page.evaluate("window.__explorer.scalarWaveGroup.visible"), "scalarWaveGroup must be hidden in Explore Freely")
+        self.assertTrue(self.page.locator("#scalar-wave-badge").evaluate("el => el.classList.contains('hidden')"), "scalar-wave-badge must be hidden in Explore Freely")
+        self.assertTrue(self.page.evaluate("window.__explorer.geometryGroup.visible"), "geometryGroup must be restored on entering Explore Freely")
+        self.assertTrue(self.page.evaluate("window.__explorer.fieldGroup.visible"), "fieldGroup must be restored on entering Explore Freely")
+        self.assertGreater(self.page.evaluate("window.__explorer.fieldGroup.children.length"), 0, "fieldGroup must have children in Explore Freely")
+
+        # Drive physical sandbox voltage slider in Free Exploration
+        slider.fill("30")
+        slider.dispatch_event("input")
+        self.page.wait_for_timeout(100)
+        self.assertTrue(self.page.evaluate("window.__explorer.geometryGroup.visible"), "geometryGroup stays visible during sandbox slider edit")
+        self.assertTrue(self.page.evaluate("window.__explorer.fieldGroup.visible"), "fieldGroup stays visible during sandbox slider edit")
+        self.assertGreater(self.page.evaluate("window.__explorer.fieldGroup.children.length"), 0, "fieldGroup children updated in Free Exploration")
+
+        # Return to Chapter 5 from Explore Freely
+        self.page.click("#btn-resume-guide")
+        self.page.wait_for_timeout(100)
+        self.assertIn("What Are Scalar Waves?", self.page.locator("#guide-chapter-title").inner_text())
+        self.assertFalse(self.page.evaluate("window.__explorer.isScalarWaveContrastActive()"), "wave mode remains off when returning from Explore Freely")
+        self.assertTrue(self.page.evaluate("window.__explorer.geometryGroup.visible"), "geometryGroup visible upon returning to Chapter 5")
+        self.assertTrue(self.page.evaluate("window.__explorer.fieldGroup.visible"), "fieldGroup visible upon returning to Chapter 5")
+        self.assertGreater(self.page.evaluate("window.__explorer.fieldGroup.children.length"), 0, "fieldGroup children populated upon returning to Chapter 5")
+        toggle_btn = self.page.locator("#guide-body #btn-toggle-wave-contrast")
+        self.assertIn("Switch to Mathematical Scalar Wave Toy View", toggle_btn.inner_text())
+
+        # Sub-check (f) (V0.2-R6 / R5-M1): Re-selecting Chapter 5 while wave mode is active synchronizes button label & state
+        toggle_btn.click()
+        self.page.wait_for_timeout(100)
+        self.assertTrue(self.page.evaluate("window.__explorer.isScalarWaveContrastActive()"), "wave mode must be active before re-selecting Chapter 5")
+        self.page.click(".chapter-step-btn[data-index='4']")
+        self.page.wait_for_timeout(100)
+        self.assertTrue(self.page.evaluate("window.__explorer.isScalarWaveContrastActive()"), "wave mode remains active when re-selecting Chapter 5")
+        self.assertTrue(self.page.evaluate("window.__explorer.scalarWaveGroup.visible"), "scalarWaveGroup remains visible when re-selecting Chapter 5")
+        self.assertFalse(self.page.evaluate("window.__explorer.geometryGroup.visible"), "geometryGroup remains hidden when re-selecting Chapter 5")
+        self.assertFalse(self.page.locator("#scalar-wave-badge").evaluate("el => el.classList.contains('hidden')"), "scalar-wave-badge remains visible when re-selecting Chapter 5")
+        recreated_toggle_btn = self.page.locator("#guide-body #btn-toggle-wave-contrast")
+        self.assertIn("Switch Back to Electrostatic Vector Field", recreated_toggle_btn.inner_text())
+        self.assertEqual(recreated_toggle_btn.get_attribute("aria-pressed"), "true")
+
+        # Clicking synchronized recreated button returns cleanly to physical electrostatic view
+        recreated_toggle_btn.click()
+        self.page.wait_for_timeout(100)
+        self.assertFalse(self.page.evaluate("window.__explorer.isScalarWaveContrastActive()"))
+        self.assertTrue(self.page.evaluate("window.__explorer.geometryGroup.visible"))
+        self.assertTrue(self.page.evaluate("window.__explorer.fieldGroup.visible"))
+        self.assertGreater(self.page.evaluate("window.__explorer.fieldGroup.children.length"), 0)
+        self.assertIn("Switch to Mathematical Scalar Wave Toy View", recreated_toggle_btn.inner_text())
+        self.assertEqual(recreated_toggle_btn.get_attribute("aria-pressed"), "false")
 
         self.assertEqual(len(self.page_errors), 0, f"Layer state test encountered page errors: {self.page_errors}")
 

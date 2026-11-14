@@ -1131,15 +1131,30 @@
     }
   }
 
+  function syncWaveContrastUI() {
+    if (scalarWaveGroup) {
+      scalarWaveGroup.visible = isScalarWaveContrastActive;
+    }
+
+    const waveBadge = document.getElementById('scalar-wave-badge');
+    if (waveBadge) {
+      waveBadge.classList.toggle('hidden', !isScalarWaveContrastActive);
+    }
+
+    const contrastBtn = document.getElementById('btn-toggle-wave-contrast');
+    if (contrastBtn) {
+      contrastBtn.innerHTML = isScalarWaveContrastActive
+        ? "⚡ Switch Back to Electrostatic Vector Field (Streamlines)"
+        : "🌊 Switch to Mathematical Scalar Wave Toy View";
+      contrastBtn.setAttribute('aria-pressed', isScalarWaveContrastActive ? 'true' : 'false');
+    }
+  }
+
   function toggleScalarWaveContrast(forceState) {
     if (typeof forceState === 'boolean') {
       isScalarWaveContrastActive = forceState;
     } else {
       isScalarWaveContrastActive = !isScalarWaveContrastActive;
-    }
-
-    if (scalarWaveGroup) {
-      scalarWaveGroup.visible = isScalarWaveContrastActive;
     }
 
     // V0.2-R5 / R4-F1: When leaving wave mode, unconditionally rebuild field lines,
@@ -1159,18 +1174,7 @@
     // When scalar wave view is deactivated:
     // - Restore all scene groups according to authoritative predicates (checkboxes, active chapter, voltage)
     syncAllLayerVisibilities();
-
-    const waveBadge = document.getElementById('scalar-wave-badge');
-    if (waveBadge) {
-      waveBadge.classList.toggle('hidden', !isScalarWaveContrastActive);
-    }
-
-    const contrastBtn = document.getElementById('btn-toggle-wave-contrast');
-    if (contrastBtn) {
-      contrastBtn.innerHTML = isScalarWaveContrastActive
-        ? "⚡ Switch Back to Electrostatic Vector Field (Streamlines)"
-        : "🌊 Switch to Mathematical Scalar Wave Toy View";
-    }
+    syncWaveContrastUI();
   }
 
   function cleanMathHtml(str) {
@@ -1796,6 +1800,8 @@
         toggleScalarWaveContrast();
       };
     }
+    // V0.2-R6 / R5-M1: Synchronize recreated Chapter 5 wave-toggle button & badge with active state
+    syncWaveContrastUI();
   }
 
   function nextChapter() {
@@ -1825,6 +1831,11 @@
     const freeBtn = document.getElementById('guide-btn-free');
 
     if (isExploringFreely) {
+      // V0.2-R6 / R5-M1: Exit abstract scalar wave view on entering Free Exploration
+      // so physical geometry and sandbox layer/parameter controls are immediately usable.
+      if (isScalarWaveContrastActive) {
+        toggleScalarWaveContrast(false);
+      }
       if (guideBody) {
         guideBody.innerHTML = `
           <div class="iceberg-card iceberg-surface">

@@ -589,6 +589,18 @@ class PropulsionExplorerJSLogicTests(unittest.TestCase):
                 s_end = end + m_forward.start()
             return text[s_start:s_end].strip()
 
+        def iter_text_leaves(obj, prefix=""):
+            if isinstance(obj, str):
+                yield prefix, obj
+            elif isinstance(obj, dict):
+                for k, v in obj.items():
+                    next_path = f"{prefix}.{k}" if prefix else str(k)
+                    yield from iter_text_leaves(v, next_path)
+            elif isinstance(obj, (list, tuple)):
+                for idx, item in enumerate(obj):
+                    next_path = f"{prefix}[{idx}]"
+                    yield from iter_text_leaves(item, next_path)
+
         for ch in chapters:
             ch_num = ch.get("chapter")
             if ch_num in [1, 2, 3, 4, 5]:
@@ -600,15 +612,24 @@ class PropulsionExplorerJSLogicTests(unittest.TestCase):
                         f"Chapters 1–5 must contain zero physical force tokens."
                     )
             elif ch_num == 6:
-                surface = ch.get("surface", "")
-                shallow = ch.get("shallow", "")
                 deeper = ch.get("deeper", {})
                 research = ch.get("research", {})
 
-                if force_pattern.findall(surface):
-                    raise AssertionError(f"Disallowed force value in Chapter 6 surface: {force_pattern.findall(surface)}")
-                if force_pattern.findall(shallow):
-                    raise AssertionError(f"Disallowed force value in Chapter 6 shallow: {force_pattern.findall(shallow)}")
+                # V0.2-R6 / R5-M2: Recursively validate every text leaf of Chapter 6.
+                # Only the three explicitly approved paths may contain physical-force tokens.
+                approved_paths = {
+                    "deeper.equations",
+                    "deeper.specifications",
+                    "research.hypotheses",
+                }
+                for leaf_path, leaf_text in iter_text_leaves(ch):
+                    if leaf_path in approved_paths:
+                        continue
+                    leaf_matches = force_pattern.findall(leaf_text)
+                    if leaf_matches:
+                        raise AssertionError(
+                            f"Disallowed force value in Chapter 6 path '{leaf_path}': {leaf_matches}"
+                        )
 
                 # V0.2-R5 / R4-M2: Sentence-local / passage-level structured binding for Chapter 6 equations
                 eq_text = deeper.get("equations", "")
@@ -670,13 +691,11 @@ class PropulsionExplorerJSLogicTests(unittest.TestCase):
                         raise AssertionError(f"Force '{val}' in passage '{passage}' must be bound to Tajmar null measurement citation.")
                     if re.search(r'\b(?:DUT|whole[- ]device|device thrust|net DUT|Boundary A|capacitor measured|propulsion force|measured force|measured thrust|thrust observed|observed thrust)\b', passage, re.IGNORECASE):
                         raise AssertionError(f"Passage contains forbidden device propulsion claim: '{passage}'")
-
-                unc_matches = force_pattern.findall(research.get("uncertainties", ""))
-                if unc_matches:
-                    raise AssertionError(f"Disallowed force value in Chapter 6 uncertainties: {unc_matches}")
-                ctrl_matches = force_pattern.findall(research.get("controls", ""))
-                if ctrl_matches:
-                    raise AssertionError(f"Disallowed force value in Chapter 6 controls: {ctrl_matches}")
+            else:
+                ch_str = json.dumps(ch, ensure_ascii=False)
+                matches = force_pattern.findall(ch_str)
+                if matches:
+                    raise AssertionError(f"Disallowed numeric force {matches} in unexpected Chapter {ch_num}.")
 
     def test_v0_2_r2_m3_generalized_numeric_force_evidence_policy(self):
         """V0.2-R2-M3 & V0.2-R4-M1: Contextual evidence policy check for numeric forces across JSON and JS fallback."""
@@ -742,7 +761,7 @@ class PropulsionExplorerJSLogicTests(unittest.TestCase):
         ch6["surface"] += " Measured whole-device thrust: +5 mN."
         with self.assertRaises(AssertionError) as ctx:
             self._validate_contextual_evidence_policy(m4["six_chapters"], raw_text=json.dumps(m4, ensure_ascii=False))
-        self.assertTrue("Disallowed force value in Chapter 6 surface" in str(ctx.exception) or "Forbidden DUT force" in str(ctx.exception))
+        self.assertTrue("Disallowed force value in Chapter 6 path 'surface'" in str(ctx.exception) or "Forbidden DUT force" in str(ctx.exception))
 
         # Mutation 5: Inject '+5 mN' into Chapter 4 fallback JS in explorer.js
         js_match = re.search(r'six_chapters:\s*\[(.*?)\]\s*,\s*four_questions', self.js, re.DOTALL)
@@ -815,6 +834,38 @@ class PropulsionExplorerJSLogicTests(unittest.TestCase):
             or "Forbidden DUT force" in str(ctx.exception)
             or "forbidden device propulsion claim" in str(ctx.exception)
         )
+
+        # Mutation 12 (V0.2-R6 / R5-M2): Inject non-DUT-keyword claim 'The capacitor produces 5 mN of forward push.' into Chapter 6 annotation in JSON
+        m12 = copy.deepcopy(self.provenance)
+        ch6_12 = next(c for c in m12["six_chapters"] if c["chapter"] == 6)
+        ch6_12["annotation"] += " The capacitor produces 5 mN of forward push."
+        with self.assertRaises(AssertionError) as ctx:
+            self._validate_contextual_evidence_policy(m12["six_chapters"], raw_text=json.dumps(m12, ensure_ascii=False))
+        self.assertIn("Disallowed force value in Chapter 6 path 'annotation'", str(ctx.exception))
+
+        # Mutation 13 (V0.2-R6 / R5-M2): Inject non-DUT-keyword claim 'The capacitor produces 5 mN of forward push.' into Chapter 6 annotation in fallback JS
+        js_chapters_m13 = json.loads("[" + js_match.group(1) + "]")
+        ch6_js13 = next(c for c in js_chapters_m13 if c["chapter"] == 6)
+        ch6_js13["annotation"] += " The capacitor produces 5 mN of forward push."
+        with self.assertRaises(AssertionError) as ctx:
+            self._validate_contextual_evidence_policy(js_chapters_m13, raw_text=ch6_js13["annotation"])
+        self.assertIn("Disallowed force value in Chapter 6 path 'annotation'", str(ctx.exception))
+
+        # Mutation 14 (V0.2-R6 / R5-M2): Inject non-DUT-keyword claim 'Bench test note: 5 mN observed in fixture.' into Chapter 6 deeper.citations in JSON
+        m14 = copy.deepcopy(self.provenance)
+        ch6_14 = next(c for c in m14["six_chapters"] if c["chapter"] == 6)
+        ch6_14["deeper"]["citations"] += " Bench test note: 5 mN observed in fixture."
+        with self.assertRaises(AssertionError) as ctx:
+            self._validate_contextual_evidence_policy(m14["six_chapters"], raw_text=json.dumps(m14, ensure_ascii=False))
+        self.assertIn("Disallowed force value in Chapter 6 path 'deeper.citations'", str(ctx.exception))
+
+        # Mutation 15 (V0.2-R6 / R5-M2): Inject non-DUT-keyword claim 'Bench test note: 5 mN observed in fixture.' into Chapter 6 deeper.citations in fallback JS
+        js_chapters_m15 = json.loads("[" + js_match.group(1) + "]")
+        ch6_js15 = next(c for c in js_chapters_m15 if c["chapter"] == 6)
+        ch6_js15["deeper"]["citations"] += " Bench test note: 5 mN observed in fixture."
+        with self.assertRaises(AssertionError) as ctx:
+            self._validate_contextual_evidence_policy(js_chapters_m15, raw_text=ch6_js15["deeper"]["citations"])
+        self.assertIn("Disallowed force value in Chapter 6 path 'deeper.citations'", str(ctx.exception))
 
     def test_v0_2_r2_f1_boundary_accounting_consistency_across_surfaces(self):
         """V0.2-R2-F1: Verify boundary-accounting consistency across chapters, ledger, JS, and README."""
