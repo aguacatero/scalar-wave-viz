@@ -63,20 +63,23 @@ def find_available_port(host: str, start_port: int, max_attempts: int = 50) -> i
     raise RuntimeError(f"Could not find an available port on {host} between {start_port} and {start_port + max_attempts}")
 
 
-def create_server(host: str, port: int) -> tuple[socketserver.TCPServer, int]:
-    """Create a TCP server bound to host and port (or next open port)."""
-    selected_port = find_available_port(host, port)
-    
-    class ReusableTCPServer(socketserver.TCPServer):
-        allow_reuse_address = True
+from v1_worker_bridge import (  # noqa: E402 - local bridge module
+    ExplorerHTTPRequestHandler,
+    create_v1_http_server,
+    validate_loopback_host,
+)
 
-    server = ReusableTCPServer((host, selected_port), ExplorerHTTPRequestHandler)
-    return server, selected_port
+
+def create_server(host: str, port: int, **kwargs):
+    """Create a hardened IPv4-loopback server bound to host and port."""
+    validate_loopback_host(host)
+    selected_port = find_available_port(host, port)
+    return create_v1_http_server(host, selected_port, directory=EXPLORER_DIR, **kwargs)
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Launch the 3D Propulsion Explorer (V0) in your web browser."
+        description="Launch the 3D Propulsion Explorer (V0/V1-A bridge) in your web browser."
     )
     parser.add_argument(
         "--port",
@@ -88,7 +91,7 @@ def main():
         "--host",
         type=str,
         default="127.0.0.1",
-        help="Host interface to bind to (default: 127.0.0.1).",
+        help="IPv4 loopback host interface to bind to (default: 127.0.0.1; supported: 127.0.0.1, localhost).",
     )
     parser.add_argument(
         "--no-browser",
@@ -96,6 +99,8 @@ def main():
         help="Start the server without automatically launching the web browser.",
     )
     args = parser.parse_args()
+
+    validate_loopback_host(args.host)
 
     if not EXPLORER_DIR.exists() or not (EXPLORER_DIR / "index.html").exists():
         print(f"Error: Explorer directory or index.html not found at {EXPLORER_DIR}", file=sys.stderr)
@@ -105,13 +110,14 @@ def main():
     url = f"http://{args.host}:{port}"
 
     print("=" * 70)
-    print("  PROPULSION EXPLORER 3D (V0) — SCALAR WAVE VIZ")
+    print("  PROPULSION EXPLORER 3D — SCALAR WAVE VIZ")
     print("  Educational 3D Laboratory for Field & Force Understanding")
     print("=" * 70)
     print(f"  • Serving from:   {EXPLORER_DIR}")
     print(f"  • Local URL:      {url}")
-    print(f"  • Scientific Status: PROVISIONAL EDUCATIONAL SCENE")
-    print(f"  • Net Thrust:     NOT MEASURED / NOT ESTABLISHED")
+    print("  • Bridge Stage:   V1-A (Transport & Worker Lifecycle Only)")
+    print("  • Scientific Status: PROVISIONAL EDUCATIONAL SCENE")
+    print("  • Net Thrust:     NOT MEASURED / NOT ESTABLISHED")
     print("=" * 70)
     print("  Press Ctrl+C to stop the server.\n")
 
