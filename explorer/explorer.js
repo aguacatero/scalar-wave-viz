@@ -29,6 +29,218 @@
       date: "2026-11-02",
       note: "V0 displays qualitative schematic force directions and illustrative field paths. No quantitative force magnitudes are established or claimed."
     },
+    six_chapters: [
+    {
+        "chapter": 1,
+        "title": "Meet the Device",
+        "annotation": "🎯 Component Focus: Asymmetric blade wedge opposite planar ground collector",
+        "highlight_component": "blade_electrode",
+        "camera": {
+            "x": 90,
+            "y": 50,
+            "z": 110
+        },
+        "target": {
+            "x": 0,
+            "y": 0,
+            "z": 0
+        },
+        "layers": {
+            "geometry": true,
+            "field": false,
+            "forces": false,
+            "chamber": true
+        },
+        "voltage_kv": 0,
+        "surface": "Look at the 3D scene: you are inspecting an <strong>asymmetric high-voltage electrode assembly</strong> inspired by Exodus Propulsion Technologies patent US11511891B2 (FIGS. 4–8).",
+        "shallow": "Notice the two main electrical components: a sharp <strong style='color:var(--color-blade)'>red knife-edge blade cathode</strong> and a flat <strong style='color:var(--color-ground)'>green ground collector plate</strong>. Between them sits a semitransparent <strong style='color:var(--color-dielectric)'>blue dielectric potting block</strong> (an insulator that prevents high-voltage electrical breakdown). The entire assembly is mounted on an insulating stand inside a grounded stainless steel chamber.<br><br><strong>Everyday Analogy:</strong> Like the nozzle and hose of a garden sprayer, the physical shape is asymmetric on purpose. But simply making an object asymmetric does not mean electrical fields will push the whole assembly forward!",
+        "deeper": {
+            "equations": "Dirichlet potential boundary conditions: &Phi;<sub>blade</sub> = -20 kV, &Phi;<sub>ground</sub> = 0 V, &Phi;<sub>chamber</sub> = 0 V. In charge-free vacuum, electric potential satisfies Laplace's equation: &nabla;<sup>2</sup>&Phi; = 0.",
+            "specifications": "Blade wedge: copper/brass, knife-edge apex along x = 0, y &isin; [-12.7, +12.7] mm, source-specified tip radius r &approx; 0.1 mm (modeled as idealized sharp wedge). Ground plate: aluminum collector 4.0 mm &times; 40.0 mm &times; 50.8 mm. Dielectric: epoxy potting (&epsilon;<sub>r</sub> = 3.8, 16 mm &times; 30 mm &times; 45 mm).",
+            "citations": "US Patent <a href='https://patents.google.com/patent/US11511891B2/en' target='_blank' rel='noopener noreferrer'>US11511891B2</a> FIGS. 4–8 (tapered blade cathode); FIGS. 6B, 21, 23A (dielectric potting medium 600); Jackson, <a href='https://cds.cern.ch/record/490749' target='_blank' rel='noopener noreferrer'><em>Classical Electrodynamics</em></a>, Ch. 1."
+        },
+        "research": {
+            "hypotheses": "Patent US11511891B2 claims an 'asymmetric electrostatic pressure' effect produces a net unidirectional force on the apparatus.",
+            "uncertainties": "Sharp conductor knife-edges create extreme local field gradients (E &prop; 1/r) that can cause field electron emission, corona discharge, or micro-arcing if not suppressed by ultra-high vacuum or solid dielectric potting.",
+            "controls": "Dimensional inspection, surface roughness verification, and vacuum outgassing characterization must precede electrical energization."
+        }
+    },
+    {
+        "chapter": 2,
+        "title": "Turn on the Electricity",
+        "annotation": "⚡ Field Activated: Streamlines bunch tightly at the knife-edge tip (E ∝ 1/r)",
+        "highlight_component": "blade_electrode",
+        "camera": {
+            "x": 35,
+            "y": 18,
+            "z": 55
+        },
+        "target": {
+            "x": 5,
+            "y": 0,
+            "z": 0
+        },
+        "layers": {
+            "geometry": true,
+            "field": true,
+            "forces": false,
+            "chamber": true
+        },
+        "voltage_kv": 20,
+        "surface": "Negative high voltage (-20 kV) is now applied to the red blade cathode while the green collector plate remains at ground (0 V). Luminous <strong style='color:var(--color-field)'>cyan electric field streamlines</strong> immediately fill the gap.",
+        "shallow": "Notice how tightly the field lines crowd together near the razor-sharp knife-edge apex. Conventional electric field vectors point from higher potential (ground, 0 V) toward lower potential (cathode, -20 kV).<br><br><strong>Everyday Analogy:</strong> Think of a wide river suddenly channeled through a tiny gap between rocks—the water accelerates dramatically and creates intense pressure in the narrow opening. In the exact same way, electric charges crowd intensely into the sharp knife-edge tip, creating a fierce electric field concentration.",
+        "deeper": {
+            "equations": "Electric field vector: <b>E</b> = -&nabla;&Phi;. In an idealized 2D conductive wedge model with exterior half-angle &alpha;, the analytic electrostatic field scales near the apex as E &prop; V / r<sup>1 - &pi;/(2&alpha;)</sup> (Jackson &sect;2.11). For sharp knife edges (r &rarr; 0), unrounded models exhibit a mathematical singularity; in physical devices, dielectric potting and finite tip radii are required to suppress field emission and dielectric breakdown. No validated 3D peak field magnitude is claimed for this visual scene.",
+            "specifications": "Equipotential surfaces form concentric contours around the knife edge. Animated streamline directional markers demonstrate orientation of <b>E</b> (strictly schematic orientation indicators pointing Ground 0 V &rarr; Blade -20 kV—not physical charge transport or wave propagation). Extinguished identically at 0 V.",
+            "citations": "Jackson, <a href='https://cds.cern.ch/record/490749' target='_blank' rel='noopener noreferrer'><em>Classical Electrodynamics</em></a>, &sect;2.11 (Fields near sharp edges and conical points); US Patent <a href='https://patents.google.com/patent/US11511891B2/en' target='_blank' rel='noopener noreferrer'>US11511891B2</a> col. 6 lines 15–45."
+        },
+        "research": {
+            "hypotheses": "H0: Conventional Maxwell electrostatics. Field energy U = &frac12;&epsilon;<sub>0</sub> &int; |<b>E</b>|<sup>2</sup> dV is stored purely in the electrostatic field.",
+            "uncertainties": "In ambient air, sharp conductor tips may reach the dielectric breakdown threshold of air (~3 kV/mm) and trigger corona ionization, depending on edge sharpness and surface finish; peak field strength and corona onset have NOT been calculated or verified for this visual scene. In high vacuum (< 10⁻⁵ Torr relative to atmospheric 760 Torr), gas particle density drops by about eight orders of magnitude (~7.88 orders at 10⁻⁵ Torr), suppressing gas-phase ion collisions and aerodynamic forces.",
+            "controls": "Verify voltage scaling E &prop; V and field extinction at 0 V. Sweep voltage to confirm quadratic energy dependence U &prop; V<sup>2</sup>."
+        }
+    },
+    {
+        "chapter": 3,
+        "title": "Follow the Forces",
+        "annotation": "⚖️ Action & Reaction: Mutual blade–ground pairwise attraction; net forces include surrounding dielectric & walls",
+        "highlight_component": "ground_electrode",
+        "camera": {
+            "x": 0,
+            "y": 65,
+            "z": 85
+        },
+        "target": {
+            "x": 0,
+            "y": 0,
+            "z": 0
+        },
+        "layers": {
+            "geometry": true,
+            "field": true,
+            "forces": true,
+            "chamber": true
+        },
+        "voltage_kv": 20,
+        "surface": "<strong style='color:var(--color-force)'>Golden force arrows</strong> now appear on the blade, the ground plate, the dielectric potting, and the chamber walls.",
+        "shallow": "The electric field exerts mechanical traction on the blade cathode pulling it toward the ground plate (+X direction). Between the blade and ground plate, the direct pairwise electrostatic interaction is mutually attractive: the blade pulls on the plate, and the plate pulls back on the blade with equal and opposite force. However, the total force on any single electrode also includes dielectric polarization, mounting fixtures, and chamber walls. Internal pairwise forces cancel in pairs, but the net force on individual parts depends on the entire surrounding geometry!<br><br><strong>Everyday Analogy:</strong> Two strong neodymium magnets on a table attract each other with equal and opposite pairwise forces. They pull toward one another, but internal attraction alone cannot slide the whole table across the room!",
+        "deeper": {
+            "equations": "Maxwell stress tensor in vacuum: T<sub>ij</sub> = &epsilon;<sub>0</sub> (E<sub>i</sub>E<sub>j</sub> - &frac12;|<b>E</b>|<sup>2</sup>&delta;<sub>ij</sub>). Along the x-axis: T<sub>xx</sub> = &frac12;&epsilon;<sub>0</sub>(E<sub>x</sub><sup>2</sup> - E<sub>y</sub><sup>2</sup> - E<sub>z</sub><sup>2</sup>). The total electrostatic force on conductor k is <b>F</b><sub>k</sub> = &conint;<sub>&part;V<sub>k</sub></sub> <b>T</b>&middot;<b>n̂</b> dA. Quadratic voltage scaling: <b>F</b> &prop; V<sup>2</sup>.",
+            "specifications": "Local surface traction <b>t</b> = <b>T</b>&middot;<b>n̂</b> = &frac12;&epsilon;<sub>0</sub>|<b>E</b>|<sup>2</sup><b>n̂</b> pulls outward perpendicular to conductor surfaces. Sharp blade edge experiences high peak traction over narrow apex; ground plate experiences lower traction distributed over large area.",
+            "citations": "Feynman, Leighton, Sands, <a href='https://www.feynmanlectures.caltech.edu/II_08.html' target='_blank' rel='noopener noreferrer'><em>The Feynman Lectures on Physics</em>, Vol. II, Ch. 8</a> (Electrostatic Energy &amp; Stress Tensor); US Patent <a href='https://patents.google.com/patent/US11511891B2/en' target='_blank' rel='noopener noreferrer'>US11511891B2</a> col. 6 lines 50–68."
+        },
+        "research": {
+            "hypotheses": "H1: The patent argues that because the field is geometrically asymmetric, the electrostatic forces on the two electrodes will not balance.",
+            "uncertainties": "Failure to account for dielectric polarization surface forces and chamber wall image-charge coupling leads to incorrect net force claims.",
+            "controls": "Evaluate the Maxwell stress surface integral over a closed boundary enclosing the test electrodes and dielectric to quantify boundary flux; in an uncalibrated enclosure, this boundary flux is unknown pending complete geometry (it reflects external coupling to chamber walls and feedthroughs rather than propellantless propulsion)."
+        }
+    },
+    {
+        "chapter": 4,
+        "title": "Can the Whole Device Move?",
+        "annotation": "🚫 Action-Reaction Balance: Internal pairwise forces cancel (∑F_internal = 0); DUT net force = F_external (unknown pending geometry)",
+        "highlight_component": "dielectric_block",
+        "camera": {
+            "x": 100,
+            "y": 60,
+            "z": 120
+        },
+        "target": {
+            "x": 0,
+            "y": 0,
+            "z": 0
+        },
+        "layers": {
+            "geometry": true,
+            "field": false,
+            "forces": true,
+            "chamber": true
+        },
+        "voltage_kv": 20,
+        "surface": "Inspect the <strong>Action-Reaction Force Ledger</strong> in the right-hand panel. Look at <strong>Boundary A (Device Under Test)</strong>.",
+        "shallow": "Can you lift yourself off the ground by pulling upward on your own shoelaces? Absolutely not! Your hands pull up on your shoes, but your shoulders and spine push down on your legs with the exact same force. Internal pairwise forces always cancel out completely.<br><br>In this electrical device, Newton's third law requires that internal pairwise interactions between all components sum identically to zero:<br><br><span class='math-formula'>&sum; <b>F</b><sub>internal</sub> = <b>F</b><sub>blade,int</sub> + <b>F</b><sub>ground,int</sub> + <b>F</b><sub>dielectric,int</sub> + <b>F</b><sub>mount,int</sub> = <b>0</b></span><br><br>Any net force on the suspended Device Under Test (DUT) as a whole would equal the sum of external environmental interactions (chamber wall image charges, lead wires, ambient gas): <span class='math-formula'><b>F</b><sub>DUT,net</sub> = <b>F</b><sub>external</sub></span> (which remains unknown pending calibrated geometry, neither assumed to be zero nor asserted to be non-zero).<br><br><em>Hypothetical arithmetic toy illustration (not measured or computed for this apparatus): If the blade hypothetically experienced +5 units of forward attraction toward the ground plate, the opposing internal reactions on ground and dielectric balance out to zero net internal force (&sum; F_internal = 0).</em><br><br><button type='button' class='action-btn' id='btn-chapter4-open-ledger' style='width:100%; margin-top:0.75rem; background: var(--bg-card-hover); border-color: var(--color-force);'>⚖️ Open Action-Reaction Force Ledger &rarr;</button>",
+        "deeper": {
+            "equations": "Internal pairwise momentum conservation: &sum; <b>F</b><sub>internal</sub> = <b>0</b> identically. Net electrostatic force on the DUT (Boundary A): <b>F</b><sub>DUT</sub> = &conint;<sub>&part;V<sub>A</sub></sub> <b>T</b>&middot;<b>n̂</b> dA = <b>F</b><sub>external</sub>. This boundary surface integral is UNKNOWN pending calibrated geometry and boundary solver (it is NOT assumed to be identically zero or non-zero, because external fields from surrounding conductive chamber walls or feedthroughs may penetrate Boundary A). Total momentum is strictly conserved across the complete closed universe (Boundary C enclosing the entire laboratory where <b>E</b> &rarr; <b>0</b> at infinity): &conint;<sub>&part;V<sub>&infin;</sub></sub> <b>T</b>&middot;<b>n̂</b> dA = <b>0</b>.",
+            "specifications": "Boundary A encloses Blade, Ground, Dielectric, and Support Mount. Internal pairwise electrostatic forces sum identically to zero (&sum; <b>F</b><sub>internal</sub> = <b>0</b>), while external environmental coupling (<b>F</b><sub>DUT,net</sub> = <b>F</b><sub>external</sub>) remains UNVERIFIED / UNKNOWN pending calibrated chamber geometry. Boundary B accounts for grounded enclosure chamber walls. Boundary C (the closed universe) preserves total momentum.",
+            "citations": "Griffiths, <a href='https://www.cambridge.org/highereducation/books/introduction-to-electrodynamics/1A74EE8421AC2F9758BFDEB9E40A2F39' target='_blank' rel='noopener noreferrer'><em>Introduction to Electrodynamics</em></a>, 4th ed., &sect;8.2.2 (Conservation of Momentum); Newton's <em>Principia</em> (Lex III)."
+        },
+        "research": {
+            "hypotheses": "H0 (Conventional Physics): Isolated electrostatic devices cannot produce propellantless thrust. Momentum is conserved strictly.",
+            "uncertainties": "Claims of net thrust often confuse local electrode traction with whole-device propulsion, or neglect external chamber image-charge coupling and power-lead forces.",
+            "controls": "Test entire self-contained article on an isolated torsion pendulum with complete optical center-of-mass tracking."
+        }
+    },
+    {
+        "chapter": 5,
+        "title": "What Are Scalar Waves?",
+        "annotation": "🌊 Wave Contrast: Visual Scalar Wave contrast (toy equation) vs vector electrostatic field lines",
+        "highlight_component": "dielectric_block",
+        "camera": {
+            "x": 60,
+            "y": 90,
+            "z": 90
+        },
+        "target": {
+            "x": 0,
+            "y": 0,
+            "z": 0
+        },
+        "layers": {
+            "geometry": true,
+            "field": true,
+            "forces": false,
+            "chamber": true
+        },
+        "voltage_kv": 20,
+        "surface": "This project explores both conventional electrostatics and mathematical scalar waves. What is the fundamental physical and visual difference?",
+        "shallow": "<strong>What is a scalar?</strong> A scalar is simply a single number at each point in space—like temperature on a weather map, or electrical voltage. In contrast, electric and magnetic fields are <strong>vectors</strong> (arrows with both magnitude and direction).<br><br><strong>What is a scalar wave?</strong> Sound in air is a scalar pressure wave. Water height on a pond is a scalar wave. In math, we can easily simulate oscillating waves of numbers moving on a grid.<br><br><strong>Does this 3D electrode produce scalar waves?</strong> <strong style='color:var(--badge-unverified)'>NO.</strong> This apparatus models <em>conventional electrostatic vector fields</em>. It is NOT a scalar wave thruster. Calling an electric capacitor a 'scalar wave engine' is like calling a battery a 'gravity generator'—just because both involve electricity does not make them a new force of nature!<br><br><button type='button' class='action-btn' id='btn-toggle-wave-contrast' style='width:100%; margin-top:0.75rem; background: var(--bg-card-hover); border-color: var(--color-field);'>🌊 Switch to Mathematical Scalar Wave Toy View</button>",
+        "deeper": {
+            "equations": "Electromagnetic 4-potential A<sup>&mu;</sup> = (&Phi;/c, <b>A</b>). In Lorenz gauge &part;<sub>&mu;</sub>A<sup>&mu;</sup> = 0, Maxwell's equations decouple into &Square;A<sup>&mu;</sup> = &mu;<sub>0</sub>J<sup>&mu;</sup>. While mathematically scalar d'Alembert wave equations, gauge invariance guarantees physical radiated modes are transverse vector photons (spin-1) with zero physical scalar radiation.",
+            "specifications": "A genuine physical scalar field &phi; would require: (1) an invariant Lagrangian &Lscr;<sub>&phi;</sub> = &frac12;&part;<sub>&mu;</sub>&phi;&part;<sup>&mu;</sup>&phi; - V(&phi;), (2) an established coupling to matter/fields &Square;&phi; = g F<sub>&mu;&nu;</sub>F<sup>&mu;&nu;</sup>, and (3) a validated stress-energy tensor T<sup>&mu;&nu;</sup><sub>&phi;</sub> carrying physical momentum &Delta;p = &int; T<sup>0i</sup><sub>&phi;</sub> d<sup>3</sup>x.",
+            "citations": "Jackson, <a href='https://cds.cern.ch/record/490749' target='_blank' rel='noopener noreferrer'><em>Classical Electrodynamics</em></a>, &sect;6.3 &amp; &sect;6.4 (Gauge Transformations &amp; Retarded Potentials); Peskin &amp; Schroeder, <a href='https://www.routledge.com/An-Introduction-To-Quantum-Field-Theory/Peskin-Schroeder/p/book/9780201503975' target='_blank' rel='noopener noreferrer'><em>An Introduction to Quantum Field Theory</em></a>, Ch. 2."
+        },
+        "research": {
+            "hypotheses": "H_scalar: A novel scalar electrodynamic field couples to asymmetric high voltage and radiates momentum without propellant.",
+            "uncertainties": "No physical scalar field coupled to macroscopic electrostatics has ever been detected. Toy simulations in wave_3d.ipynb use unverified arbitrary material parameters and do not establish physical propulsion.",
+            "controls": "Calibrated RF and scalar detectors with directional sensitivity to distinguish genuine field radiation from RF noise, thermal emission, or room reflections."
+        }
+    },
+    {
+        "chapter": 6,
+        "title": "How Could We Test the Hypothesis?",
+        "annotation": "🔬 Testing Reality: High vacuum (< 10⁻⁵ Torr) and torsion balance required to rule out ion wind and image forces",
+        "highlight_component": "enclosure_walls",
+        "camera": {
+            "x": 130,
+            "y": 80,
+            "z": 150
+        },
+        "target": {
+            "x": 0,
+            "y": 0,
+            "z": 0
+        },
+        "layers": {
+            "geometry": true,
+            "field": false,
+            "forces": false,
+            "chamber": true
+        },
+        "voltage_kv": 20,
+        "surface": "Science does not accept propulsion claims based on computer renderings, patent text, or enthusiastic videos. <strong>How do we test whether an effect is real?</strong>",
+        "shallow": "If someone claims an electrical device produces thrust without throwing propellant, we must place the entire self-contained device (with battery and wireless controller) inside a sealed metal vacuum chamber suspended from a microscopic torsion pendulum.<br><br><strong>Everyday Analogy:</strong> If you suspect someone is blowing air through a secret fan, put them inside a sealed glass box where all the air has been pumped out. If the force drops when the air is gone, it was just a fan all along!",
+        "deeper": {
+            "equations": "Corona ion wind aerodynamic thrust in air: F<sub>ion</sub> &approx; (I &middot; d) / &mu;, where I is leakage current, d is electrode gap distance, and &mu; is ion mobility in air (&approx; 2 &times; 10<sup>-4</sup> m<sup>2</sup>/(V&middot;s)). Sample illustrative calculation: with d = 20 mm (0.02 m) and a 50 &mu;A corona current, F &approx; (50 &times; 10<sup>-6</sup> &times; 0.02) / (2 &times; 10<sup>-4</sup>) = 5 mN of spurious aerodynamic thrust in ambient air. In high vacuum at 10<sup>-5</sup> Torr (relative to 760 Torr ambient), gas density drops by about eight orders of magnitude (~7.88 orders of magnitude, or over 8 orders below 7.6 &times; 10<sup>-6</sup> Torr), suppressing gas-phase ion collisions and aerodynamic drag.",
+            "specifications": "Apparatus: Double-pendulum or torsion balance with sub-micro-Newton resolution (< 0.1 &mu;N). Stainless steel vacuum chamber at P < 10<sup>-5</sup> Torr. Fiber-optic telemetry, wireless on-board battery, and Faraday cage electrostatic shielding.",
+            "citations": "Tajmar &amp; Schreiber (2020), <a href='https://doi.org/10.1016/j.elstat.2020.103477' target='_blank' rel='noopener noreferrer'>\"Put strong limits on all proposed theories so far assessing electrostatic propulsion: Does a charged high-voltage capacitor produce thrust?\"</a>, <em>Journal of Electrostatics</em> 107, 103477, DOI: 10.1016/j.elstat.2020.103477; US Patent <a href='https://patents.google.com/patent/US11511891B2/en' target='_blank' rel='noopener noreferrer'>US11511891B2</a> col. 8."
+        },
+        "research": {
+            "hypotheses": "Null Hypothesis H0: An isolated asymmetric capacitor produces zero net propellantless thrust in high vacuum. Measured weight/force changes reflect experimental noise and confounding artifacts (e.g. Tajmar & Schreiber 2020 resolved null weight changes to &plusmn;0.3 mg &approx; &plusmn;3 &mu;N under studied configurations).",
+            "uncertainties": "Confounding artifacts: electrostatic image forces on chamber walls, Lorentz forces from Earth's magnetic field on power leads, thermal outgassing convection, and vibrational coupling.",
+            "controls": "Five Mandatory Null Controls: (1) Vacuum sweep 10<sup>3</sup> &rarr; 10<sup>-6</sup> Torr, (2) Voltage polarity reversal (+20 kV vs -20 kV), (3) 180&deg; physical orientation flip on balance arm, (4) Chamber wall spacing sweep, (5) Symmetrical dummy load control."
+        }
+    }
+],
     four_questions: {
       what_am_i_seeing: "An illustrative 3D model of an asymmetric electrostatic electrode pair inspired by Exodus Propulsion Technologies patent US11511891B2 (FIGS. 4–8). It depicts a tapered knife-edge blade cathode, an opposing planar ground counter-electrode, solid dielectric potting, and a surrounding grounded conductive test chamber.",
       why_does_it_happen: "Sharp conductor edges concentrate electric field lines (E &prop; 1/r), producing intense local Maxwell electrostatic tension pulling on the blade edge. In full 3D electrostatics, the vacuum Maxwell stress tensor component is T_xx = &epsilon;_0 (E_x^2 - &frac12;|E|^2) = &frac12;&epsilon;_0 (E_x^2 - E_y^2 - E_z^2); the simplified scalar form &frac12;&epsilon;_0 E_x^2 is an idealized 1D approximation where transverse fields vanish. Conventional electric field vectors E = -&nabla;&Phi; point from higher potential (ground, 0 V) toward lower potential (cathode, -20 kV). Newton's third law requires equal and opposite electrostatic reaction forces on the opposing ground electrode, dielectric material, and chamber enclosure.",
@@ -120,7 +332,7 @@
     null_controls: [
       {
         name: "High-Vacuum Control (< 10^-5 Torr)",
-        purpose: "Eliminate corona discharge, aerodynamic ion wind, and air convection",
+        purpose: "Suppress and test for corona discharge, aerodynamic ion wind, and air convection artifacts (not proof of absolute absence at finite pressure)",
         reference: "Tajmar & Schreiber (2020), J. Electrostat."
       },
       {
@@ -147,10 +359,55 @@
   let raycaster, mouse;
   let componentMeshes = {};
   let pickableObjects = [];
-  let fieldGroup, forceGroup, geometryGroup, enclosureGroup;
+  let fieldGroup, forceGroup, geometryGroup, enclosureGroup, scalarWaveGroup;
+  let isScalarWaveContrastActive = false;
+  let scalarWaveShells = [];
   let selectedComponentId = null;
   let hoveredObject = null;
   let lastFocusedElement = null;
+
+  // --- Authoritative Layer Visibility Predicates (V0.2-R4 / R3-F1 & R3-M2) ---
+  function shouldShowGeometry() {
+    if (isScalarWaveContrastActive) return false;
+    const tGeom = document.getElementById('toggle-geometry');
+    return tGeom ? tGeom.checked : true;
+  }
+
+  function shouldShowFieldLines() {
+    if (isScalarWaveContrastActive) return false;
+    if (currentVoltageKV <= 0.0) return false;
+    const tFields = document.getElementById('toggle-fields');
+    return tFields ? tFields.checked : false;
+  }
+
+  function shouldShowForces() {
+    if (isScalarWaveContrastActive) return false;
+    if (currentVoltageKV <= 0.0) return false;
+    const tForces = document.getElementById('toggle-forces');
+    return tForces ? tForces.checked : false;
+  }
+
+  function shouldShowEnclosure() {
+    if (isScalarWaveContrastActive) return false;
+    const tEnclosure = document.getElementById('toggle-enclosure');
+    return tEnclosure ? tEnclosure.checked : true;
+  }
+
+  function syncAllLayerVisibilities() {
+    if (isScalarWaveContrastActive) {
+      if (geometryGroup) geometryGroup.visible = false;
+      if (annotationGroup) annotationGroup.visible = false;
+      if (fieldGroup) fieldGroup.visible = false;
+      if (forceGroup) forceGroup.visible = false;
+      if (enclosureGroup) enclosureGroup.visible = false;
+    } else {
+      if (geometryGroup) geometryGroup.visible = shouldShowGeometry();
+      if (annotationGroup) annotationGroup.visible = shouldShowGeometry();
+      if (fieldGroup) fieldGroup.visible = shouldShowFieldLines();
+      if (forceGroup) forceGroup.visible = shouldShowForces();
+      if (enclosureGroup) enclosureGroup.visible = shouldShowEnclosure();
+    }
+  }
 
   // Parameters
   let currentVoltageKV = 20.0;
@@ -158,6 +415,10 @@
   let currentGapMM = 25.0;
 
   // Tour Steps with clean HTML math
+    let currentChapterIndex = 0;
+  let isExploringFreely = false;
+  let isAnimationPaused = false;
+  let isLearningPanelOpen = true;
   let tourCurrentStep = 0;
   const tourSteps = [
     {
@@ -199,7 +460,7 @@
         <p><strong>Testing for Real Propellantless Thrust:</strong> To prove whether net propulsion exists, we must measure the <em>entire isolated test article</em> on a micro-Newton torsion pendulum in high vacuum (&lt; 10<sup>-5</sup> Torr).</p>
         <p><strong>Crucial Null Controls:</strong></p>
         <ul>
-          <li>Eliminate corona ion wind and air convection via deep vacuum.</li>
+          <li>Suppress and test for corona ion wind and air convection via deep vacuum.</li>
           <li>Invert voltage polarity: electrostatic force is symmetric (<i>V</i><sup>2</sup>), while discharge or leakage drifts asymmetrically.</li>
           <li>Sweep chamber wall distance to isolate image-charge coupling.</li>
         </ul>
@@ -227,6 +488,7 @@
     populateUI();
     updateUIState();
     setupEventListeners();
+    renderChapter(0);
     animate();
 
     // Hide loading screen
@@ -315,6 +577,11 @@
     scene.add(forceGroup);
     scene.add(enclosureGroup);
 
+    scalarWaveGroup = new THREE.Group();
+    scalarWaveGroup.userData = { isScalarWaveGroup: true };
+    scalarWaveGroup.visible = false;
+    scene.add(scalarWaveGroup);
+
     // Expose test hooks for automated browser smoke testing
     window.__explorer = {
       scene: scene,
@@ -325,6 +592,14 @@
       fieldGroup: fieldGroup,
       forceGroup: forceGroup,
       enclosureGroup: enclosureGroup,
+      scalarWaveGroup: scalarWaveGroup,
+      toggleScalarWaveContrast: toggleScalarWaveContrast,
+      isScalarWaveContrastActive: () => isScalarWaveContrastActive,
+      syncAllLayerVisibilities: syncAllLayerVisibilities,
+      shouldShowFieldLines: shouldShowFieldLines,
+      shouldShowGeometry: shouldShowGeometry,
+      shouldShowForces: shouldShowForces,
+      shouldShowEnclosure: shouldShowEnclosure,
       getPickableObjects: () => pickableObjects,
       getPickedObject: getPickedObject,
       getComponentScreenCoords: getComponentScreenCoords,
@@ -468,6 +743,7 @@
     updateFieldLines();
     updateForceVectors();
     updateGapIndicator();
+    createScalarWaveVisual();
   }
 
   // --- Helper: Tapered Blade Wedge Geometry ---
@@ -527,6 +803,12 @@
   // - Convention: E = -grad Phi points from Ground (0 V, high potential) to Blade (-V, low potential)
   // - When V = 0: fieldGroup is completely hidden and lines have 0 opacity
   function updateFieldLines() {
+    // V0.2-R5 / R4-F1: Do not destructively dispose live streamlines during scalar wave view.
+    if (isScalarWaveContrastActive) {
+      fieldGroup.visible = false;
+      return;
+    }
+
     while (fieldGroup.children.length > 0) {
       const obj = fieldGroup.children[0];
       fieldGroup.remove(obj);
@@ -538,7 +820,7 @@
       return;
     }
 
-    fieldGroup.visible = document.getElementById('toggle-fields').checked;
+    fieldGroup.visible = shouldShowFieldLines();
 
     const voltageRatio = currentVoltageKV / 20.0;
     const opacity = Math.min(0.9, 0.35 + voltageRatio * 0.45);
@@ -637,6 +919,12 @@
   //   * Scales from 16.0 mm to 30.0 mm at 50 kV (stays strictly within 80 mm chamber).
   // - Fully disposes nested geometries and materials before rebuild.
   function updateForceVectors() {
+    // V0.2-R5 / R4-F1: Do not destructively dispose live force vectors during scalar wave view.
+    if (isScalarWaveContrastActive) {
+      forceGroup.visible = false;
+      return;
+    }
+
     while (forceGroup.children.length > 0) {
       const obj = forceGroup.children[0];
       forceGroup.remove(obj);
@@ -648,7 +936,7 @@
       return;
     }
 
-    forceGroup.visible = document.getElementById('toggle-forces').checked;
+    forceGroup.visible = shouldShowForces();
 
     // V0-R3-M4: Bounded legibility encoding for schematic vectors
     const ARROW_MIN_LEN = 6.0;   // Clean legibility minimum for nonzero V
@@ -765,6 +1053,157 @@
       dirZ: normDir.z
     };
     return group;
+  }
+
+  // --- Mathematical Scalar Wave 3D Contrast Visualizer ---
+  // Remediated for V0.2-R1-M4, V0.2-R2-M2, V0.2-R4 (R3-F1 & R3-M2):
+  // - Displays concentric undulating scalar wavefront shells in an isolated abstract reference space
+  // - Mathematical toy visualization of ∇²ψ - (1/c²)∂²t ψ = 0 (from wave_3d.ipynb)
+  // - Strictly qualified: NOT coupled to capacitor thrust; does not depict propellantless propulsion
+  // - Centered at world origin (0, 0, 0) with distinct abstract coordinate axes; physical capacitor is hidden
+  function createScalarWaveVisual() {
+    while (scalarWaveGroup.children.length > 0) {
+      const obj = scalarWaveGroup.children[0];
+      scalarWaveGroup.remove(obj);
+      disposeHierarchy(obj);
+    }
+    scalarWaveShells = [];
+
+    const shellCount = 6;
+    const baseRadius = 10;
+    const radiusStep = 8;
+    const maxRadius = baseRadius + (shellCount - 1) * radiusStep;
+    const centerPos = new THREE.Vector3(0, 0, 0); // Abstract reference space origin
+
+    // Abstract reference frame / coordinate ring indicator
+    // Demonstrates that this scene represents an abstract mathematical space, isolated from the physical capacitor
+    const ringGeom = new THREE.RingGeometry(baseRadius - 2, maxRadius + 2, 64);
+    const ringMat = new THREE.MeshBasicMaterial({
+      color: 0x6366f1,
+      wireframe: true,
+      transparent: true,
+      opacity: 0.15,
+      side: THREE.DoubleSide
+    });
+    const ringMesh = new THREE.Mesh(ringGeom, ringMat);
+    ringMesh.rotation.x = Math.PI / 2;
+    ringMesh.position.copy(centerPos);
+    scalarWaveGroup.add(ringMesh);
+
+    const axesHelper = new THREE.AxesHelper(maxRadius);
+    scalarWaveGroup.add(axesHelper);
+
+    for (let i = 0; i < shellCount; i++) {
+      const r = baseRadius + i * radiusStep;
+      const geom = new THREE.SphereGeometry(r, 24, 16);
+      const mat = new THREE.MeshBasicMaterial({
+        color: (i % 2 === 0) ? 0xc084fc : 0x818cf8, // Alternating magenta/indigo phase bands
+        wireframe: true,
+        transparent: true,
+        opacity: 0.35,
+        side: THREE.DoubleSide
+      });
+      const mesh = new THREE.Mesh(geom, mat);
+      mesh.position.copy(centerPos);
+      mesh.userData = {
+        baseRadius: r,
+        phaseOffset: i * (Math.PI / 3),
+        isScalarWaveShell: true
+      };
+      scalarWaveGroup.add(mesh);
+      scalarWaveShells.push(mesh);
+    }
+  }
+
+  function updateScalarWaveAnimation(timeSec) {
+    if (!scalarWaveGroup || !scalarWaveGroup.visible) return;
+    const omega = 3.0; // Wave angular frequency
+    const k = 0.25;    // Wave number
+    for (let i = 0; i < scalarWaveShells.length; i++) {
+      const shell = scalarWaveShells[i];
+      const phase = timeSec * omega - shell.userData.baseRadius * k;
+      const waveVal = Math.sin(phase);
+      const scale = 1.0 + 0.08 * waveVal;
+      shell.scale.set(scale, scale, scale);
+      if (shell.material) {
+        shell.material.opacity = Math.max(0.12, 0.40 + 0.25 * waveVal);
+      }
+    }
+  }
+
+  function syncWaveContrastUI() {
+    if (scalarWaveGroup) {
+      scalarWaveGroup.visible = isScalarWaveContrastActive;
+    }
+
+    const waveBadge = document.getElementById('scalar-wave-badge');
+    if (waveBadge) {
+      waveBadge.classList.toggle('hidden', !isScalarWaveContrastActive);
+    }
+
+    const contrastBtn = document.getElementById('btn-toggle-wave-contrast');
+    if (contrastBtn) {
+      contrastBtn.innerHTML = isScalarWaveContrastActive
+        ? "⚡ Switch Back to Electrostatic Vector Field (Streamlines)"
+        : "🌊 Switch to Mathematical Scalar Wave Toy View";
+      contrastBtn.setAttribute('aria-pressed', isScalarWaveContrastActive ? 'true' : 'false');
+    }
+  }
+
+  function toggleScalarWaveContrast(forceState) {
+    if (typeof forceState === 'boolean') {
+      isScalarWaveContrastActive = forceState;
+    } else {
+      isScalarWaveContrastActive = !isScalarWaveContrastActive;
+    }
+
+    // V0.2-R5 / R4-F1: When leaving wave mode, unconditionally rebuild field lines,
+    // force vectors, and gap indicator so any parameter adjustments during wave mode
+    // (voltage slider, gap slider) are cleanly and accurately populated in 3D geometry.
+    if (!isScalarWaveContrastActive) {
+      updateFieldLines();
+      updateForceVectors();
+      updateGapIndicator();
+    }
+
+    // Mutually exclusive view & visual scene isolation (V0.2-R4 / R3-F1 & R3-M2):
+    // When scalar wave toy view is active:
+    // - Hide physical capacitor electrode geometry (geometryGroup.visible = false, annotationGroup.visible = false)
+    // - Hide conventional electrostatic field streamlines (fieldGroup.visible = false)
+    // - Hide mechanical forces and enclosure (forceGroup.visible = false, enclosureGroup.visible = false)
+    // When scalar wave view is deactivated:
+    // - Restore all scene groups according to authoritative predicates (checkboxes, active chapter, voltage)
+    syncAllLayerVisibilities();
+    syncWaveContrastUI();
+  }
+
+  function cleanMathHtml(str) {
+    if (!str || typeof str !== 'string') return '';
+    return str
+      .replace(/\\\(/g, '<span class="math-formula">')
+      .replace(/\\\)/g, '</span>')
+      .replace(/\\mathbf\{([A-Za-z]+)\}/g, '<b>$1</b>')
+      .replace(/\\nabla/g, '&nabla;')
+      .replace(/\\Phi/g, '&Phi;')
+      .replace(/\\psi/g, '&psi;')
+      .replace(/\\varepsilon_0/g, '&epsilon;<sub>0</sub>')
+      .replace(/\\varepsilon_r/g, '&epsilon;<sub>r</sub>')
+      .replace(/\\delta_\{([a-z0-9]+)\}/g, '&delta;<sub>$1</sub>')
+      .replace(/\\oint_\{([^}]+)\}/g, '&conint;<sub>$1</sub>')
+      .replace(/\\int_\{([^}]+)\}/g, '&int;<sub>$1</sub>')
+      .replace(/\\sum/g, '&sum;')
+      .replace(/\\hat\{\\mathbf\{([a-z]+)\}\}/g, '<b>$1̂</b>')
+      .replace(/\\cdot/g, '&middot;')
+      .replace(/\\Box/g, '&Square;')
+      .replace(/\\approx/g, '&asymp;')
+      .replace(/\\propto/g, '&prop;')
+      .replace(/\\pm/g, '&plusmn;')
+      .replace(/\\mu/g, '&mu;')
+      .replace(/\\times/g, '&times;')
+      .replace(/\\partial_\{([^}]+)\}/g, '&part;<sub>$1</sub>')
+      .replace(/\\partial/g, '&part;')
+      .replace(/_\{([^}]+)\}/g, '<sub>$1</sub>')
+      .replace(/\^\{([^}]+)\}/g, '<sup>$1</sup>');
   }
 
   // --- Populate UI from Provenance Data ---
@@ -1040,6 +1479,36 @@
     });
   }
 
+  // --- Mobile Panel Tab Switching (Guide vs Controls) ---
+  function switchMobileTab(tab) {
+    const mobileTabGuide = document.getElementById('mobile-tab-guide');
+    const mobileTabControls = document.getElementById('mobile-tab-controls');
+    const appLayout = document.getElementById('app-layout') || document.querySelector('.app-layout');
+    if (!appLayout) return;
+
+    if (tab === 'controls') {
+      appLayout.classList.add('mobile-show-controls');
+      if (mobileTabControls) {
+        mobileTabControls.classList.add('active');
+        mobileTabControls.setAttribute('aria-selected', 'true');
+      }
+      if (mobileTabGuide) {
+        mobileTabGuide.classList.remove('active');
+        mobileTabGuide.setAttribute('aria-selected', 'false');
+      }
+    } else {
+      appLayout.classList.remove('mobile-show-controls');
+      if (mobileTabGuide) {
+        mobileTabGuide.classList.add('active');
+        mobileTabGuide.setAttribute('aria-selected', 'true');
+      }
+      if (mobileTabControls) {
+        mobileTabControls.classList.remove('active');
+        mobileTabControls.setAttribute('aria-selected', 'false');
+      }
+    }
+  }
+
   // --- Camera View Presets ---
   function setViewPreset(preset, instant = false) {
     const dist = 140;
@@ -1161,69 +1630,325 @@
     }
   }
 
-  // --- Tour Functions ---
-  function openTour(stepIndex = 0) {
-    tourCurrentStep = stepIndex;
-    const modal = document.getElementById('tour-modal');
-    if (modal) {
-      modal.classList.remove('hidden');
-      trapFocus(modal);
+  // --- Guided Learning Functions (V0.2 Iceberg Learning Model) ---
+  function renderChapter(index) {
+    const chapters = (provenanceData && provenanceData.six_chapters) ? provenanceData.six_chapters : DEFAULT_PROVENANCE_DATA.six_chapters;
+    if (!chapters || chapters.length === 0) return;
+    if (index < 0) index = 0;
+    if (index >= chapters.length) index = chapters.length - 1;
+    currentChapterIndex = index;
+    isExploringFreely = false;
+
+    const chapter = chapters[currentChapterIndex];
+    if (!chapter) return;
+
+    // Header counters & titles
+    const stepCountEl = document.getElementById('guide-step-count');
+    if (stepCountEl) stepCountEl.textContent = `Chapter ${currentChapterIndex + 1} of ${chapters.length}`;
+    const legacyStepCount = document.getElementById('tour-step-count');
+    if (legacyStepCount) legacyStepCount.textContent = `Step ${currentChapterIndex + 1} of ${chapters.length}`;
+
+    const titleEl = document.getElementById('guide-chapter-title');
+    if (titleEl) titleEl.textContent = `${chapter.chapter}. ${chapter.title}`;
+    const legacyTitle = document.getElementById('tour-step-title');
+    if (legacyTitle) legacyTitle.textContent = `${chapter.chapter}. ${chapter.title}`;
+
+    // Update Stepper Buttons
+    document.querySelectorAll('.chapter-step-btn').forEach((btn, idx) => {
+      btn.classList.toggle('active', idx === currentChapterIndex);
+      btn.setAttribute('aria-selected', idx === currentChapterIndex ? 'true' : 'false');
+    });
+
+    // Render Iceberg Progressive Disclosure Body
+    const guideBody = document.getElementById('guide-body');
+    if (guideBody) {
+      guideBody.innerHTML = `
+        <article class="iceberg-card iceberg-surface" aria-labelledby="heading-surface-${currentChapterIndex}">
+          <span class="iceberg-surface-badge">Surface &bull; Watch the 3D Scene</span>
+          <div id="heading-surface-${currentChapterIndex}">${chapter.surface}</div>
+        </article>
+
+        <article class="iceberg-card iceberg-shallow" aria-labelledby="heading-shallow-${currentChapterIndex}">
+          <span class="iceberg-shallow-badge">Shallow Depth &bull; Plain English &amp; Analogy</span>
+          <div id="heading-shallow-${currentChapterIndex}">${chapter.shallow}</div>
+        </article>
+
+        <details class="iceberg-disclosure iceberg-deeper">
+          <summary class="iceberg-summary">
+            <span class="iceberg-icon">🔍</span>
+            <strong>Deeper: Equations &amp; Definitions</strong>
+          </summary>
+          <div class="iceberg-content">
+            <p><strong>Governing Equations:</strong><br>${cleanMathHtml(chapter.deeper.equations)}</p>
+            <p><strong>Physical Specifications &amp; Materials:</strong><br>${cleanMathHtml(chapter.deeper.specifications)}</p>
+            <p><strong>Primary Citations:</strong><br>${chapter.deeper.citations}</p>
+          </div>
+        </details>
+
+        <details class="iceberg-disclosure iceberg-research">
+          <summary class="iceberg-summary">
+            <span class="iceberg-icon">🔬</span>
+            <strong>Research Depth: Rival Hypotheses &amp; Controls</strong>
+          </summary>
+          <div class="iceberg-content">
+            <p><strong>Hypothesis Tested:</strong><br>${chapter.research.hypotheses}</p>
+            <p><strong>Physical Confounders &amp; Uncertainty:</strong><br>${chapter.research.uncertainties}</p>
+            <p><strong>Discriminating Null Controls:</strong><br>${chapter.research.controls}</p>
+          </div>
+        </details>
+      `;
     }
-    renderTourStep();
-  }
 
-  function closeTour() {
-    const modal = document.getElementById('tour-modal');
-    if (modal) {
-      modal.classList.add('hidden');
-      releaseFocus();
+    const legacyBody = document.getElementById('tour-step-body');
+    if (legacyBody) {
+      legacyBody.innerHTML = chapter.surface + "<br><br>" + chapter.shallow.replace(/id=['"][^'"]*['"]/g, '');
     }
-  }
 
-  function renderTourStep() {
-    const step = tourSteps[tourCurrentStep];
-    if (!step) return;
+    // Update Nonblocking Scene-Synchronized Annotation Card
+    const annotationCard = document.getElementById('scene-annotation-card');
+    const annotationText = document.getElementById('annotation-text');
+    if (annotationText && chapter.annotation) {
+      annotationText.textContent = chapter.annotation;
+      if (annotationCard) annotationCard.classList.remove('hidden');
+    }
 
-    document.getElementById('tour-step-count').textContent = `Step ${tourCurrentStep + 1} of ${tourSteps.length}`;
-    document.getElementById('tour-step-title').textContent = step.title;
-    document.getElementById('tour-step-body').innerHTML = step.body;
+    // Update Navigation Buttons
+    const prevBtn = document.getElementById('guide-btn-prev');
+    const nextBtn = document.getElementById('guide-btn-next');
+    if (prevBtn) prevBtn.disabled = (currentChapterIndex === 0);
+    if (nextBtn) {
+      nextBtn.textContent = (currentChapterIndex === chapters.length - 1) ? 'Finish Tour' : 'Next ▶';
+    }
 
-    const dots = document.querySelectorAll('.tour-dots .dot');
-    dots.forEach((dot, idx) => dot.classList.toggle('active', idx === tourCurrentStep));
+    const freeBtn = document.getElementById('guide-btn-free');
+    if (freeBtn) freeBtn.textContent = "🔍 Explore Freely";
 
-    const prevBtn = document.getElementById('tour-btn-prev');
-    const nextBtn = document.getElementById('tour-btn-next');
-    prevBtn.disabled = tourCurrentStep === 0;
-    nextBtn.textContent = tourCurrentStep === tourSteps.length - 1 ? 'Finish Tour' : 'Next';
+    // Scene Synchronization:
+    // Auto-reset wave contrast if user leaves chapter 5 (V0.2-R4 / R3-F1)
+    if (chapter.chapter !== 5 && isScalarWaveContrastActive) {
+      toggleScalarWaveContrast(false);
+    }
 
-    if (step.cameraPos && step.target) {
+    // A. Camera Smooth Animation
+    if (chapter.camera && chapter.target) {
       animateCameraTo(
-        new THREE.Vector3(step.cameraPos.x, step.cameraPos.y, step.cameraPos.z),
-        new THREE.Vector3(step.target.x, step.target.y, step.target.z),
+        new THREE.Vector3(chapter.camera.x, chapter.camera.y, chapter.camera.z),
+        new THREE.Vector3(chapter.target.x, chapter.target.y, chapter.target.z),
         600
       );
     }
 
-    if (step.highlight) {
-      selectComponent(step.highlight);
+    // B. Layers Synchronization
+    if (chapter.layers) {
+      const tGeom = document.getElementById('toggle-geometry');
+      const tFields = document.getElementById('toggle-fields');
+      const tForces = document.getElementById('toggle-forces');
+      const tEnclosure = document.getElementById('toggle-enclosure');
+
+      if (tGeom) tGeom.checked = chapter.layers.geometry;
+      if (tFields) tFields.checked = chapter.layers.field;
+      if (tForces) tForces.checked = chapter.layers.forces;
+      if (tEnclosure) tEnclosure.checked = chapter.layers.chamber;
+
+      syncAllLayerVisibilities();
     }
+
+    // C. Voltage Synchronization
+    if (typeof chapter.voltage_kv === 'number') {
+      const sliderVoltage = document.getElementById('slider-voltage');
+      const valVoltage = document.getElementById('val-voltage');
+      if (sliderVoltage && currentVoltageKV !== chapter.voltage_kv) {
+        currentVoltageKV = chapter.voltage_kv;
+        sliderVoltage.value = chapter.voltage_kv;
+        if (valVoltage) {
+          valVoltage.textContent = currentVoltageKV > 0 ? `-${currentVoltageKV.toFixed(1)} kV` : "0.0 kV (OFF)";
+        }
+        updateFieldLines();
+        updateForceVectors();
+        updateUIState();
+      }
+    }
+
+    // D. Component Highlighting
+    if (chapter.highlight_component) {
+      selectComponent(chapter.highlight_component);
+    }
+
+    // E. Tab Synchronization for Chapter 4 (Ledger)
+    if (chapter.chapter === 4) {
+      switchTab('tab-ledger');
+    }
+
+    // F. Wire Interactive Buttons inside chapter content (V0.2-R1-M3 & M4)
+    const btnOpenLedger = document.getElementById('btn-chapter4-open-ledger');
+    if (btnOpenLedger) {
+      btnOpenLedger.onclick = function() {
+        switchMobileTab('controls');
+        switchTab('tab-ledger');
+        const ledgerCard = document.getElementById('force-ledger-card');
+        if (ledgerCard) {
+          ledgerCard.scrollIntoView({ behavior: 'smooth', block: 'start' });
+          ledgerCard.classList.add('ledger-highlight');
+          setTimeout(() => ledgerCard.classList.remove('ledger-highlight'), 1600);
+        }
+      };
+    }
+
+    const btnWaveContrast = document.getElementById('btn-toggle-wave-contrast');
+    if (btnWaveContrast) {
+      btnWaveContrast.onclick = function() {
+        toggleScalarWaveContrast();
+      };
+    }
+    // V0.2-R6 / R5-M1: Synchronize recreated Chapter 5 wave-toggle button & badge with active state
+    syncWaveContrastUI();
+  }
+
+  function nextChapter() {
+    const chapters = (provenanceData && provenanceData.six_chapters) ? provenanceData.six_chapters : DEFAULT_PROVENANCE_DATA.six_chapters;
+    if (!chapters) return;
+    if (currentChapterIndex < chapters.length - 1) {
+      renderChapter(currentChapterIndex + 1);
+    } else {
+      toggleExploreFreely(true);
+      showBanner("Learning journey complete! Explore the sandbox or reset to review.");
+    }
+  }
+
+  function prevChapter() {
+    if (currentChapterIndex > 0) {
+      renderChapter(currentChapterIndex - 1);
+    }
+  }
+
+  function goToChapter(index) {
+    renderChapter(index);
+  }
+
+  function toggleExploreFreely(forceFree) {
+    isExploringFreely = (forceFree !== undefined) ? forceFree : !isExploringFreely;
+    const guideBody = document.getElementById('guide-body');
+    const freeBtn = document.getElementById('guide-btn-free');
+
+    if (isExploringFreely) {
+      // V0.2-R6 / R5-M1: Exit abstract scalar wave view on entering Free Exploration
+      // so physical geometry and sandbox layer/parameter controls are immediately usable.
+      if (isScalarWaveContrastActive) {
+        toggleScalarWaveContrast(false);
+      }
+      if (guideBody) {
+        guideBody.innerHTML = `
+          <div class="iceberg-card iceberg-surface">
+            <span class="iceberg-surface-badge">Sandbox &bull; Free Exploration</span>
+            <p><strong>You are exploring freely!</strong></p>
+            <p>Interact with the 3D model, change applied voltage (0–50 kV), adjust dielectric permittivity (&epsilon;<sub>r</sub>), modify gap spacing, or inspect components.</p>
+            <button id="btn-resume-guide" class="btn btn-primary" style="margin-top:0.75rem;">
+              ◀ Return to Chapter ${currentChapterIndex + 1}
+            </button>
+          </div>
+        `;
+        const resumeBtn = document.getElementById('btn-resume-guide');
+        if (resumeBtn) {
+          resumeBtn.addEventListener('click', () => {
+            renderChapter(currentChapterIndex);
+          });
+        }
+      }
+      if (freeBtn) freeBtn.textContent = "📖 Return to Guide";
+      showBanner("Free Exploration active — use sliders, layers, and camera freely.");
+    } else {
+      if (freeBtn) freeBtn.textContent = "🔍 Explore Freely";
+      renderChapter(currentChapterIndex);
+    }
+  }
+
+  function toggleAnimationPause() {
+    isAnimationPaused = !isAnimationPaused;
+    const pauseIcon = document.getElementById('pause-icon');
+    const pauseText = document.getElementById('pause-text');
+    if (pauseIcon && pauseText) {
+      pauseIcon.textContent = isAnimationPaused ? "▶️" : "⏸️";
+      pauseText.textContent = isAnimationPaused ? "Resume" : "Pause";
+    }
+    showBanner(isAnimationPaused ? "Streamline animation paused." : "Streamline animation resumed.");
+  }
+
+  function resetTour() {
+    currentChapterIndex = 0;
+    isExploringFreely = false;
+    isAnimationPaused = false;
+    const pauseIcon = document.getElementById('pause-icon');
+    const pauseText = document.getElementById('pause-text');
+    if (pauseIcon && pauseText) {
+      pauseIcon.textContent = "⏸️";
+      pauseText.textContent = "Pause";
+    }
+    const sliderVoltage = document.getElementById('slider-voltage');
+    if (sliderVoltage) {
+      sliderVoltage.value = 20;
+      sliderVoltage.dispatchEvent(new Event('input'));
+    }
+    setViewPreset('isometric');
+    renderChapter(0);
+    showBanner("Guided tour reset to Chapter 1.");
+  }
+
+  function toggleLearningPanel(forceState) {
+    const layout = document.getElementById('app-layout') || document.querySelector('.app-layout');
+    if (!layout) return;
+    const isCurrentlyCollapsed = layout.classList.contains('guide-collapsed');
+    const willCollapse = (forceState !== undefined) ? !forceState : !isCurrentlyCollapsed;
+
+    layout.classList.toggle('guide-collapsed', willCollapse);
+    const btnToggle = document.getElementById('btn-toggle-guide');
+    const btnHud = document.getElementById('btn-hud-guide');
+    if (btnToggle) btnToggle.setAttribute('aria-pressed', (!willCollapse).toString());
+    if (btnHud) {
+      btnHud.classList.toggle('active', !willCollapse);
+      btnHud.setAttribute('aria-pressed', (!willCollapse).toString());
+    }
+    showBanner(willCollapse ? "Learning panel closed." : "Learning panel opened.");
+    setTimeout(onWindowResize, 280);
+  }
+
+  function toggleSidebar(forceState) {
+    const layout = document.getElementById('app-layout') || document.querySelector('.app-layout');
+    if (!layout) return;
+    const isCurrentlyCollapsed = layout.classList.contains('sidebar-collapsed');
+    const willCollapse = (forceState !== undefined) ? !forceState : !isCurrentlyCollapsed;
+
+    layout.classList.toggle('sidebar-collapsed', willCollapse);
+    const btnToggle = document.getElementById('btn-toggle-controls');
+    const btnHud = document.getElementById('btn-toggle-sidebar');
+    if (btnToggle) btnToggle.setAttribute('aria-pressed', (!willCollapse).toString());
+    if (btnHud) {
+      btnHud.classList.toggle('active', !willCollapse);
+      btnHud.setAttribute('aria-pressed', willCollapse ? 'true' : 'false');
+    }
+    showBanner(willCollapse ? "Controls panel collapsed." : "Controls panel expanded.");
+    setTimeout(onWindowResize, 280);
+  }
+
+  // Legacy compatibility helpers
+  function openTour(stepIndex = 0) {
+    toggleLearningPanel(true);
+    renderChapter(stepIndex);
+  }
+
+  function closeTour() {
+    toggleLearningPanel(false);
+  }
+
+  function renderTourStep() {
+    renderChapter(currentChapterIndex);
   }
 
   function nextTourStep() {
-    if (tourCurrentStep < tourSteps.length - 1) {
-      tourCurrentStep++;
-      renderTourStep();
-    } else {
-      closeTour();
-      showBanner("Tour complete! Explore the layers and What-If sandbox controls.");
-    }
+    nextChapter();
   }
 
   function prevTourStep() {
-    if (tourCurrentStep > 0) {
-      tourCurrentStep--;
-      renderTourStep();
-    }
+    prevChapter();
   }
 
   // --- Event Listeners Setup ---
@@ -1260,18 +1985,49 @@
       });
     }
 
-    // Sidebar Toggle
+    // Sidebar & Guide Panel Toggles
     const btnToggleSidebar = document.getElementById('btn-toggle-sidebar');
     if (btnToggleSidebar) {
-      btnToggleSidebar.addEventListener('click', () => {
-        const layout = document.querySelector('.app-layout');
-        const isCollapsed = layout.classList.toggle('sidebar-collapsed');
-        btnToggleSidebar.classList.toggle('active', isCollapsed);
-        btnToggleSidebar.setAttribute('aria-pressed', isCollapsed ? 'true' : 'false');
-        showBanner(isCollapsed ? "Sidebar collapsed — full-screen laboratory mode." : "Sidebar expanded.");
-        setTimeout(onWindowResize, 280);
-      });
+      btnToggleSidebar.addEventListener('click', () => toggleSidebar());
     }
+    const btnToggleControls = document.getElementById('btn-toggle-controls');
+    if (btnToggleControls) {
+      btnToggleControls.addEventListener('click', () => toggleSidebar());
+    }
+    const btnToggleGuide = document.getElementById('btn-toggle-guide');
+    if (btnToggleGuide) {
+      btnToggleGuide.addEventListener('click', () => toggleLearningPanel());
+    }
+    const btnHudGuide = document.getElementById('btn-hud-guide');
+    if (btnHudGuide) {
+      btnHudGuide.addEventListener('click', () => toggleLearningPanel());
+    }
+
+    // Guided Learning Navigation Buttons
+    const guideBtnPrev = document.getElementById('guide-btn-prev');
+    if (guideBtnPrev) guideBtnPrev.addEventListener('click', prevChapter);
+    const guideBtnNext = document.getElementById('guide-btn-next');
+    if (guideBtnNext) guideBtnNext.addEventListener('click', nextChapter);
+    const guideBtnPause = document.getElementById('guide-btn-pause');
+    if (guideBtnPause) guideBtnPause.addEventListener('click', toggleAnimationPause);
+    const guideBtnFree = document.getElementById('guide-btn-free');
+    if (guideBtnFree) guideBtnFree.addEventListener('click', () => toggleExploreFreely());
+    const guideBtnReset = document.getElementById('guide-btn-reset');
+    if (guideBtnReset) guideBtnReset.addEventListener('click', resetTour);
+
+    // Chapter Stepper Buttons (Quick Jump)
+    document.querySelectorAll('.chapter-step-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const ch = parseInt(btn.dataset.chapter ?? btn.dataset.index, 10);
+        if (!isNaN(ch)) goToChapter(ch);
+      });
+    });
+
+    // Mobile Panel Tabs (Guided Tour vs Controls & Inspector)
+    const mobileTabGuide = document.getElementById('mobile-tab-guide');
+    const mobileTabControls = document.getElementById('mobile-tab-controls');
+    if (mobileTabGuide) mobileTabGuide.addEventListener('click', () => switchMobileTab('guide'));
+    if (mobileTabControls) mobileTabControls.addEventListener('click', () => switchMobileTab('controls'));
 
     // Component Chip Bar Buttons (Quick-Select)
     document.querySelectorAll('.chip-btn').forEach(btn => {
@@ -1281,16 +2037,23 @@
     });
 
     // Reset View Button
-    document.getElementById('btn-reset-view').addEventListener('click', () => {
-      setViewPreset('isometric');
-      showBanner("Camera reset to default isometric view.");
-    });
+    const btnResetView = document.getElementById('btn-reset-view');
+    if (btnResetView) {
+      btnResetView.addEventListener('click', () => {
+        setViewPreset('isometric');
+        showBanner("Camera reset to default isometric view.");
+      });
+    }
 
-    // Tour Buttons
-    document.getElementById('btn-start-tour').addEventListener('click', () => openTour(0));
-    document.getElementById('tour-btn-close').addEventListener('click', closeTour);
-    document.getElementById('tour-btn-next').addEventListener('click', nextTourStep);
-    document.getElementById('tour-btn-prev').addEventListener('click', prevTourStep);
+    // Tour Buttons (Legacy & Backward Compatibility)
+    const btnStartTour = document.getElementById('btn-start-tour');
+    if (btnStartTour) btnStartTour.addEventListener('click', () => openTour(0));
+    const btnTourClose = document.getElementById('tour-btn-close');
+    if (btnTourClose) btnTourClose.addEventListener('click', closeTour);
+    const btnTourNext = document.getElementById('tour-btn-next');
+    if (btnTourNext) btnTourNext.addEventListener('click', nextTourStep);
+    const btnTourPrev = document.getElementById('tour-btn-prev');
+    if (btnTourPrev) btnTourPrev.addEventListener('click', prevTourStep);
 
     // Help Modal
     const helpModal = document.getElementById('help-modal');
@@ -1303,28 +2066,36 @@
       releaseFocus();
     });
 
+    // Return to Guide button from Ledger (V0.2-R1-M3)
+    const btnLedgerBack = document.getElementById('btn-ledger-back-to-guide');
+    if (btnLedgerBack) {
+      btnLedgerBack.addEventListener('click', () => {
+        switchMobileTab('guide');
+        const learningPanel = document.getElementById('learning-panel');
+        if (learningPanel) {
+          learningPanel.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }
+      });
+    }
+
     // Sidebar Tab Switching
     document.querySelectorAll('.sidebar-tabs .tab-btn').forEach(btn => {
       btn.addEventListener('click', () => switchTab(btn.dataset.tab));
     });
 
-    // Layer Toggles
-    document.getElementById('toggle-geometry').addEventListener('change', (e) => {
-      geometryGroup.visible = e.target.checked;
-      if (annotationGroup) annotationGroup.visible = e.target.checked;
+    // Layer Toggles (V0.2-R4 / R3-F1: authoritative predicates prevent re-enabling during wave mode)
+    document.getElementById('toggle-geometry').addEventListener('change', () => {
+      geometryGroup.visible = shouldShowGeometry();
+      if (annotationGroup) annotationGroup.visible = shouldShowGeometry();
     });
-    document.getElementById('toggle-fields').addEventListener('change', (e) => {
-      if (currentVoltageKV > 0) {
-        fieldGroup.visible = e.target.checked;
-      }
+    document.getElementById('toggle-fields').addEventListener('change', () => {
+      fieldGroup.visible = shouldShowFieldLines();
     });
-    document.getElementById('toggle-forces').addEventListener('change', (e) => {
-      if (currentVoltageKV > 0) {
-        forceGroup.visible = e.target.checked;
-      }
+    document.getElementById('toggle-forces').addEventListener('change', () => {
+      forceGroup.visible = shouldShowForces();
     });
-    document.getElementById('toggle-enclosure').addEventListener('change', (e) => {
-      enclosureGroup.visible = e.target.checked;
+    document.getElementById('toggle-enclosure').addEventListener('change', () => {
+      enclosureGroup.visible = shouldShowEnclosure();
     });
     document.getElementById('toggle-wireframe').addEventListener('change', (e) => {
       const isWire = e.target.checked;
@@ -1415,13 +2186,47 @@
         case 'R':
           setViewPreset('isometric');
           break;
+        case 'i':
+        case 'I':
+          setViewPreset('isometric');
+          break;
+        case 'x':
+        case 'X':
+          setViewPreset('side');
+          break;
+        case 'y':
+        case 'Y':
+          setViewPreset('front');
+          break;
+        case 'z':
+        case 'Z':
+          setViewPreset('top');
+          break;
         case 'l':
         case 'L':
           if (btnToggleLabels) btnToggleLabels.click();
           break;
         case 's':
         case 'S':
-          if (btnToggleSidebar) btnToggleSidebar.click();
+          toggleSidebar();
+          break;
+        case 'g':
+        case 'G':
+          toggleLearningPanel();
+          break;
+        case '[':
+          prevChapter();
+          break;
+        case ']':
+          nextChapter();
+          break;
+        case ' ':
+          if (document.activeElement && ['BUTTON', 'INPUT', 'SELECT', 'TEXTAREA'].includes(document.activeElement.tagName)) {
+            // permit default button/form interaction
+          } else {
+            toggleAnimationPause();
+            e.preventDefault();
+          }
           break;
         case '1':
           const tGeom = document.getElementById('toggle-geometry');
@@ -1971,14 +2776,24 @@
   }
 
   // --- Animation Loop ---
+  let animTime = 0;
+  let lastFrameTime = performance.now();
+
   function animate() {
     requestAnimationFrame(animate);
 
     controls.update();
 
+    const now = performance.now();
+    const delta = (now - lastFrameTime) * 0.001;
+    lastFrameTime = now;
+    if (!isAnimationPaused) {
+      animTime += delta;
+    }
+
     // Subtle flux oscillation and traveling pulse particles only when energized (currentVoltageKV > 0)
     if (currentVoltageKV > 0 && fieldGroup && fieldGroup.visible) {
-      const time = performance.now() * 0.0015;
+      const time = animTime * 1.5;
       fieldGroup.children.forEach((child, idx) => {
         if (child.isLine && child.userData.baseOpacity) {
           child.material.opacity = Math.max(0.1, child.userData.baseOpacity + Math.sin(time * 2 + idx) * 0.1);
@@ -2003,6 +2818,11 @@
 
     // Dynamic 3D component labels tracking
     update3DLabels();
+
+    // Update mathematical scalar wave animation if visible (V0.2-R1-M4)
+    if (scalarWaveGroup && scalarWaveGroup.visible) {
+      updateScalarWaveAnimation(animTime);
+    }
 
     renderer.render(scene, camera);
   }
