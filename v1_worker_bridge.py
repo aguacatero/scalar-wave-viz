@@ -41,10 +41,12 @@ from typing import Any, Callable
 SUPPORTED_OS_NAMES = ("posix",)
 SUPPORTED_SYSTEMS = ("Linux", "Darwin")
 SUPPORTED_LOOPBACK_HOSTS = ("127.0.0.1", "localhost")
+WORKER_MODULE_PATH = Path(__file__).resolve()
 
 MAX_HTTP_BODY_BYTES = 8192
 MAX_IPC_REQUEST_BYTES = 16384
 MAX_IPC_RESPONSE_BYTES = 8388608
+MAX_JSON_DEPTH = 64
 
 DEFAULT_TOTAL_READ_DEADLINE_S = 2.0
 DEFAULT_RESPONSE_WRITE_TIMEOUT_S = 2.0
@@ -76,7 +78,7 @@ class HttpRequestError(Exception):
 
 
 class _IpcTimeoutError(TimeoutError):
-    """Raised when IPC startup/write/read exceeds the monotonic deadline."""
+    """Raised when IPC startup/write/read/decode exceeds the monotonic deadline."""
 
 
 class _IpcEofError(EOFError):
@@ -88,7 +90,7 @@ class _IpcProtocolError(ValueError):
 
 
 class _WorkerCancelledError(Exception):
-    """Raised when manager shutdown cancels an in-flight selector wait."""
+    """Raised when manager shutdown cancels an in-flight selector or wait."""
 
 
 def ensure_supported_platform() -> None:
@@ -123,16 +125,46 @@ def _reject_non_finite_constant(token: str) -> Any:
     raise ValueError(f"Non-finite JSON constant is not allowed: {token!r}")
 
 
+def _strict_parse_float(token: str) -> float:
+    val = float(token)
+    if not math.isfinite(val):
+        raise ValueError(f"Overflow or non-finite JSON float literal: {token!r}")
+    return val
+
+
+def _validate_json_depth_and_finiteness(value: Any, *, max_depth: int = MAX_JSON_DEPTH) -> None:
+    """Iteratively validate nesting depth and reject non-finite floats."""
+    stack: list[tuple[Any, int]] = [(value, 1)]
+    while stack:
+        current, depth = stack.pop()
+        if depth > max_depth:
+            raise ValueError(f"JSON nesting depth exceeds limit ({max_depth})")
+        if isinstance(current, float):
+            if not math.isfinite(current):
+                raise ValueError("Non-finite float value is not allowed in JSON")
+        elif isinstance(current, dict):
+            for v in current.values():
+                stack.append((v, depth + 1))
+        elif isinstance(current, list):
+            for item in current:
+                stack.append((item, depth + 1))
+
+
 def strict_json_loads(raw_bytes: bytes) -> dict[str, Any]:
-    """Decode UTF-8 JSON object rejecting duplicate keys and non-finite constants."""
+    """Decode UTF-8 JSON object rejecting duplicate keys, overflow floats, and excessive nesting."""
     text = raw_bytes.decode("utf-8")
-    parsed = json.loads(
-        text,
-        object_pairs_hook=_no_duplicates_object_pairs_hook,
-        parse_constant=_reject_non_finite_constant,
-    )
+    try:
+        parsed = json.loads(
+            text,
+            object_pairs_hook=_no_duplicates_object_pairs_hook,
+            parse_constant=_reject_non_finite_constant,
+            parse_float=_strict_parse_float,
+        )
+    except RecursionError as exc:
+        raise ValueError("JSON nesting depth exceeds parser recursion limit") from exc
     if not isinstance(parsed, dict):
         raise ValueError("JSON request payload must be an object")
+    _validate_json_depth_and_finiteness(parsed, max_depth=MAX_JSON_DEPTH)
     return parsed
 
 
@@ -215,6 +247,7 @@ class _WorkerHandle:
         parent_closed_unused_ends: bool,
     ) -> None:
         self.lock = threading.Lock()
+        self.teardown_exec_lock = threading.Lock()
         self.proc: subprocess.Popen[bytes] | None = proc
         self.pid: int = proc.pid
         self.req_w: int | None = req_w
@@ -222,11 +255,14 @@ class _WorkerHandle:
         self.expected_req_ino = expected_req_ino
         self.expected_resp_ino = expected_resp_ino
         self.parent_closed_unused_ends = parent_closed_unused_ends
+        self.closing: bool = False
+        self.active_io: int = 0
         self.reaped: bool = False
 
     def close_fds(self) -> None:
         """Close parent pipe FDs at most once."""
         with self.lock:
+            self.closing = True
             rw = self.req_w
             rr = self.resp_r
             self.req_w = None
@@ -238,15 +274,21 @@ class _WorkerHandle:
 class _LaunchSlot:
     """Synchronizes bounded asynchronous child launch and late-child ownership."""
 
-    def __init__(self, child_fds: tuple[int, int], parent_fds: tuple[int, int]) -> None:
+    def __init__(self) -> None:
         self.lock = threading.Lock()
         self.done_event = threading.Event()
         self.abandoned: bool = False
-        self.child_fds: tuple[int | None, int | None] = child_fds
-        self.parent_fds: tuple[int | None, int | None] = parent_fds
+        self.child_fds: tuple[int | None, int | None] = (None, None)
+        self.parent_fds: tuple[int | None, int | None] = (None, None)
         self.proc: subprocess.Popen[bytes] | None = None
         self.error: BaseException | None = None
         self.thread: threading.Thread | None = None
+        self.parent_cleanup_claimed: bool = False
+
+    def set_fds(self, child_fds: tuple[int, int], parent_fds: tuple[int, int]) -> None:
+        with self.lock:
+            self.child_fds = child_fds
+            self.parent_fds = parent_fds
 
     def close_child_fds(self) -> None:
         with self.lock:
@@ -274,6 +316,12 @@ class WorkerManager:
         custom_worker_cmd: list[str] | None = None,
         launch_fn: Callable[..., subprocess.Popen[bytes]] | None = None,
         kill_fn: Callable[[subprocess.Popen[bytes]], None] | None = None,
+        clock: Callable[[], float] | None = None,
+        on_before_launch_slot_publish: Callable[[], None] | None = None,
+        on_before_ready_publish: Callable[[_WorkerHandle], None] | None = None,
+        on_before_selector_register: Callable[[_WorkerHandle], None] | None = None,
+        on_after_raw_read: Callable[[bytes], None] | None = None,
+        on_decode_transform: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
     ) -> None:
         ensure_supported_platform()
         if response_deadline_s <= 0 or worker_reap_timeout_s <= 0:
@@ -284,15 +332,25 @@ class WorkerManager:
         self.custom_worker_cmd = custom_worker_cmd
         self._launch_fn = launch_fn
         self._kill_fn = kill_fn
+        self._clock: Callable[[], float] = clock or time.monotonic
+        self._on_before_launch_slot_publish = on_before_launch_slot_publish
+        self._on_before_ready_publish = on_before_ready_publish
+        self._on_before_selector_register = on_before_selector_register
+        self._on_after_raw_read = on_after_raw_read
+        self._on_decode_transform = on_decode_transform
 
         self._admission_lock = threading.Lock()
+        self._state_cond = threading.Condition(self._admission_lock)
         self._worker_poisoned: bool = False
         self._poison_reason: str | None = None
         self._shutting_down: bool = False
         self._compute_in_progress: bool = False
         self._ipc_token_counter: int = 0
+        self._active_selectors: int = 0
 
         self._active_worker: _WorkerHandle | None = None
+        self._pending_handle: _WorkerHandle | None = None
+        self._quarantined_handles: list[_WorkerHandle] = []
         self._active_launch: _LaunchSlot | None = None
         self.spawned_pids: list[int] = []
 
@@ -304,16 +362,33 @@ class WorkerManager:
         os.set_blocking(cw, False)
         self._cancel_r = cr
         self._cancel_w = cw
-        self._shutdown_done = False
+        self._cancel_closed = False
+
+    @property
+    def quarantined_pids(self) -> list[int]:
+        """Return PIDs currently held in quarantine awaiting verified reap."""
+        with self._admission_lock:
+            return [h.pid for h in self._quarantined_handles]
 
     def _wake_cancel_pipe(self) -> None:
-        cw = self._cancel_w
+        with self._admission_lock:
+            cw = None if self._cancel_closed else self._cancel_w
         if cw is None:
             return
         try:
             os.write(cw, b"x")
         except OSError:
             pass
+
+    def _maybe_close_cancel_pipe_locked(self) -> tuple[int | None, int | None]:
+        """Detach cancel pipe descriptors once shutting down AND zero selectors remain active."""
+        if self._shutting_down and self._active_selectors == 0 and not self._cancel_closed:
+            self._cancel_closed = True
+            cr, cw = self._cancel_r, self._cancel_w
+            self._cancel_r = None
+            self._cancel_w = None
+            return cr, cw
+        return None, None
 
     def _next_ipc_token(self) -> int:
         with self._admission_lock:
@@ -324,25 +399,38 @@ class WorkerManager:
         with self._admission_lock:
             self._worker_poisoned = True
             self._poison_reason = reason
+            self._state_cond.notify_all()
 
-    def _kill_and_reap_proc(self, proc: subprocess.Popen[bytes], close_cb: Callable[[], None]) -> bool:
-        """Kill child, join within `worker_reap_timeout_s`, close pipes, verify reaped."""
-        kill_failed = False
+    def _assert_before_deadline(self, deadline: float, msg: str) -> None:
+        if self._clock() >= deadline:
+            raise _IpcTimeoutError(msg)
+
+    def _kill_only_proc(self, proc: subprocess.Popen[bytes]) -> bool:
+        """Issue kill signal at most once if process is still running (without closing pipe FDs)."""
         try:
             if proc.poll() is None:
                 if self._kill_fn is not None:
                     self._kill_fn(proc)
                 else:
                     proc.kill()
-        except OSError:
-            kill_failed = True
+            return True
         except Exception:
-            kill_failed = True
-        finally:
-            close_cb()
+            return proc.poll() is not None
 
-        if kill_failed and proc.poll() is None:
-            return False
+    def _reap_proc_after_kill(
+        self,
+        proc: subprocess.Popen[bytes],
+        close_cb: Callable[[], None] | None = None,
+        *,
+        kill_ok: bool = True,
+    ) -> bool:
+        """Close optional pipe FDs, join child within `worker_reap_timeout_s`, and verify reaped."""
+        try:
+            if not kill_ok and proc.poll() is None:
+                return False
+        finally:
+            if close_cb is not None:
+                close_cb()
 
         try:
             proc.wait(timeout=self.worker_reap_timeout_s)
@@ -353,19 +441,133 @@ class WorkerManager:
 
         return proc.poll() is not None and proc.returncode is not None
 
+    def _kill_and_reap_proc(
+        self,
+        proc: subprocess.Popen[bytes],
+        close_cb: Callable[[], None] | None = None,
+    ) -> bool:
+        """Kill child once, close pipes, join within `worker_reap_timeout_s`, verify reaped."""
+        kill_ok = self._kill_only_proc(proc)
+        return self._reap_proc_after_kill(proc, close_cb, kill_ok=kill_ok)
+
     def _terminate_and_verify_handle(self, handle: _WorkerHandle) -> bool:
-        """Teardown an active `_WorkerHandle`; return True iff verified dead & reaped."""
+        """Exclusive single-owner teardown of `_WorkerHandle`; quarantine if reap fails."""
+        if not handle.teardown_exec_lock.acquire(timeout=self.worker_reap_timeout_s):
+            self._poison("WORKER_TEARDOWN_LOCK_TIMEOUT")
+            with self._admission_lock:
+                if not handle.reaped and handle not in self._quarantined_handles:
+                    self._quarantined_handles.append(handle)
+            return False
+
+        try:
+            if handle.reaped:
+                with self._admission_lock:
+                    if handle in self._quarantined_handles:
+                        self._quarantined_handles.remove(handle)
+                return True
+
+            with self._admission_lock:
+                handle.closing = True
+                if self._active_worker is handle:
+                    self._active_worker = None
+                if self._pending_handle is handle:
+                    self._pending_handle = None
+
+            kill_ok = True
+            if handle.proc is not None:
+                kill_ok = self._kill_only_proc(handle.proc)
+
+            # Wait bounded for any in-flight selector/FD user on this handle to exit
+            # BEFORE closing req_w/resp_r so we never trigger EBADF or numeric FD reuse.
+            io_deadline = time.monotonic() + self.worker_reap_timeout_s
+            with self._admission_lock:
+                while handle.active_io > 0:
+                    rem = io_deadline - time.monotonic()
+                    if rem <= 0.0:
+                        break
+                    self._state_cond.wait(timeout=rem)
+                io_drained = handle.active_io == 0
+
+            if not io_drained:
+                with self._admission_lock:
+                    self._worker_poisoned = True
+                    self._poison_reason = "WORKER_IO_DRAIN_TIMEOUT"
+                    if handle not in self._quarantined_handles:
+                        self._quarantined_handles.append(handle)
+                    self._state_cond.notify_all()
+                return False
+
+            if handle.proc is None:
+                handle.close_fds()
+                handle.reaped = True
+                return True
+
+            reaped = self._reap_proc_after_kill(handle.proc, handle.close_fds, kill_ok=kill_ok)
+            handle.reaped = reaped
+            with self._admission_lock:
+                if reaped:
+                    if handle in self._quarantined_handles:
+                        self._quarantined_handles.remove(handle)
+                else:
+                    self._worker_poisoned = True
+                    self._poison_reason = "WORKER_TEARDOWN_UNVERIFIED"
+                    if handle not in self._quarantined_handles:
+                        self._quarantined_handles.append(handle)
+                self._state_cond.notify_all()
+            return reaped
+        finally:
+            handle.teardown_exec_lock.release()
+
+    def _quarantine_orphan_proc(
+        self,
+        proc: subprocess.Popen[bytes],
+        req_w: int | None,
+        resp_r: int | None,
+        reason: str,
+    ) -> None:
+        """Retain process ownership in `_quarantined_handles` and poison manager."""
+        qh = _WorkerHandle(
+            proc=proc,
+            req_w=req_w if req_w is not None else -1,
+            resp_r=resp_r if resp_r is not None else -1,
+            expected_req_ino=0,
+            expected_resp_ino=0,
+            parent_closed_unused_ends=True,
+        )
+        if req_w is None:
+            qh.req_w = None
+        if resp_r is None:
+            qh.resp_r = None
         with self._admission_lock:
-            if self._active_worker is handle:
-                self._active_worker = None
-        if handle.proc is None:
-            handle.close_fds()
-            return True
-        reaped = self._kill_and_reap_proc(handle.proc, handle.close_fds)
-        handle.reaped = reaped
-        if not reaped:
-            self._poison("WORKER_TEARDOWN_UNVERIFIED")
-        return reaped
+            self._worker_poisoned = True
+            self._poison_reason = reason
+            self._quarantined_handles.append(qh)
+            self._state_cond.notify_all()
+
+    def _terminal_error_result(
+        self,
+        default_status: int,
+        default_code: str,
+        default_msg: str,
+        req_id: int | None,
+        *,
+        handle: _WorkerHandle | None = None,
+    ) -> BridgeResult:
+        """Teardown handle if present and enforce poison precedence strictly before any other error."""
+        if handle is not None:
+            self._terminate_and_verify_handle(handle)
+        with self._admission_lock:
+            poisoned = self._worker_poisoned
+        if poisoned:
+            return BridgeResult(
+                503,
+                make_error_payload(
+                    "WORKER_UNAVAILABLE_POISONED",
+                    "Worker bridge is poisoned fail closed until process restart.",
+                    request_id=req_id,
+                ),
+            )
+        return BridgeResult(default_status, make_error_payload(default_code, default_msg, request_id=req_id))
 
     def _invoke_launcher(
         self,
@@ -405,8 +607,7 @@ class WorkerManager:
             return [*self.custom_worker_cmd, "--req-fd", str(req_r), "--resp-fd", str(resp_w)]
         return [
             sys.executable,
-            "-m",
-            "v1_worker_bridge",
+            str(WORKER_MODULE_PATH),
             "--worker",
             "--req-fd",
             str(req_r),
@@ -414,56 +615,210 @@ class WorkerManager:
             str(resp_w),
         ]
 
-    def _spawn_and_handshake(self, deadline: float, req_id: int | None) -> _WorkerHandle | BridgeResult:
-        """Launch one fresh child process + dedicated pipes and verify READY handshake."""
-        req_r, req_w = os.pipe()
-        resp_r, resp_w = os.pipe()
-        os.set_blocking(req_w, False)
-        os.set_blocking(resp_r, False)
-        expected_req_ino = os.fstat(req_r).st_ino
-        expected_resp_ino = os.fstat(resp_w).st_ino
+    def _decode_and_verify_before(
+        self,
+        raw_bytes: bytes,
+        deadline: float,
+        verifier: Callable[[dict[str, Any]], None],
+    ) -> dict[str, Any]:
+        """Decode UTF-8/JSON and validate payload strictly inside monotonic deadline."""
+        self._assert_before_deadline(deadline, "Deadline already expired before frame decode")
 
-        cmd = self._build_worker_command(req_r, resp_w)
-        slot = _LaunchSlot((req_r, resp_w), (req_w, resp_r))
+        def _work() -> dict[str, Any]:
+            obj = strict_json_loads(raw_bytes)
+            if self._on_decode_transform is not None:
+                obj = self._on_decode_transform(obj)
+            verifier(obj)
+            return obj
+
+        if len(raw_bytes) > 65536 or self._on_decode_transform is not None:
+            box: dict[str, Any] = {}
+            done = threading.Event()
+
+            def _runner() -> None:
+                try:
+                    box["res"] = _work()
+                except BaseException as exc:  # noqa: BLE001
+                    box["err"] = exc
+                finally:
+                    done.set()
+
+            th = threading.Thread(target=_runner, daemon=True)
+            th.start()
+            remaining = max(0.0, deadline - self._clock())
+            if not done.wait(timeout=remaining):
+                raise _IpcTimeoutError("JSON decode/verification exceeded deadline")
+            if "err" in box:
+                raise box["err"]
+            res = box["res"]
+        else:
+            res = _work()
+
+        self._assert_before_deadline(deadline, "Deadline expired during JSON decode or response verification")
+        return res
+
+    def _spawn_and_handshake(self, deadline: float, req_id: int | None) -> _WorkerHandle | BridgeResult:
+        """Transactionally allocate pipes, launch child within deadline, and verify READY."""
+        if self._on_before_launch_slot_publish is not None:
+            self._on_before_launch_slot_publish()
+
+        slot = _LaunchSlot()
         with self._admission_lock:
+            if self._worker_poisoned:
+                return BridgeResult(
+                    503,
+                    make_error_payload(
+                        "WORKER_UNAVAILABLE_POISONED",
+                        "Worker bridge is poisoned fail closed until process restart.",
+                        request_id=req_id,
+                    ),
+                )
+            if self._shutting_down:
+                return BridgeResult(
+                    503,
+                    make_error_payload("SERVER_SHUTTING_DOWN", "Bridge shutting down.", request_id=req_id),
+                )
             self._active_launch = slot
 
+        req_r: int | None = None
+        req_w: int | None = None
+        resp_r: int | None = None
+        resp_w: int | None = None
+
+        try:
+            req_r, req_w = os.pipe()
+            resp_r, resp_w = os.pipe()
+            os.set_blocking(req_w, False)
+            os.set_blocking(resp_r, False)
+            expected_req_ino = os.fstat(req_r).st_ino
+            expected_resp_ino = os.fstat(resp_w).st_ino
+            slot.set_fds((req_r, resp_w), (req_w, resp_r))
+            cmd = self._build_worker_command(req_r, resp_w)
+        except Exception as exc:
+            _safe_close_fd(req_r)
+            _safe_close_fd(req_w)
+            _safe_close_fd(resp_r)
+            _safe_close_fd(resp_w)
+            with self._admission_lock:
+                if self._active_launch is slot:
+                    self._active_launch = None
+            return self._terminal_error_result(
+                503,
+                "WORKER_STARTUP_FAILED",
+                f"Failed to prepare IPC pipes for worker launch: {exc}",
+                req_id,
+            )
+
         def _launch_runner() -> None:
-            late_proc: subprocess.Popen[bytes] | None = None
             try:
                 with slot.lock:
-                    if slot.abandoned:
-                        return
-                proc = self._invoke_launcher(cmd, req_r, resp_w, slot)
-                with slot.lock:
-                    if slot.abandoned:
-                        late_proc = proc
+                    should_abort = slot.abandoned
+                if not should_abort:
+                    self._invoke_launcher(cmd, req_r, resp_w, slot)
             except BaseException as exc:  # noqa: BLE001 - captured fail-closed for supervisor
                 with slot.lock:
                     slot.error = exc
             finally:
-                # Parent MUST close child pipe ends immediately after fork/exec or failure
-                # so parent observes true EOF on child exit and broken pipe on send.
+                # Child pipe ends MUST always be closed once fork/exec returns or fails.
                 slot.close_child_fds()
-                if late_proc is not None:
-                    self._kill_and_reap_proc(late_proc, slot.close_parent_fds)
+                with slot.lock:
+                    abandoned = slot.abandoned
+                    captured_proc = slot.proc
+                    launch_err = slot.error
+                if abandoned or launch_err is not None:
+                    # Only clean parent FDs & orphan proc if caller isn't owning a valid handle.
+                    with slot.lock:
+                        take_cleanup = not slot.parent_cleanup_claimed
+                        if take_cleanup:
+                            slot.parent_cleanup_claimed = True
+                    if take_cleanup:
+                        if captured_proc is not None:
+                            reaped = self._kill_and_reap_proc(captured_proc, slot.close_parent_fds)
+                            if not reaped:
+                                self._quarantine_orphan_proc(
+                                    captured_proc,
+                                    None,
+                                    None,
+                                    "ABANDONED_LAUNCH_REAP_FAILED",
+                                )
+                        else:
+                            # Crucial V1-A-R1-F2 fix: delayed launch raised before returning PID -> close parent FDs!
+                            slot.close_parent_fds()
+                    with self._admission_lock:
+                        if self._active_launch is slot:
+                            self._active_launch = None
+                        self._state_cond.notify_all()
                 slot.done_event.set()
 
         th = threading.Thread(target=_launch_runner, daemon=True)
         slot.thread = th
-        th.start()
+        try:
+            th.start()
+        except Exception as exc:
+            with slot.lock:
+                slot.abandoned = True
+                slot.parent_cleanup_claimed = True
+            slot.close_child_fds()
+            slot.close_parent_fds()
+            with self._admission_lock:
+                if self._active_launch is slot:
+                    self._active_launch = None
+                self._state_cond.notify_all()
+            return self._terminal_error_result(
+                503,
+                "WORKER_STARTUP_FAILED",
+                f"Failed to start launch supervisor thread: {exc}",
+                req_id,
+            )
 
-        remaining = max(0.0, deadline - time.monotonic())
-        finished = slot.done_event.wait(timeout=remaining)
+        # Wait until either launch completes, shutdown cancels wait, or monotonic deadline expires
+        while not slot.done_event.is_set():
+            with self._admission_lock:
+                if self._shutting_down:
+                    with slot.lock:
+                        slot.abandoned = True
+                    slot.done_event.wait(timeout=min(0.05, self.worker_reap_timeout_s))
+                    with slot.lock:
+                        late_proc = slot.proc
+                        claimed = slot.parent_cleanup_claimed
+                        if not claimed:
+                            slot.parent_cleanup_claimed = True
+                    if not claimed:
+                        if late_proc is not None:
+                            if not self._kill_and_reap_proc(late_proc, slot.close_parent_fds):
+                                self._quarantine_orphan_proc(late_proc, None, None, "SHUTDOWN_LAUNCH_REAP_FAILED")
+                        else:
+                            slot.close_parent_fds()
+                    with self._admission_lock:
+                        if self._active_launch is slot:
+                            self._active_launch = None
+                        self._state_cond.notify_all()
+                    return self._terminal_error_result(503, "SERVER_SHUTTING_DOWN", "Bridge shutting down.", req_id)
 
-        if not finished:
+            remaining = deadline - self._clock()
+            if remaining <= 0.0:
+                break
+            slot.done_event.wait(timeout=min(remaining, 0.02))
+
+        if not slot.done_event.is_set():
             with slot.lock:
                 slot.abandoned = True
                 early_proc = slot.proc
-            # Launch itself stalled past deadline: launch thread status is uncertain -> poison fail closed.
+                claim_parent = False
+                if early_proc is not None and not slot.parent_cleanup_claimed:
+                    slot.parent_cleanup_claimed = True
+                    claim_parent = True
+            # Launch stalled past deadline: launch state is uncertain -> poison fail closed!
             self._poison("WORKER_STARTUP_LAUNCH_TIMEOUT")
-            if early_proc is not None:
-                self._kill_and_reap_proc(early_proc, slot.close_parent_fds)
+            if claim_parent and early_proc is not None:
+                if not self._kill_and_reap_proc(early_proc, slot.close_parent_fds):
+                    self._quarantine_orphan_proc(early_proc, None, None, "STALLED_LAUNCH_REAP_FAILED")
+            with self._admission_lock:
+                if self._active_launch is slot and early_proc is None:
+                    # Retain in _active_launch until runner completes if still running, or let shutdown wait briefly.
+                    pass
+                elif self._active_launch is slot:
+                    self._active_launch = None
             return BridgeResult(
                 503,
                 make_error_payload(
@@ -476,26 +831,38 @@ class WorkerManager:
         with slot.lock:
             launch_err = slot.error
             proc = slot.proc
+            claimed = slot.parent_cleanup_claimed
+            if launch_err is not None or proc is None:
+                if not claimed:
+                    slot.parent_cleanup_claimed = True
+                    take_now = True
+                else:
+                    take_now = False
+            else:
+                slot.parent_cleanup_claimed = True
+                take_now = False
 
         with self._admission_lock:
             if self._active_launch is slot:
                 self._active_launch = None
-            shutting_down = self._shutting_down
 
         if launch_err is not None or proc is None:
-            if proc is not None:
-                if not self._kill_and_reap_proc(proc, slot.close_parent_fds):
-                    self._poison("WORKER_LAUNCH_CLEANUP_UNVERIFIED")
-            else:
-                slot.close_parent_fds()
-            return BridgeResult(
+            if take_now:
+                if proc is not None:
+                    if not self._kill_and_reap_proc(proc, slot.close_parent_fds):
+                        self._quarantine_orphan_proc(proc, None, None, "LAUNCH_ERROR_REAP_FAILED")
+                else:
+                    slot.close_parent_fds()
+            # V1-A-R1-F4: If teardown poisoned manager after post-PID launch error, return 503 POISONED!
+            return self._terminal_error_result(
                 503,
-                make_error_payload(
-                    "WORKER_STARTUP_FAILED",
-                    f"Worker failed to start: {launch_err}",
-                    request_id=req_id,
-                ),
+                "WORKER_STARTUP_FAILED",
+                f"Worker failed to start: {launch_err}",
+                req_id,
             )
+
+        with slot.lock:
+            slot.parent_fds = (None, None)
 
         parent_closed_unused = (not _is_fd_open(req_r)) and (not _is_fd_open(resp_w))
         handle = _WorkerHandle(
@@ -507,120 +874,174 @@ class WorkerManager:
             parent_closed_unused_ends=parent_closed_unused,
         )
 
-        if shutting_down:
-            self._terminate_and_verify_handle(handle)
-            return BridgeResult(
+        # Register as _pending_handle immediately so shutdown() owns/kills it safely without deadlock.
+        with self._admission_lock:
+            if self._worker_poisoned or self._shutting_down:
+                return_code = True
+            else:
+                self._pending_handle = handle
+                return_code = False
+
+        if return_code:
+            return self._terminal_error_result(
                 503,
-                make_error_payload("SERVER_SHUTTING_DOWN", "Bridge shutting down.", request_id=req_id),
+                "SERVER_SHUTTING_DOWN",
+                "Bridge shutting down.",
+                req_id,
+                handle=handle,
             )
 
-        # Wait for worker READY handshake within the SAME monotonic deadline
+        # Wait for worker READY handshake AND verify within the SAME monotonic deadline
         try:
-            ready_bytes = self._recv_frame_before(resp_r, deadline, max_bytes=MAX_IPC_REQUEST_BYTES)
-            ready = strict_json_loads(ready_bytes)
-            if (
-                ready.get("type") != "READY"
-                or ready.get("pid") != proc.pid
-                or ready.get("req_ino") != expected_req_ino
-                or ready.get("resp_ino") != expected_resp_ino
-            ):
-                raise _IpcProtocolError(
-                    "READY handshake failed descriptor identity verification"
-                )
+            ready_bytes = self._recv_frame_before(handle, deadline, max_bytes=MAX_IPC_REQUEST_BYTES)
+
+            def _verify_ready(ready: dict[str, Any]) -> None:
+                if (
+                    ready.get("type") != "READY"
+                    or ready.get("pid") != proc.pid
+                    or ready.get("req_ino") != expected_req_ino
+                    or ready.get("resp_ino") != expected_resp_ino
+                ):
+                    raise _IpcProtocolError("READY handshake failed descriptor identity verification")
+
+            self._decode_and_verify_before(ready_bytes, deadline, _verify_ready)
         except _IpcTimeoutError:
-            if not self._terminate_and_verify_handle(handle):
-                return BridgeResult(
-                    503,
-                    make_error_payload(
-                        "WORKER_UNAVAILABLE_POISONED",
-                        "Worker handshake timed out and teardown could not be verified.",
-                        request_id=req_id,
-                    ),
-                )
-            return BridgeResult(
+            return self._terminal_error_result(
                 504,
-                make_error_payload(
-                    "SOLVE_DEADLINE_EXCEEDED",
-                    "Worker handshake exceeded admitted startup/IPC deadline.",
-                    request_id=req_id,
-                ),
+                "SOLVE_DEADLINE_EXCEEDED",
+                "Worker handshake exceeded admitted startup/IPC deadline.",
+                req_id,
+                handle=handle,
             )
         except _WorkerCancelledError:
-            self._terminate_and_verify_handle(handle)
-            return BridgeResult(
+            return self._terminal_error_result(
                 503,
-                make_error_payload("SERVER_SHUTTING_DOWN", "Bridge shutting down.", request_id=req_id),
+                "SERVER_SHUTTING_DOWN",
+                "Bridge shutting down.",
+                req_id,
+                handle=handle,
             )
         except (_IpcEofError, _IpcProtocolError, ValueError, UnicodeDecodeError) as exc:
-            if not self._terminate_and_verify_handle(handle):
-                return BridgeResult(
-                    503,
-                    make_error_payload(
-                        "WORKER_UNAVAILABLE_POISONED",
-                        "Worker startup handshake failed and teardown could not be verified.",
-                        request_id=req_id,
-                    ),
-                )
-            return BridgeResult(
+            return self._terminal_error_result(
                 503,
-                make_error_payload(
-                    "WORKER_STARTUP_FAILED",
-                    f"Worker startup handshake failed: {exc}",
-                    request_id=req_id,
-                ),
+                "WORKER_STARTUP_FAILED",
+                f"Worker startup handshake failed: {exc}",
+                req_id,
+                handle=handle,
             )
 
+        if self._on_before_ready_publish is not None:
+            self._on_before_ready_publish(handle)
+
+        # Publish atomically ONLY if not shutting down / poisoned / expired AFTER barrier
+        expired = self._clock() >= deadline
         with self._admission_lock:
-            if self._shutting_down or self._worker_poisoned:
-                poisoned = self._worker_poisoned
-                self._terminate_and_verify_handle(handle)
-                code = "WORKER_UNAVAILABLE_POISONED" if poisoned else "SERVER_SHUTTING_DOWN"
-                return BridgeResult(503, make_error_payload(code, "Bridge unavailable.", request_id=req_id))
-            self._active_worker = handle
+            if expired or self._shutting_down or self._worker_poisoned or handle.closing:
+                cannot_publish = True
+            else:
+                self._pending_handle = None
+                self._active_worker = handle
+                cannot_publish = False
+
+        if cannot_publish:
+            if expired:
+                return self._terminal_error_result(
+                    504,
+                    "SOLVE_DEADLINE_EXCEEDED",
+                    "Worker handshake deadline expired before READY publication.",
+                    req_id,
+                    handle=handle,
+                )
+            return self._terminal_error_result(
+                503,
+                "SERVER_SHUTTING_DOWN",
+                "Bridge shutting down.",
+                req_id,
+                handle=handle,
+            )
+
         return handle
 
-    def _select_ready(self, fd: int, events: int, deadline: float) -> None:
-        cancel_r = self._cancel_r
-        with selectors.DefaultSelector() as sel:
-            sel.register(fd, events, data="io")
-            if cancel_r is not None:
-                sel.register(cancel_r, selectors.EVENT_READ, data="cancel")
-            remaining = deadline - time.monotonic()
-            if remaining <= 0.0:
-                raise _IpcTimeoutError("Admitted compute/IPC deadline exceeded")
-            ready = sel.select(timeout=remaining)
-            if not ready:
-                raise _IpcTimeoutError("Admitted compute/IPC deadline exceeded")
-            for key, _ in ready:
-                if key.data == "cancel":
-                    raise _WorkerCancelledError("Cancelled by bridge shutdown")
+    def _enter_handle_io(self, handle: _WorkerHandle) -> int:
+        with self._admission_lock:
+            if self._shutting_down or handle.closing:
+                raise _WorkerCancelledError("Cancelled by bridge shutdown or closing handle")
+            if self._cancel_closed or self._cancel_r is None:
+                raise _WorkerCancelledError("Cancellation descriptor closed on shutdown")
+            self._active_selectors += 1
+            handle.active_io += 1
+            return self._cancel_r
 
-    def _send_frame_before(self, req_w: int, frame: bytes, deadline: float) -> None:
+    def _exit_handle_io(self, handle: _WorkerHandle) -> None:
+        cr_to_close: int | None = None
+        cw_to_close: int | None = None
+        with self._admission_lock:
+            handle.active_io -= 1
+            self._active_selectors -= 1
+            cr_to_close, cw_to_close = self._maybe_close_cancel_pipe_locked()
+            self._state_cond.notify_all()
+        _safe_close_fd(cr_to_close)
+        _safe_close_fd(cw_to_close)
+
+    def _select_ready(self, handle: _WorkerHandle, fd: int | None, events: int, deadline: float) -> None:
+        if self._on_before_selector_register is not None:
+            self._on_before_selector_register(handle)
+        cancel_r = self._enter_handle_io(handle)
+        try:
+            if fd is None:
+                raise _WorkerCancelledError("Handle pipe closed")
+            with selectors.DefaultSelector() as sel:
+                sel.register(fd, events, data="io")
+                sel.register(cancel_r, selectors.EVENT_READ, data="cancel")
+                remaining = deadline - self._clock()
+                if remaining <= 0.0:
+                    raise _IpcTimeoutError("Admitted compute/IPC deadline exceeded")
+                ready = sel.select(timeout=remaining)
+                if not ready:
+                    raise _IpcTimeoutError("Admitted compute/IPC deadline exceeded")
+                for key, _ in ready:
+                    if key.data == "cancel":
+                        raise _WorkerCancelledError("Cancelled by bridge shutdown")
+                self._assert_before_deadline(deadline, "Admitted compute/IPC deadline exceeded after select")
+        finally:
+            self._exit_handle_io(handle)
+
+    def _send_frame_before(self, handle: _WorkerHandle, frame: bytes, deadline: float) -> None:
         mv = memoryview(frame)
         sent = 0
         while sent < len(frame):
-            if time.monotonic() >= deadline:
-                raise _IpcTimeoutError("Blocked request write exceeded deadline")
-            self._select_ready(req_w, selectors.EVENT_WRITE, deadline)
+            self._assert_before_deadline(deadline, "Blocked request write exceeded deadline")
+            self._select_ready(handle, handle.req_w, selectors.EVENT_WRITE, deadline)
+            cancel_r = self._enter_handle_io(handle)
+            _ = cancel_r
             try:
+                req_w = handle.req_w
+                if req_w is None or handle.closing:
+                    raise _WorkerCancelledError("Worker pipe closed before write")
                 n = os.write(req_w, mv[sent:])
                 if n == 0:
                     raise _IpcEofError("Worker request pipe closed during write")
                 sent += n
+                self._assert_before_deadline(deadline, "Request write exceeded deadline")
             except BlockingIOError:
                 continue
             except (BrokenPipeError, ConnectionResetError) as exc:
                 raise _IpcEofError("Worker pipe broken during write") from exc
             except OSError as exc:
                 raise _IpcEofError(f"Worker pipe write OS error: {exc}") from exc
+            finally:
+                self._exit_handle_io(handle)
 
-    def _recv_exact_before(self, resp_r: int, n_bytes: int, deadline: float) -> bytes:
+    def _recv_exact_before(self, handle: _WorkerHandle, n_bytes: int, deadline: float) -> bytes:
         buf = bytearray()
         while len(buf) < n_bytes:
-            if time.monotonic() >= deadline:
-                raise _IpcTimeoutError("Response read exceeded deadline")
-            self._select_ready(resp_r, selectors.EVENT_READ, deadline)
+            self._assert_before_deadline(deadline, "Response read exceeded deadline")
+            self._select_ready(handle, handle.resp_r, selectors.EVENT_READ, deadline)
+            _ = self._enter_handle_io(handle)
             try:
+                resp_r = handle.resp_r
+                if resp_r is None or handle.closing:
+                    raise _WorkerCancelledError("Worker pipe closed before read")
                 chunk = os.read(resp_r, n_bytes - len(buf))
             except BlockingIOError:
                 continue
@@ -628,28 +1049,29 @@ class WorkerManager:
                 raise _IpcEofError("Worker pipe broken during read") from exc
             except OSError as exc:
                 raise _IpcEofError(f"Worker pipe read OS error: {exc}") from exc
+            finally:
+                self._exit_handle_io(handle)
             if chunk == b"":
                 raise _IpcEofError("Unexpected EOF from worker process")
             buf.extend(chunk)
+            if self._on_after_raw_read is not None:
+                self._on_after_raw_read(bytes(chunk))
+            self._assert_before_deadline(deadline, "Response read exceeded deadline after final chunk")
         return bytes(buf)
 
-    def _recv_frame_before(self, resp_r: int, deadline: float, *, max_bytes: int) -> bytes:
-        hdr = self._recv_exact_before(resp_r, 4, deadline)
+    def _recv_frame_before(self, handle: _WorkerHandle, deadline: float, *, max_bytes: int) -> bytes:
+        hdr = self._recv_exact_before(handle, 4, deadline)
         (frame_len,) = struct.unpack(">I", hdr)
         if frame_len == 0 or frame_len > max_bytes:
             raise _IpcProtocolError(f"Invalid IPC response frame length {frame_len} (max={max_bytes})")
-        return self._recv_exact_before(resp_r, frame_len, deadline)
+        return self._recv_exact_before(handle, frame_len, deadline)
 
     def execute(self, endpoint: str, request_payload: dict[str, Any]) -> BridgeResult:
         """Admit, supervise, and execute one bounded IPC request against the single worker."""
         req_id = extract_safe_request_id(request_payload)
 
         with self._admission_lock:
-            if self._shutting_down:
-                return BridgeResult(
-                    503,
-                    make_error_payload("SERVER_SHUTTING_DOWN", "Bridge is shutting down.", request_id=req_id),
-                )
+            # Strict V1-A-R1-F4 order: poison > shutdown > concurrency > admission
             if self._worker_poisoned:
                 return BridgeResult(
                     503,
@@ -658,6 +1080,11 @@ class WorkerManager:
                         "Worker bridge is poisoned fail closed until process restart.",
                         request_id=req_id,
                     ),
+                )
+            if self._shutting_down:
+                return BridgeResult(
+                    503,
+                    make_error_payload("SERVER_SHUTTING_DOWN", "Bridge is shutting down.", request_id=req_id),
                 )
             if self._compute_in_progress:
                 return BridgeResult(
@@ -670,8 +1097,9 @@ class WorkerManager:
                 )
             self._compute_in_progress = True
 
+        handle: _WorkerHandle | None = None
         try:
-            deadline = time.monotonic() + self.response_deadline_s
+            deadline = self._clock() + self.response_deadline_s
             with self._admission_lock:
                 handle = self._active_worker
 
@@ -691,93 +1119,92 @@ class WorkerManager:
                 "parent_closed_unused_ends": handle.parent_closed_unused_ends,
             }
             frame = _pack_frame(strict_json_dumps(ipc_request), MAX_IPC_REQUEST_BYTES)
+            self._assert_before_deadline(deadline, "Request serialization exceeded deadline")
 
-            if handle.req_w is None or handle.resp_r is None:
-                raise _IpcEofError("Worker pipe descriptor closed")
+            self._send_frame_before(handle, frame, deadline)
+            raw_resp = self._recv_frame_before(handle, deadline, max_bytes=MAX_IPC_RESPONSE_BYTES)
 
-            self._send_frame_before(handle.req_w, frame, deadline)
-            raw_resp = self._recv_frame_before(handle.resp_r, deadline, max_bytes=MAX_IPC_RESPONSE_BYTES)
-            resp_obj = strict_json_loads(raw_resp)
-            if resp_obj.get("ipc_token") != ipc_token:
-                raise _IpcProtocolError(
-                    f"IPC token mismatch: expected {ipc_token}, got {resp_obj.get('ipc_token')!r}"
+            def _verify_resp(resp_obj: dict[str, Any]) -> None:
+                if resp_obj.get("ipc_token") != ipc_token:
+                    raise _IpcProtocolError(
+                        f"IPC token mismatch: expected {ipc_token}, got {resp_obj.get('ipc_token')!r}"
+                    )
+
+            resp_obj = self._decode_and_verify_before(raw_resp, deadline, _verify_resp)
+            with self._admission_lock:
+                if self._worker_poisoned or self._shutting_down:
+                    cancelled = True
+                else:
+                    cancelled = False
+            if cancelled:
+                return self._terminal_error_result(
+                    503,
+                    "SERVER_SHUTTING_DOWN",
+                    "Bridge shutting down.",
+                    req_id,
+                    handle=handle,
                 )
+            self._assert_before_deadline(deadline, "Deadline expired immediately prior to response return")
             return BridgeResult(200, resp_obj)
 
         except _IpcTimeoutError:
-            assert handle is not None
-            if not self._terminate_and_verify_handle(handle):
-                return BridgeResult(
-                    503,
-                    make_error_payload(
-                        "WORKER_UNAVAILABLE_POISONED",
-                        "Worker timed out and kill/reap verification failed; bridge poisoned.",
-                        request_id=req_id,
-                    ),
-                )
-            return BridgeResult(
+            return self._terminal_error_result(
                 504,
-                make_error_payload(
-                    "SOLVE_DEADLINE_EXCEEDED",
-                    "Admitted compute/IPC/startup deadline exceeded; worker cleanly killed and reaped.",
-                    request_id=req_id,
-                ),
+                "SOLVE_DEADLINE_EXCEEDED",
+                "Admitted compute/IPC/startup deadline exceeded; worker cleanly killed and reaped.",
+                req_id,
+                handle=handle,
             )
         except _WorkerCancelledError:
-            if handle is not None:
-                self._terminate_and_verify_handle(handle)
-            return BridgeResult(
+            return self._terminal_error_result(
                 503,
-                make_error_payload("SERVER_SHUTTING_DOWN", "Bridge shutting down.", request_id=req_id),
+                "SERVER_SHUTTING_DOWN",
+                "Bridge shutting down.",
+                req_id,
+                handle=handle,
             )
         except _IpcEofError as exc:
-            if handle is not None and not self._terminate_and_verify_handle(handle):
-                return BridgeResult(
-                    503,
-                    make_error_payload(
-                        "WORKER_UNAVAILABLE_POISONED",
-                        "Worker crashed and teardown could not be verified.",
-                        request_id=req_id,
-                    ),
-                )
-            return BridgeResult(
+            return self._terminal_error_result(
                 500,
-                make_error_payload("WORKER_CRASHED", str(exc), request_id=req_id),
+                "WORKER_CRASHED",
+                str(exc),
+                req_id,
+                handle=handle,
             )
         except (_IpcProtocolError, ValueError, UnicodeDecodeError) as exc:
-            if handle is not None and not self._terminate_and_verify_handle(handle):
-                return BridgeResult(
-                    503,
-                    make_error_payload(
-                        "WORKER_UNAVAILABLE_POISONED",
-                        "Worker IPC protocol error and teardown could not be verified.",
-                        request_id=req_id,
-                    ),
-                )
-            return BridgeResult(
+            return self._terminal_error_result(
                 500,
-                make_error_payload("IPC_PROTOCOL_ERROR", str(exc), request_id=req_id),
+                "IPC_PROTOCOL_ERROR",
+                str(exc),
+                req_id,
+                handle=handle,
             )
         finally:
             with self._admission_lock:
-                # Keep slot withheld if poisoned; release only when healthy/cleanly reaped
+                # Keep slot withheld if poisoned; release only when unpoisoned
                 if not self._worker_poisoned:
                     self._compute_in_progress = False
+                self._state_cond.notify_all()
 
     def shutdown(self) -> None:
-        """Synchronized shutdown: block new spawns/requests, kill+reap active child, close FDs."""
+        """Synchronized shutdown: block new spawns/requests, drain I/O, kill+reap active & quarantined handles."""
         with self._admission_lock:
             self._shutting_down = True
-            handle = self._active_worker
-            self._active_worker = None
+            handles_to_stop: list[_WorkerHandle] = []
+            for cand in (self._active_worker, self._pending_handle, *self._quarantined_handles):
+                if cand is not None and cand not in handles_to_stop:
+                    handles_to_stop.append(cand)
             launch_slot = self._active_launch
-            self._active_launch = None
-            cancel_r = self._cancel_r
-            cancel_w = self._cancel_w
+            cw = None if self._cancel_closed else self._cancel_w
+            self._state_cond.notify_all()
 
-        self._wake_cancel_pipe()
+        if cw is not None:
+            try:
+                os.write(cw, b"x")
+            except OSError:
+                pass
 
-        if handle is not None:
+        for handle in handles_to_stop:
             self._terminate_and_verify_handle(handle)
 
         if launch_slot is not None:
@@ -785,21 +1212,45 @@ class WorkerManager:
                 launch_slot.abandoned = True
                 early_proc = launch_slot.proc
                 th = launch_slot.thread
-            if early_proc is not None:
-                self._kill_and_reap_proc(early_proc, launch_slot.close_parent_fds)
+                if not launch_slot.parent_cleanup_claimed and (th is None or not th.is_alive() or early_proc is not None):
+                    launch_slot.parent_cleanup_claimed = True
+                    claim_now = True
+                else:
+                    claim_now = False
+            if claim_now:
+                if early_proc is not None:
+                    if not self._kill_and_reap_proc(early_proc, launch_slot.close_parent_fds):
+                        self._quarantine_orphan_proc(early_proc, None, None, "SHUTDOWN_LAUNCH_REAP_FAILED")
+                elif th is None or not th.is_alive():
+                    launch_slot.close_parent_fds()
             if th is not None and th.is_alive():
                 th.join(timeout=self.worker_reap_timeout_s)
                 if th.is_alive():
                     self._poison("SHUTDOWN_LAUNCH_THREAD_STILL_ALIVE")
 
+        # Re-check any handle published or quarantined while handles/launch were winding down
+        extra_handles: list[_WorkerHandle] = []
         with self._admission_lock:
-            if not self._shutdown_done:
-                self._shutdown_done = True
-                cr, cw = self._cancel_r, self._cancel_w
-                self._cancel_r = None
-                self._cancel_w = None
-                _safe_close_fd(cr)
-                _safe_close_fd(cw)
+            for cand in (self._active_worker, self._pending_handle, *self._quarantined_handles):
+                if cand is not None and cand not in handles_to_stop and cand not in extra_handles:
+                    extra_handles.append(cand)
+        for handle in extra_handles:
+            self._terminate_and_verify_handle(handle)
+
+        # Wait bounded for active selectors to acknowledge cancellation BEFORE closing cancel pipe
+        cancel_deadline = time.monotonic() + self.worker_reap_timeout_s
+        cr_to_close: int | None = None
+        cw_to_close: int | None = None
+        with self._admission_lock:
+            while self._active_selectors > 0:
+                rem = cancel_deadline - time.monotonic()
+                if rem <= 0.0:
+                    break
+                self._state_cond.wait(timeout=rem)
+            cr_to_close, cw_to_close = self._maybe_close_cancel_pipe_locked()
+
+        _safe_close_fd(cr_to_close)
+        _safe_close_fd(cw_to_close)
 
 
 class _DeadlineSocketRawIO(io.RawIOBase):
@@ -907,9 +1358,22 @@ class ExplorerHTTPRequestHandler(http.server.SimpleHTTPRequestHandler):
         if len(cl_vals) > 1:
             raise HttpRequestError(400, "INVALID_CONTENT_LENGTH", "Duplicate Content-Length header", field="Content-Length")
         cl_str = cl_vals[0].strip()
-        if not cl_str.isdigit():
-            raise HttpRequestError(400, "INVALID_CONTENT_LENGTH", "Content-Length must be a non-negative integer", field="Content-Length")
-        content_length = int(cl_str)
+        if not cl_str or not (cl_str.isascii() and cl_str.isdigit()):
+            raise HttpRequestError(
+                400,
+                "INVALID_CONTENT_LENGTH",
+                "Content-Length must be an ASCII non-negative decimal integer",
+                field="Content-Length",
+            )
+        normalized_cl = cl_str.lstrip("0") or "0"
+        if len(normalized_cl) > 10:
+            raise HttpRequestError(
+                413,
+                "PAYLOAD_TOO_LARGE",
+                f"Content-Length exceeds maximum {MAX_HTTP_BODY_BYTES} bytes",
+                field="Content-Length",
+            )
+        content_length = int(normalized_cl)
         if content_length > MAX_HTTP_BODY_BYTES:
             raise HttpRequestError(413, "PAYLOAD_TOO_LARGE", f"Body length {content_length} exceeds {MAX_HTTP_BODY_BYTES} bytes", field="Content-Length")
 
@@ -921,7 +1385,7 @@ class ExplorerHTTPRequestHandler(http.server.SimpleHTTPRequestHandler):
             return strict_json_loads(body_bytes)
         except DuplicateKeyError as exc:
             raise HttpRequestError(400, "DUPLICATE_KEY", str(exc)) from exc
-        except (ValueError, UnicodeDecodeError) as exc:
+        except (ValueError, UnicodeDecodeError, RecursionError) as exc:
             raise HttpRequestError(400, "INVALID_JSON", f"Malformed or non-finite JSON payload: {exc}") from exc
 
     def do_POST(self) -> None:  # noqa: N802 - http.server method name
@@ -984,6 +1448,13 @@ class ReusableV1ThreadingHTTPServer(http.server.ThreadingHTTPServer):
         )
         try:
             request.settimeout(0.25)
+            try:
+                request.setblocking(False)
+                request.recv(4096)
+            except OSError:
+                pass
+            finally:
+                request.settimeout(0.25)
             request.sendall(resp)
         except OSError:
             pass

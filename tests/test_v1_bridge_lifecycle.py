@@ -134,13 +134,28 @@ class V1BridgeHTTPFramingAndSecurityTests(unittest.TestCase):
     def _raw_http_exchange(self, raw_bytes: bytes, timeout: float = 3.0) -> tuple[int, dict[str, str], bytes]:
         with socket.create_connection(("127.0.0.1", self.port), timeout=timeout) as sock:
             sock.sendall(raw_bytes)
-            chunks = []
+            buf = bytearray()
             while True:
-                data = sock.recv(4096)
+                try:
+                    data = sock.recv(4096)
+                except ConnectionResetError:
+                    if buf:
+                        break
+                    raise
                 if not data:
                     break
-                chunks.append(data)
-        raw_resp = b"".join(chunks)
+                buf.extend(data)
+                if b"\r\n\r\n" in buf:
+                    head_raw, _, body_part = bytes(buf).partition(b"\r\n\r\n")
+                    for hline in head_raw.decode("iso-8859-1").split("\r\n")[1:]:
+                        if hline.lower().startswith("content-length:"):
+                            cl = int(hline.split(":", 1)[1].strip())
+                            if len(body_part) >= cl:
+                                break
+                    else:
+                        continue
+                    break
+        raw_resp = bytes(buf)
         head, _, body = raw_resp.partition(b"\r\n\r\n")
         lines = head.decode("iso-8859-1").split("\r\n")
         status_code = int(lines[0].split(" ", 2)[1])
@@ -258,10 +273,48 @@ class V1BridgeHTTPFramingAndSecurityTests(unittest.TestCase):
         self.assertEqual(code, 400)
         self.assertEqual(json.loads(resp_body)["error"]["code"], "DUPLICATE_KEY")
 
-        # NaN constant -> 400
-        nan_json = b'{"request_id": 1, "x": NaN}'
-        code, _, _ = self._raw_http_exchange(self._valid_post_headers(len(nan_json)).encode("ascii") + nan_json)
+        # NaN / exponent overflow / nested overflow -> 400 INVALID_JSON BEFORE worker admission
+        for bad_json in (
+            b'{"request_id": 1, "x": NaN}',
+            b'{"request_id": 1, "x": 1e309}',
+            b'{"request_id": 1, "x": -1e309}',
+            b'{"request_id": 1, "nested": [{"val": 1e309}]}',
+        ):
+            code, _, resp_body = self._raw_http_exchange(
+                self._valid_post_headers(len(bad_json)).encode("ascii") + bad_json
+            )
+            self.assertEqual(code, 400, f"Failed for payload {bad_json!r}")
+            self.assertEqual(json.loads(resp_body)["error"]["code"], "INVALID_JSON")
+
+        # Deeply nested JSON -> 400 INVALID_JSON without killing healthy worker
+        deep_json = (b'{"request_id": 1, "d": ' + b"[" * 80 + b"1" + b"]" * 80 + b"}")
+        code, _, resp_body = self._raw_http_exchange(
+            self._valid_post_headers(len(deep_json)).encode("ascii") + deep_json
+        )
         self.assertEqual(code, 400)
+        self.assertEqual(json.loads(resp_body)["error"]["code"], "INVALID_JSON")
+
+        # Unicode superscript digit in Content-Length -> 400 INVALID_CONTENT_LENGTH
+        unicode_cl_req = (
+            f"POST /api/v1/solve HTTP/1.1\r\n"
+            f"Host: 127.0.0.1:{self.port}\r\n"
+            f"Origin: http://127.0.0.1:{self.port}\r\n"
+            f"Content-Type: application/json\r\n"
+            "Content-Length: \u00b2\r\n"
+            f"Connection: close\r\n\r\n{{}}"
+        ).encode("latin-1")
+        code, _, resp_body = self._raw_http_exchange(unicode_cl_req)
+        self.assertEqual(code, 400)
+        self.assertEqual(json.loads(resp_body)["error"]["code"], "INVALID_CONTENT_LENGTH")
+
+        # Huge 5000-digit Content-Length -> 413 PAYLOAD_TOO_LARGE (no CPython int digit limit crash)
+        huge_cl_req = self._valid_post_headers(2).replace("Content-Length: 2", "Content-Length: " + ("9" * 5000)).encode("ascii") + b"{}"
+        code, _, resp_body = self._raw_http_exchange(huge_cl_req)
+        self.assertEqual(code, 413)
+        self.assertEqual(json.loads(resp_body)["error"]["code"], "PAYLOAD_TOO_LARGE")
+
+        # None of the above malformed HTTP requests should have spawned a worker
+        self.assertEqual(len(self.server.worker_manager.spawned_pids), 0)
 
     def test_slow_trickle_header_and_body_rejected_with_408_within_deadline(self):
         # Slow-trickle header
@@ -968,6 +1021,424 @@ class V1WorkerLifecycleAndR5I1Tests(unittest.TestCase):
         for pid in mgr.spawned_pids:
             self.assertTrue(_is_pid_reaped(pid))
         self.assertEqual(_list_open_pipe_inodes(), baseline_pipes)
+
+    def test_r1_f1_barrier_shutdown_before_ready_publish_and_selector_register(self):
+        """V1-A-R1-F1: barrier shutdown before READY publish & before selector register never deadlocks or leaks."""
+        import v1_worker_bridge as bridge
+
+        baseline_pipes = _list_open_pipe_inodes()
+
+        # Case A: Shutdown racing while execute() is paused immediately BEFORE READY publication
+        reached_publish = threading.Event()
+        release_publish = threading.Event()
+        mgr_a = bridge.WorkerManager(
+            response_deadline_s=2.0,
+            worker_reap_timeout_s=0.8,
+            on_before_ready_publish=lambda _h: (reached_publish.set(), release_publish.wait(timeout=3.0)),
+        )
+        exec_res_a: list = []
+
+        def run_a():
+            exec_res_a.append(mgr_a.execute("/api/v1/solve", {"request_id": 1}))
+
+        th_a = threading.Thread(target=run_a)
+        th_a.start()
+        self.assertTrue(reached_publish.wait(timeout=2.0))
+
+        # shutdown() MUST return cleanly WITHOUT deadlocking while execute paused before publish
+        t_shut = time.monotonic()
+        mgr_a.shutdown()
+        self.assertLess(time.monotonic() - t_shut, 1.5)
+        release_publish.set()
+        th_a.join(timeout=2.0)
+
+        self.assertEqual(len(exec_res_a), 1)
+        self.assertEqual(exec_res_a[0].status_code, 503)
+        self.assertEqual(exec_res_a[0].payload["error"]["code"], "SERVER_SHUTTING_DOWN")
+        self.assertIsNone(mgr_a._active_worker)
+        for pid in mgr_a.spawned_pids:
+            self.assertTrue(_is_pid_reaped(pid))
+        self.assertEqual(_list_open_pipe_inodes(), baseline_pipes)
+
+        # Case B: Shutdown racing immediately BEFORE selector registration on warmed worker
+        reached_sel = threading.Event()
+        release_sel = threading.Event()
+        gate_armed = [False]
+
+        def before_sel(_h):
+            if gate_armed[0]:
+                reached_sel.set()
+                release_sel.wait(timeout=3.0)
+
+        mgr_b = bridge.WorkerManager(
+            response_deadline_s=2.0,
+            worker_reap_timeout_s=0.8,
+            on_before_selector_register=before_sel,
+        )
+        warm = mgr_b.execute("/api/v1/solve", {"request_id": 10})
+        self.assertEqual(warm.status_code, 200)
+        gate_armed[0] = True
+        exec_res_b: list = []
+
+        th_b = threading.Thread(target=lambda: exec_res_b.append(mgr_b.execute("/api/v1/solve", {"request_id": 11})))
+        th_b.start()
+        self.assertTrue(reached_sel.wait(timeout=2.0))
+        mgr_b.shutdown()
+        release_sel.set()
+        th_b.join(timeout=2.0)
+
+        self.assertEqual(len(exec_res_b), 1)
+        self.assertEqual(exec_res_b[0].status_code, 503)
+        self.assertEqual(exec_res_b[0].payload["error"]["code"], "SERVER_SHUTTING_DOWN")
+        for pid in mgr_b.spawned_pids:
+            self.assertTrue(_is_pid_reaped(pid))
+        self.assertEqual(_list_open_pipe_inodes(), baseline_pipes)
+
+        # Case C: Shutdown racing concurrently with active teardown owner (single kill/reap only)
+        in_kill = threading.Event()
+        release_kill = threading.Event()
+        kill_count = [0]
+
+        def barrier_kill(proc):
+            kill_count[0] += 1
+            in_kill.set()
+            release_kill.wait(timeout=3.0)
+            proc.kill()
+
+        mgr_c = bridge.WorkerManager(response_deadline_s=0.2, worker_reap_timeout_s=1.0, kill_fn=barrier_kill)
+        exec_res_c: list = []
+        th_c = threading.Thread(
+            target=lambda: exec_res_c.append(mgr_c.execute("/api/v1/solve", {"request_id": 12, "delay_s": 2.0}))
+        )
+        th_c.start()
+        self.assertTrue(in_kill.wait(timeout=2.0))
+        shut_done = threading.Event()
+
+        def run_shut():
+            mgr_c.shutdown()
+            shut_done.set()
+
+        th_s = threading.Thread(target=run_shut)
+        th_s.start()
+        release_kill.set()
+        th_c.join(timeout=2.0)
+        th_s.join(timeout=2.0)
+        self.assertTrue(shut_done.is_set())
+        self.assertEqual(exec_res_c[0].status_code, 504)
+        self.assertEqual(kill_count[0], 1)
+        for pid in mgr_c.spawned_pids:
+            self.assertTrue(_is_pid_reaped(pid))
+        self.assertEqual(_list_open_pipe_inodes(), baseline_pipes)
+
+    def test_r1_f2_abandoned_launch_raises_and_partial_pipe_and_pre_slot_shutdown(self):
+        """V1-A-R1-F2: abandoned launch exception before/after PID, pre-slot shutdown, partial pipe cleanup."""
+        import v1_worker_bridge as bridge
+
+        baseline_pipes = _list_open_pipe_inodes()
+
+        # Case A: delayed launch raises WITHOUT returning PID after caller timed out & abandoned slot
+        allow_fail = threading.Event()
+        runner_failed = threading.Event()
+
+        def delayed_fail_no_pid(cmd, pass_fds):
+            allow_fail.wait(timeout=2.0)
+            runner_failed.set()
+            raise RuntimeError("delayed fork/exec failure after abandonment")
+
+        mgr_a = bridge.WorkerManager(response_deadline_s=0.15, worker_reap_timeout_s=0.8, launch_fn=delayed_fail_no_pid)
+        res_a = mgr_a.execute("/api/v1/solve", {"request_id": 1})
+        self.assertEqual(res_a.status_code, 503)
+        self.assertEqual(res_a.payload["error"]["code"], "WORKER_UNAVAILABLE_POISONED")
+        allow_fail.set()
+        self.assertTrue(runner_failed.wait(timeout=2.0))
+        mgr_a.shutdown()
+        self.assertEqual(_list_open_pipe_inodes(), baseline_pipes)
+
+        # Case B: delayed launch calls register_pid(proc) AFTER timeout abandonment, then raises
+        allow_reg_raise = threading.Event()
+        reg_proc: list[subprocess.Popen] = []
+
+        def delayed_register_then_raise(cmd, pass_fds, register_pid=None):
+            allow_reg_raise.wait(timeout=2.0)
+            proc = subprocess.Popen(cmd, pass_fds=pass_fds, close_fds=True)
+            reg_proc.append(proc)
+            if register_pid is not None:
+                register_pid(proc)
+            raise RuntimeError("post-PID failure after timeout abandonment")
+
+        mgr_b = bridge.WorkerManager(
+            response_deadline_s=0.15, worker_reap_timeout_s=0.8, launch_fn=delayed_register_then_raise
+        )
+        res_b = mgr_b.execute("/api/v1/solve", {"request_id": 2})
+        self.assertEqual(res_b.status_code, 503)
+        self.assertEqual(res_b.payload["error"]["code"], "WORKER_UNAVAILABLE_POISONED")
+        allow_reg_raise.set()
+        mgr_b.shutdown()
+        self.assertEqual(len(reg_proc), 1)
+        self.assertTrue(_is_pid_reaped(reg_proc[0].pid))
+        self.assertEqual(_list_open_pipe_inodes(), baseline_pipes)
+
+        # Case C: shutdown races BEFORE launch slot publication -> zero spawns, 503 SERVER_SHUTTING_DOWN
+        reached_pre_slot = threading.Event()
+        release_pre_slot = threading.Event()
+        mgr_c = bridge.WorkerManager(
+            response_deadline_s=1.0,
+            worker_reap_timeout_s=0.6,
+            on_before_launch_slot_publish=lambda: (reached_pre_slot.set(), release_pre_slot.wait(timeout=2.0)),
+        )
+        res_c_box: list = []
+        th_c = threading.Thread(target=lambda: res_c_box.append(mgr_c.execute("/api/v1/solve", {"request_id": 3})))
+        th_c.start()
+        self.assertTrue(reached_pre_slot.wait(timeout=2.0))
+        mgr_c.shutdown()
+        release_pre_slot.set()
+        th_c.join(timeout=2.0)
+        self.assertEqual(res_c_box[0].status_code, 503)
+        self.assertEqual(res_c_box[0].payload["error"]["code"], "SERVER_SHUTTING_DOWN")
+        self.assertEqual(mgr_c.spawned_pids, [])
+        self.assertEqual(_list_open_pipe_inodes(), baseline_pipes)
+
+        # Case D: partial pipe allocation failure cleans up first pipe FDs cleanly
+        real_pipe = os.pipe
+        calls = [0]
+
+        def fail_second_pipe():
+            calls[0] += 1
+            if calls[0] == 1:
+                return real_pipe()
+            raise OSError("simulated EMFILE on second pipe")
+
+        mgr_d = bridge.WorkerManager(response_deadline_s=1.0, worker_reap_timeout_s=0.6)
+        try:
+            with mock.patch("v1_worker_bridge.os.pipe", side_effect=fail_second_pipe):
+                res_d = mgr_d.execute("/api/v1/solve", {"request_id": 4})
+            self.assertEqual(res_d.status_code, 503)
+            self.assertEqual(res_d.payload["error"]["code"], "WORKER_STARTUP_FAILED")
+        finally:
+            mgr_d.shutdown()
+        self.assertEqual(_list_open_pipe_inodes(), baseline_pipes)
+
+    def test_r1_f3_post_final_byte_and_decode_deadline_enforcement(self):
+        """V1-A-R1-F3: expiry after final frame byte or during JSON decode/validation returns 504, never 200."""
+        import v1_worker_bridge as bridge
+
+        baseline_pipes = _list_open_pipe_inodes()
+
+        # Case A: clock expires right AFTER final response byte is read, BEFORE JSON decode/200
+        now = [100.0]
+        mgr_a = bridge.WorkerManager(
+            response_deadline_s=5.0,
+            worker_reap_timeout_s=0.8,
+            clock=lambda: now[0],
+        )
+        warm = mgr_a.execute("/api/v1/solve", {"request_id": 1})
+        self.assertEqual(warm.status_code, 200)
+        mgr_a._on_after_raw_read = lambda _c: now.__setitem__(0, 200.0) if len(_c) > 10 else None
+        try:
+            res_expired = mgr_a.execute("/api/v1/solve", {"request_id": 2})
+            self.assertEqual(res_expired.status_code, 504)
+            self.assertEqual(res_expired.payload["error"]["code"], "SOLVE_DEADLINE_EXCEEDED")
+            self.assertTrue(_is_pid_reaped(mgr_a.spawned_pids[0]))
+        finally:
+            mgr_a.shutdown()
+        self.assertEqual(_list_open_pipe_inodes(), baseline_pipes)
+
+        # Case B: stalled / slow decode past deadline (simulating near-max response decode expiry)
+        now_b = [500.0]
+        mgr_b = bridge.WorkerManager(
+            response_deadline_s=0.35,
+            worker_reap_timeout_s=0.8,
+            clock=lambda: now_b[0],
+        )
+        warm_b = mgr_b.execute("/api/v1/solve", {"request_id": 10})
+        self.assertEqual(warm_b.status_code, 200)
+        mgr_b._on_decode_transform = lambda obj: (now_b.__setitem__(0, 600.0), obj)[1]
+        try:
+            res_dec = mgr_b.execute("/api/v1/solve", {"request_id": 11})
+            self.assertEqual(res_dec.status_code, 504)
+            self.assertEqual(res_dec.payload["error"]["code"], "SOLVE_DEADLINE_EXCEEDED")
+            self.assertTrue(_is_pid_reaped(mgr_b.spawned_pids[0]))
+        finally:
+            mgr_b.shutdown()
+        self.assertEqual(_list_open_pipe_inodes(), baseline_pipes)
+
+    def test_r1_f4_poison_precedence_and_quarantined_process_ownership(self):
+        """V1-A-R1-F4: post-PID launch & cancel teardown failures poison and retain quarantine for shutdown."""
+        import v1_worker_bridge as bridge
+
+        baseline_pipes = _list_open_pipe_inodes()
+
+        # Case A: launcher registers PID then raises, AND kill fails -> 503 POISONED + retained quarantine
+        kill_should_fail = [True]
+        leaked_procs: list[subprocess.Popen] = []
+
+        def launch_reg_then_raise(cmd, pass_fds, register_pid=None):
+            proc = subprocess.Popen(cmd, pass_fds=pass_fds, close_fds=True)
+            leaked_procs.append(proc)
+            if register_pid is not None:
+                register_pid(proc)
+            raise RuntimeError("boom after register_pid")
+
+        def flaky_kill(proc):
+            if kill_should_fail[0]:
+                raise PermissionError("simulated EPERM on initial teardown")
+            proc.kill()
+
+        mgr_a = bridge.WorkerManager(
+            response_deadline_s=0.6,
+            worker_reap_timeout_s=0.6,
+            launch_fn=launch_reg_then_raise,
+            kill_fn=flaky_kill,
+        )
+        res_a = mgr_a.execute("/api/v1/solve", {"request_id": 1})
+        self.assertEqual(res_a.status_code, 503)
+        self.assertEqual(res_a.payload["error"]["code"], "WORKER_UNAVAILABLE_POISONED")
+        self.assertEqual(mgr_a.quarantined_pids, [leaked_procs[0].pid])
+
+        # Subsequent call sees 503 POISONED before anything else
+        res_a2 = mgr_a.execute("/api/v1/solve", {"request_id": 2})
+        self.assertEqual(res_a2.status_code, 503)
+        self.assertEqual(res_a2.payload["error"]["code"], "WORKER_UNAVAILABLE_POISONED")
+
+        # Clear transient kill fault -> shutdown() retries quarantined handle and reaps child, yet remains poisoned
+        kill_should_fail[0] = False
+        mgr_a.shutdown()
+        self.assertEqual(mgr_a.quarantined_pids, [])
+        self.assertTrue(_is_pid_reaped(leaked_procs[0].pid))
+        self.assertTrue(mgr_a._worker_poisoned)
+        self.assertEqual(_list_open_pipe_inodes(), baseline_pipes)
+
+        # Case B: cancellation teardown failure returns WORKER_UNAVAILABLE_POISONED (not SERVER_SHUTTING_DOWN)
+        kill_should_fail_b = [True]
+
+        def flaky_kill_b(proc):
+            if kill_should_fail_b[0]:
+                raise PermissionError("simulated cancel teardown EPERM")
+            proc.kill()
+
+        reached_sel = threading.Event()
+        release_sel = threading.Event()
+        armed = [False]
+        mgr_b = bridge.WorkerManager(
+            response_deadline_s=1.5,
+            worker_reap_timeout_s=0.5,
+            kill_fn=flaky_kill_b,
+            on_before_selector_register=lambda _h: (reached_sel.set(), release_sel.wait(timeout=2.0)) if armed[0] else None,
+        )
+        self.assertEqual(mgr_b.execute("/api/v1/solve", {"request_id": 10}).status_code, 200)
+        armed[0] = True
+        box_b: list = []
+        th_b = threading.Thread(target=lambda: box_b.append(mgr_b.execute("/api/v1/solve", {"request_id": 11})))
+        th_b.start()
+        self.assertTrue(reached_sel.wait(timeout=2.0))
+        mgr_b.shutdown()
+        release_sel.set()
+        th_b.join(timeout=2.0)
+
+        self.assertEqual(box_b[0].status_code, 503)
+        self.assertEqual(box_b[0].payload["error"]["code"], "WORKER_UNAVAILABLE_POISONED")
+        kill_should_fail_b[0] = False
+        mgr_b.shutdown()
+        for pid in mgr_b.spawned_pids:
+            self.assertTrue(_is_pid_reaped(pid))
+        self.assertEqual(_list_open_pipe_inodes(), baseline_pipes)
+
+    def test_r1_m1_worker_overflow_json_reaps_cleanly(self):
+        """V1-A-R1-M1: malformed/overflowing worker JSON triggers 500 IPC_PROTOCOL_ERROR & reaps worker."""
+        import v1_worker_bridge as bridge
+
+        baseline_pipes = _list_open_pipe_inodes()
+        bad_worker = self._make_fault_worker_script(
+            "import argparse, json, os, struct\n"
+            "def read_exact(fd, n):\n"
+            "  b = bytearray()\n"
+            "  while len(b) < n:\n"
+            "    c = os.read(fd, n - len(b))\n"
+            "    if not c: raise EOFError()\n"
+            "    b.extend(c)\n"
+            "  return bytes(b)\n"
+            "p = argparse.ArgumentParser()\n"
+            "p.add_argument('--req-fd', type=int); p.add_argument('--resp-fd', type=int)\n"
+            "a, _ = p.parse_known_args()\n"
+            "ready = json.dumps({'type':'READY','pid':os.getpid(),'req_ino':os.fstat(a.req_fd).st_ino,'resp_ino':os.fstat(a.resp_fd).st_ino}).encode()\n"
+            "os.write(a.resp_fd, struct.pack('>I', len(ready)) + ready)\n"
+            "n = struct.unpack('>I', read_exact(a.req_fd, 4))[0]\n"
+            "req = json.loads(read_exact(a.req_fd, n).decode())\n"
+            "bad = f'{{\"ipc_token\":{req[\"ipc_token\"]},\"val\":1e309}}'.encode()\n"
+            "os.write(a.resp_fd, struct.pack('>I', len(bad)) + bad)\n"
+        )
+        mgr = bridge.WorkerManager(response_deadline_s=1.0, worker_reap_timeout_s=0.6, custom_worker_cmd=bad_worker)
+        try:
+            res = mgr.execute("/api/v1/solve", {"request_id": 1})
+            self.assertEqual(res.status_code, 500)
+            self.assertEqual(res.payload["error"]["code"], "IPC_PROTOCOL_ERROR")
+            self.assertTrue(_is_pid_reaped(mgr.spawned_pids[0]))
+        finally:
+            mgr.shutdown()
+        self.assertEqual(_list_open_pipe_inodes(), baseline_pipes)
+
+    def test_r1_m2_cwd_independent_launcher_execution(self):
+        """V1-A-R1-M2: launching run_explorer.py from an isolated temp CWD with sanitized PYTHONPATH succeeds."""
+        launcher_path = Path(__file__).resolve().parent.parent / "run_explorer.py"
+        with tempfile.TemporaryDirectory() as tmp_cwd:
+            # Find a free port without polluting cwd
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.bind(("127.0.0.1", 0))
+                port = s.getsockname()[1]
+
+            env = {k: v for k, v in os.environ.items() if k != "PYTHONPATH"}
+            env["PYTHONPATH"] = ""
+            proc = subprocess.Popen(
+                [sys.executable, str(launcher_path), "--host", "127.0.0.1", "--port", str(port), "--no-browser"],
+                cwd=tmp_cwd,
+                env=env,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            try:
+                # Wait briefly for HTTP bind from unrelated CWD
+                deadline = time.monotonic() + 3.0
+                last_err = None
+                resp_payload = None
+                while time.monotonic() < deadline:
+                    try:
+                        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=1.0)
+                        body = json.dumps({"request_id": 77}).encode("utf-8")
+                        conn.request(
+                            "POST",
+                            "/api/v1/solve",
+                            body=body,
+                            headers={
+                                "Host": f"127.0.0.1:{port}",
+                                "Origin": f"http://127.0.0.1:{port}",
+                                "Content-Type": "application/json",
+                                "Content-Length": str(len(body)),
+                            },
+                        )
+                        resp = conn.getresponse()
+                        resp_payload = (resp.status, json.loads(resp.read().decode("utf-8")))
+                        conn.close()
+                        break
+                    except OSError as exc:
+                        last_err = exc
+                        time.sleep(0.05)
+
+                self.assertIsNotNone(resp_payload, f"Server failed to bind from temp CWD: {last_err}")
+                status, payload = resp_payload
+                self.assertEqual(status, 200)
+                self.assertEqual(payload["status"], "V1_A_TRANSPORT_ONLY")
+                self.assertEqual(payload["request_id"], 77)
+            finally:
+                proc.terminate()
+                try:
+                    proc.wait(timeout=3.0)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    proc.wait(timeout=3.0)
+                if proc.stdout:
+                    proc.stdout.close()
+                if proc.stderr:
+                    proc.stderr.close()
 
 
 if __name__ == "__main__":

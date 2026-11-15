@@ -22,26 +22,11 @@ import webbrowser
 from pathlib import Path
 
 
-EXPLORER_DIR = Path(__file__).resolve().parent / "explorer"
+_REPO_ROOT = Path(__file__).resolve().parent
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
 
-
-class ExplorerHTTPRequestHandler(http.server.SimpleHTTPRequestHandler):
-    """Custom request handler serving from the explorer directory with caching headers."""
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, directory=str(EXPLORER_DIR), **kwargs)
-
-    def end_headers(self):
-        # Prevent aggressive browser caching during local development
-        self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
-        self.send_header("Pragma", "no-cache")
-        self.send_header("Expires", "0")
-        super().end_headers()
-
-    def log_message(self, format, *args):
-        # Concise logging
-        if sys.stderr.isatty():
-            sys.stderr.write(f"[Propulsion Explorer] {self.address_string()} - {format % args}\n")
+EXPLORER_DIR = _REPO_ROOT / "explorer"
 
 
 def is_port_available(host: str, port: int) -> bool:
