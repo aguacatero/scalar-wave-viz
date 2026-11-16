@@ -1268,12 +1268,13 @@ class V1WorkerLifecycleAndR5I1Tests(unittest.TestCase):
 
         baseline_pipes = _list_open_pipe_inodes()
 
-        # Case A: launcher registers PID then raises, AND kill fails -> 503 POISONED + retained quarantine
+        # Case A: launcher registers sleeping child PID then raises, AND kill fails -> 503 POISONED + retained quarantine
         kill_should_fail = [True]
         leaked_procs: list[subprocess.Popen] = []
+        sleeping_cmd = self._make_fault_worker_script("import time\ntime.sleep(5)\n")
 
         def launch_reg_then_raise(cmd, pass_fds, register_pid=None):
-            proc = subprocess.Popen(cmd, pass_fds=pass_fds, close_fds=True)
+            proc = subprocess.Popen(sleeping_cmd, pass_fds=pass_fds, close_fds=True)
             leaked_procs.append(proc)
             if register_pid is not None:
                 register_pid(proc)
@@ -1439,6 +1440,538 @@ class V1WorkerLifecycleAndR5I1Tests(unittest.TestCase):
                     proc.stdout.close()
                 if proc.stderr:
                     proc.stderr.close()
+
+    def test_r2_f1_shutdown_during_live_pre_and_post_pid_launch_no_deadlock(self):
+        """V1-A-R2-F1: shutdown while pre-PID or post-PID launch is still running never self-deadlocks."""
+        import v1_worker_bridge as bridge
+
+        baseline_pipes = _list_open_pipe_inodes()
+
+        # Case A: live pre-PID launch stalled on barrier when shutdown starts
+        pre_entered = threading.Event()
+        pre_release = threading.Event()
+
+        def stalled_pre_pid(cmd, pass_fds):
+            pre_entered.set()
+            pre_release.wait(timeout=3.0)
+            raise RuntimeError("pre-PID launch released after shutdown")
+
+        mgr_a = bridge.WorkerManager(response_deadline_s=5.0, worker_reap_timeout_s=0.4, launch_fn=stalled_pre_pid)
+        res_a_box: list = []
+        th_exec_a = threading.Thread(target=lambda: res_a_box.append(mgr_a.execute("/api/v1/solve", {"request_id": 1})))
+        th_exec_a.start()
+        self.assertTrue(pre_entered.wait(timeout=2.0))
+
+        shut_a_done = threading.Event()
+        th_shut_a = threading.Thread(target=lambda: (mgr_a.shutdown(), shut_a_done.set()))
+        th_shut_a.start()
+        # Allow execute to observe _shutting_down BEFORE releasing launcher
+        time.sleep(0.05)
+        pre_release.set()
+
+        th_exec_a.join(timeout=2.5)
+        th_shut_a.join(timeout=2.5)
+        self.assertFalse(th_exec_a.is_alive(), "execute() deadlocked during live pre-PID launch shutdown")
+        self.assertFalse(th_shut_a.is_alive(), "shutdown() deadlocked during live pre-PID launch shutdown")
+        self.assertEqual(res_a_box[0].status_code, 503)
+        self.assertEqual(mgr_a.spawned_pids, [])
+        self.assertEqual(_list_open_pipe_inodes(), baseline_pipes)
+
+        # Case B: live post-PID launch stalled after register_pid(proc) while shutdown runs
+        post_entered = threading.Event()
+        post_release = threading.Event()
+        procs_b: list[subprocess.Popen] = []
+
+        def stalled_post_pid(cmd, pass_fds, register_pid=None):
+            proc = subprocess.Popen(cmd, pass_fds=pass_fds, close_fds=True)
+            procs_b.append(proc)
+            if register_pid is not None:
+                register_pid(proc)
+            post_entered.set()
+            post_release.wait(timeout=3.0)
+            return proc
+
+        mgr_b = bridge.WorkerManager(response_deadline_s=5.0, worker_reap_timeout_s=0.6, launch_fn=stalled_post_pid)
+        res_b_box: list = []
+        th_exec_b = threading.Thread(target=lambda: res_b_box.append(mgr_b.execute("/api/v1/solve", {"request_id": 2})))
+        th_exec_b.start()
+        self.assertTrue(post_entered.wait(timeout=2.0))
+
+        shut_b_done = threading.Event()
+        th_shut_b = threading.Thread(target=lambda: (mgr_b.shutdown(), shut_b_done.set()))
+        th_shut_b.start()
+        time.sleep(0.05)
+        post_release.set()
+
+        th_exec_b.join(timeout=2.5)
+        th_shut_b.join(timeout=2.5)
+        self.assertFalse(th_exec_b.is_alive())
+        self.assertFalse(th_shut_b.is_alive())
+        self.assertEqual(res_b_box[0].status_code, 503)
+        self.assertEqual(len(procs_b), 1)
+        self.assertTrue(_is_pid_reaped(procs_b[0].pid))
+        # No respawn after shutdown
+        self.assertEqual(mgr_b.execute("/api/v1/solve", {"request_id": 3}).status_code, 503)
+        self.assertEqual(_list_open_pipe_inodes(), baseline_pipes)
+
+    def test_r2_f2_atomic_slot_transfer_and_sentinel_fd_reuse_safety(self):
+        """V1-A-R2-F2: slot-to-handle barriers & cancel-pipe writer lease never close/write unrelated sentinel FDs."""
+        import v1_worker_bridge as bridge
+
+        baseline_pipes = _list_open_pipe_inodes()
+
+        # (a) Shutdown between _active_launch commit & runner start, with numeric FD reuse sentinel
+        sentinel_a: list[tuple[int, int]] = []
+        at_a = threading.Event()
+        rel_a = threading.Event()
+
+        def hook_after_commit(_slot):
+            at_a.set()
+            rel_a.wait(timeout=2.0)
+
+        mgr_a = bridge.WorkerManager(
+            response_deadline_s=2.0,
+            worker_reap_timeout_s=0.6,
+            on_after_slot_publish_before_runner=hook_after_commit,
+        )
+        res_a: list = []
+        th_a = threading.Thread(target=lambda: res_a.append(mgr_a.execute("/api/v1/solve", {"request_id": 1})))
+        th_a.start()
+        self.assertTrue(at_a.wait(timeout=2.0))
+        mgr_a.shutdown()
+        # Allocate unrelated sentinel pipe reusing freed FD numbers
+        sr, sw = os.pipe()
+        sentinel_a.append((sr, sw))
+        try:
+            rel_a.set()
+            th_a.join(timeout=2.0)
+            self.assertEqual(res_a[0].status_code, 503)
+            self.assertTrue(bridge._is_fd_open(sr))
+            self.assertTrue(bridge._is_fd_open(sw))
+            self.assertEqual(mgr_a.spawned_pids, [])
+        finally:
+            os.close(sr)
+            os.close(sw)
+        self.assertEqual(_list_open_pipe_inodes(), baseline_pipes)
+
+        # (b) Shutdown between registered PID & done AND before slot-to-pending handoff, with sentinel FDs
+        at_pid = threading.Event()
+        rel_pid = threading.Event()
+        mgr_b = bridge.WorkerManager(
+            response_deadline_s=2.0,
+            worker_reap_timeout_s=0.6,
+            on_after_runner_pid_before_done=lambda _p: (at_pid.set(), rel_pid.wait(timeout=2.0)),
+        )
+        res_b: list = []
+        th_b = threading.Thread(target=lambda: res_b.append(mgr_b.execute("/api/v1/solve", {"request_id": 2})))
+        th_b.start()
+        self.assertTrue(at_pid.wait(timeout=2.0))
+        th_shut_b = threading.Thread(target=mgr_b.shutdown)
+        th_shut_b.start()
+        time.sleep(0.05)
+        rel_pid.set()
+        th_shut_b.join(timeout=2.0)
+        sr2, sw2 = os.pipe()
+        try:
+            th_b.join(timeout=2.0)
+            self.assertEqual(res_b[0].status_code, 503)
+            self.assertTrue(bridge._is_fd_open(sr2))
+            self.assertTrue(bridge._is_fd_open(sw2))
+            for pid in mgr_b.spawned_pids:
+                self.assertTrue(_is_pid_reaped(pid))
+        finally:
+            os.close(sr2)
+            os.close(sw2)
+        self.assertEqual(_list_open_pipe_inodes(), baseline_pipes)
+
+        # (c) Barrier between slot done & pending handoff
+        at_handoff = threading.Event()
+        rel_handoff = threading.Event()
+        mgr_c = bridge.WorkerManager(
+            response_deadline_s=2.0,
+            worker_reap_timeout_s=0.6,
+            on_before_slot_to_pending_handoff=lambda _s: (at_handoff.set(), rel_handoff.wait(timeout=2.0)),
+        )
+        res_c: list = []
+        th_c = threading.Thread(target=lambda: res_c.append(mgr_c.execute("/api/v1/solve", {"request_id": 3})))
+        th_c.start()
+        self.assertTrue(at_handoff.wait(timeout=2.0))
+        mgr_c.shutdown()
+        sr3, sw3 = os.pipe()
+        try:
+            rel_handoff.set()
+            th_c.join(timeout=2.0)
+            self.assertEqual(res_c[0].status_code, 503)
+            self.assertTrue(bridge._is_fd_open(sr3))
+            self.assertTrue(bridge._is_fd_open(sw3))
+            for pid in mgr_c.spawned_pids:
+                self.assertTrue(_is_pid_reaped(pid))
+        finally:
+            os.close(sr3)
+            os.close(sw3)
+        self.assertEqual(_list_open_pipe_inodes(), baseline_pipes)
+
+        # (d) Barrier between cancel_w capture and write: shutdown holds writer lease so cancel pipe cannot be closed/reused early
+        in_cancel = threading.Event()
+        rel_cancel = threading.Event()
+        mgr_d = bridge.WorkerManager(
+            response_deadline_s=2.0,
+            worker_reap_timeout_s=0.6,
+            on_before_cancel_write=lambda: (in_cancel.set(), rel_cancel.wait(timeout=2.0)),
+        )
+        self.assertEqual(mgr_d.execute("/api/v1/solve", {"request_id": 4}).status_code, 200)
+        th_shut_d = threading.Thread(target=mgr_d.shutdown)
+        th_shut_d.start()
+        self.assertTrue(in_cancel.wait(timeout=2.0))
+        # Cancel pipe MUST still be open (active_cancel_writers == 1) until rel_cancel.set()
+        self.assertFalse(mgr_d._cancel_closed)
+        rel_cancel.set()
+        th_shut_d.join(timeout=2.0)
+        self.assertTrue(mgr_d._cancel_closed)
+        self.assertEqual(_list_open_pipe_inodes(), baseline_pipes)
+
+    def test_r2_f3_post_write_expiry_and_ready_linearization_deadline(self):
+        """V1-A-R2-F3: post-write clock expiry yields 504 (not 500 EOF), and READY expiry checks under lock."""
+        import v1_worker_bridge as bridge
+
+        baseline_pipes = _list_open_pipe_inodes()
+
+        # Case A: clock advances past deadline right AFTER final os.write on request frame
+        now_a = [100.0]
+        mgr_a = bridge.WorkerManager(response_deadline_s=5.0, worker_reap_timeout_s=0.8, clock=lambda: now_a[0])
+        self.assertEqual(mgr_a.execute("/api/v1/solve", {"request_id": 1}).status_code, 200)
+        real_write = os.write
+
+        def expire_after_req_write(fd: int, data: bytes) -> int:
+            n = real_write(fd, data)
+            if len(data) > 20:
+                now_a[0] = 200.0
+            return n
+
+        try:
+            with mock.patch("v1_worker_bridge.os.write", side_effect=expire_after_req_write):
+                res_post_write = mgr_a.execute("/api/v1/solve", {"request_id": 2})
+            self.assertEqual(res_post_write.status_code, 504)
+            self.assertEqual(res_post_write.payload["error"]["code"], "SOLVE_DEADLINE_EXCEEDED")
+            self.assertTrue(_is_pid_reaped(mgr_a.spawned_pids[0]))
+
+            # Clean recovery respawn after post-write 504
+            now_a[0] = 300.0
+            res_rec = mgr_a.execute("/api/v1/solve", {"request_id": 3})
+            self.assertEqual(res_rec.status_code, 200)
+        finally:
+            mgr_a.shutdown()
+        self.assertEqual(_list_open_pipe_inodes(), baseline_pipes)
+
+        # Case B: clock expires DURING on_before_ready_publish -> linearized lock check rejects publication -> 504
+        now_b = [100.0]
+        mgr_b = bridge.WorkerManager(
+            response_deadline_s=2.0,
+            worker_reap_timeout_s=0.6,
+            clock=lambda: now_b[0],
+            on_before_ready_publish=lambda _h: now_b.__setitem__(0, 200.0),
+        )
+        try:
+            res_ready_exp = mgr_b.execute("/api/v1/solve", {"request_id": 4})
+            self.assertEqual(res_ready_exp.status_code, 504)
+            self.assertEqual(res_ready_exp.payload["error"]["code"], "SOLVE_DEADLINE_EXCEEDED")
+            self.assertIsNone(mgr_b._active_worker)
+            self.assertTrue(_is_pid_reaped(mgr_b.spawned_pids[0]))
+        finally:
+            mgr_b.shutdown()
+        self.assertEqual(_list_open_pipe_inodes(), baseline_pipes)
+
+    def test_r2_f4_single_teardown_budget_and_real_large_bounded_decode(self):
+        """V1-A-R2-F4: single absolute reap budget across lock/drain/reap + real multi-MB decode & uncooperative decoder poison."""
+        import v1_worker_bridge as bridge
+
+        baseline_pipes = _list_open_pipe_inodes()
+
+        # Case A: single absolute teardown budget (delay in kill + delay in wait > worker_reap_timeout_s triggers timeout once)
+        def slow_kill(proc):
+            time.sleep(0.30)
+            proc.kill()
+
+        slow_exit_cmd = self._make_fault_worker_script(
+            "import argparse, json, os, signal, struct, time\n"
+            "signal.signal(signal.SIGKILL if False else signal.SIGTERM, lambda *_: None)\n"
+            "def read_exact(fd, n):\n"
+            "  b = bytearray()\n"
+            "  while len(b) < n:\n"
+            "    c = os.read(fd, n - len(b))\n"
+            "    if not c: raise EOFError()\n"
+            "    b.extend(c)\n"
+            "  return bytes(b)\n"
+            "p = argparse.ArgumentParser()\n"
+            "p.add_argument('--req-fd', type=int); p.add_argument('--resp-fd', type=int)\n"
+            "a, _ = p.parse_known_args()\n"
+            "ready = json.dumps({'type':'READY','pid':os.getpid(),'req_ino':os.fstat(a.req_fd).st_ino,'resp_ino':os.fstat(a.resp_fd).st_ino}).encode()\n"
+            "os.write(a.resp_fd, struct.pack('>I', len(ready)) + ready)\n"
+            "n = struct.unpack('>I', read_exact(a.req_fd, 4))[0]\n"
+            "read_exact(a.req_fd, n)\n"
+            "time.sleep(5)\n"
+        )
+        # Reap budget 0.55s shared between teardown_exec_lock contender + kill delay + proc.wait
+        mgr_a = bridge.WorkerManager(response_deadline_s=0.15, worker_reap_timeout_s=0.55, custom_worker_cmd=slow_exit_cmd, kill_fn=slow_kill)
+        try:
+            t0 = time.monotonic()
+            res_a = mgr_a.execute("/api/v1/solve", {"request_id": 1})
+            dt = time.monotonic() - t0
+            self.assertEqual(res_a.status_code, 504)
+            # Total time must reflect ONE deadline (~0.15s) + single teardown (<0.55s)
+            self.assertLess(dt, 0.90)
+        finally:
+            mgr_a.shutdown()
+        self.assertEqual(_list_open_pipe_inodes(), baseline_pipes)
+
+        # Case B: real ~5MB large JSON frame passes inside budget AND aborts mid-parse when deadline expires
+        big_worker = self._make_fault_worker_script(
+            "import argparse, json, os, struct\n"
+            "def read_exact(fd, n):\n"
+            "  b = bytearray()\n"
+            "  while len(b) < n:\n"
+            "    c = os.read(fd, n - len(b))\n"
+            "    if not c: raise EOFError()\n"
+            "    b.extend(c)\n"
+            "  return bytes(b)\n"
+            "p = argparse.ArgumentParser()\n"
+            "p.add_argument('--req-fd', type=int); p.add_argument('--resp-fd', type=int)\n"
+            "a, _ = p.parse_known_args()\n"
+            "ready = json.dumps({'type':'READY','pid':os.getpid(),'req_ino':os.fstat(a.req_fd).st_ino,'resp_ino':os.fstat(a.resp_fd).st_ino}).encode()\n"
+            "os.write(a.resp_fd, struct.pack('>I', len(ready)) + ready)\n"
+            "arr_json = '[' + ','.join(['1.25'] * 700000) + ']'\n"
+            "while True:\n"
+            "  try: hdr = read_exact(a.req_fd, 4)\n"
+            "  except EOFError: break\n"
+            "  n = struct.unpack('>I', hdr)[0]\n"
+            "  req = json.loads(read_exact(a.req_fd, n).decode())\n"
+            "  out = ('{\"ipc_token\":' + str(req['ipc_token']) + ',\"data\":' + arr_json + '}').encode()\n"
+            "  mv = memoryview(struct.pack('>I', len(out)) + out)\n"
+            "  sent = 0\n"
+            "  while sent < len(mv): sent += os.write(a.resp_fd, mv[sent:])\n"
+        )
+        now_b = [100.0]
+
+        def clock_b():
+            return now_b[0]
+
+        # Advance mock clock after first 256 parse tokens? Keep clock advancing slowly by tick calls when requested
+        expire_mid_parse = [False]
+        token_checks = [0]
+
+        def clock_mid_parse():
+            if expire_mid_parse[0]:
+                token_checks[0] += 1
+                if token_checks[0] >= 50:
+                    return 200.0
+            return 100.0
+
+        mgr_b = bridge.WorkerManager(
+            response_deadline_s=5.0,
+            worker_reap_timeout_s=0.8,
+            custom_worker_cmd=big_worker,
+            clock=clock_mid_parse,
+        )
+        try:
+            ok_big = mgr_b.execute("/api/v1/solve", {"request_id": 10})
+            self.assertEqual(ok_big.status_code, 200)
+            self.assertEqual(len(ok_big.payload["data"]), 700000)
+
+            expire_mid_parse[0] = True
+            tmo_big = mgr_b.execute("/api/v1/solve", {"request_id": 11})
+            self.assertEqual(tmo_big.status_code, 504)
+            self.assertEqual(tmo_big.payload["error"]["code"], "SOLVE_DEADLINE_EXCEEDED")
+            self.assertTrue(_is_pid_reaped(mgr_b.spawned_pids[0]))
+
+            expire_mid_parse[0] = False
+            mgr_b.custom_worker_cmd = None
+            rec_big = mgr_b.execute("/api/v1/solve", {"request_id": 12})
+            self.assertEqual(rec_big.status_code, 200)
+        finally:
+            mgr_b.shutdown()
+        self.assertEqual(_list_open_pipe_inodes(), baseline_pipes)
+
+        # Case C: uncooperative stalled decoder cannot be joined -> poisons fail closed, admission stays closed
+        stall_release = threading.Event()
+
+        def blocking_decode(obj):
+            stall_release.wait(timeout=2.0)
+            return obj
+
+        mgr_c = bridge.WorkerManager(
+            response_deadline_s=1.0,
+            worker_reap_timeout_s=0.2,
+        )
+        try:
+            self.assertEqual(mgr_c.execute("/api/v1/solve", {"request_id": 20}).status_code, 200)
+            mgr_c.response_deadline_s = 0.12
+            mgr_c._on_decode_transform = blocking_decode
+            res_c = mgr_c.execute("/api/v1/solve", {"request_id": 21})
+            self.assertEqual(res_c.status_code, 503)
+            self.assertEqual(res_c.payload["error"]["code"], "WORKER_UNAVAILABLE_POISONED")
+            # Must stay poisoned / never reopen while abandoned decode persisted
+            res_c2 = mgr_c.execute("/api/v1/solve", {"request_id": 22})
+            self.assertEqual(res_c2.status_code, 503)
+            self.assertEqual(res_c2.payload["error"]["code"], "WORKER_UNAVAILABLE_POISONED")
+            self.assertEqual(len(mgr_c.spawned_pids), 1)
+        finally:
+            stall_release.set()
+            mgr_c.shutdown()
+        self.assertEqual(_list_open_pipe_inodes(), baseline_pipes)
+
+    def test_r2_m1_rejects_bool_and_float_identity_tokens(self):
+        """V1-A-R2-M1: bool (`True == 1`) and float (`1.0 == 1`) in ipc_token or READY identity are rejected."""
+        import v1_worker_bridge as bridge
+
+        baseline_pipes = _list_open_pipe_inodes()
+
+        bool_token_cmd = self._make_fault_worker_script(
+            "import argparse, json, os, struct\n"
+            "def read_exact(fd, n):\n"
+            "  b = bytearray()\n"
+            "  while len(b) < n:\n"
+            "    c = os.read(fd, n - len(b))\n"
+            "    if not c: raise EOFError()\n"
+            "    b.extend(c)\n"
+            "  return bytes(b)\n"
+            "p = argparse.ArgumentParser()\n"
+            "p.add_argument('--req-fd', type=int); p.add_argument('--resp-fd', type=int)\n"
+            "a, _ = p.parse_known_args()\n"
+            "ready = json.dumps({'type':'READY','pid':os.getpid(),'req_ino':os.fstat(a.req_fd).st_ino,'resp_ino':os.fstat(a.resp_fd).st_ino}).encode()\n"
+            "os.write(a.resp_fd, struct.pack('>I', len(ready)) + ready)\n"
+            "n = struct.unpack('>I', read_exact(a.req_fd, 4))[0]\n"
+            "read_exact(a.req_fd, n)\n"
+            "bad = json.dumps({'ipc_token': True, 'status': 'SPOOF'}).encode()\n"
+            "os.write(a.resp_fd, struct.pack('>I', len(bad)) + bad)\n"
+        )
+        float_token_cmd = self._make_fault_worker_script(
+            "import argparse, json, os, struct\n"
+            "def read_exact(fd, n):\n"
+            "  b = bytearray()\n"
+            "  while len(b) < n:\n"
+            "    c = os.read(fd, n - len(b))\n"
+            "    if not c: raise EOFError()\n"
+            "    b.extend(c)\n"
+            "  return bytes(b)\n"
+            "p = argparse.ArgumentParser()\n"
+            "p.add_argument('--req-fd', type=int); p.add_argument('--resp-fd', type=int)\n"
+            "a, _ = p.parse_known_args()\n"
+            "ready = json.dumps({'type':'READY','pid':os.getpid(),'req_ino':os.fstat(a.req_fd).st_ino,'resp_ino':os.fstat(a.resp_fd).st_ino}).encode()\n"
+            "os.write(a.resp_fd, struct.pack('>I', len(ready)) + ready)\n"
+            "n = struct.unpack('>I', read_exact(a.req_fd, 4))[0]\n"
+            "req = json.loads(read_exact(a.req_fd, n).decode())\n"
+            "bad = json.dumps({'ipc_token': float(req['ipc_token']), 'status': 'SPOOF'}).encode()\n"
+            "os.write(a.resp_fd, struct.pack('>I', len(bad)) + bad)\n"
+        )
+        float_ready_cmd = self._make_fault_worker_script(
+            "import argparse, json, os, struct\n"
+            "p = argparse.ArgumentParser()\n"
+            "p.add_argument('--req-fd', type=int); p.add_argument('--resp-fd', type=int)\n"
+            "a, _ = p.parse_known_args()\n"
+            "ready = json.dumps({'type':'READY','pid':float(os.getpid()),'req_ino':os.fstat(a.req_fd).st_ino,'resp_ino':os.fstat(a.resp_fd).st_ino}).encode()\n"
+            "os.write(a.resp_fd, struct.pack('>I', len(ready)) + ready)\n"
+        )
+
+        for label, cmd, exp_status in (
+            ("bool_ipc_token", bool_token_cmd, 500),
+            ("float_ipc_token", float_token_cmd, 500),
+            ("float_ready_pid", float_ready_cmd, 503),
+        ):
+            with self.subTest(case=label):
+                mgr = bridge.WorkerManager(response_deadline_s=1.0, worker_reap_timeout_s=0.6, custom_worker_cmd=cmd)
+                try:
+                    res = mgr.execute("/api/v1/solve", {"request_id": 1})
+                    self.assertEqual(res.status_code, exp_status)
+                    self.assertTrue(_is_pid_reaped(mgr.spawned_pids[0]))
+                finally:
+                    mgr.shutdown()
+                self.assertEqual(_list_open_pipe_inodes(), baseline_pipes)
+
+    def test_r2_m2_utf8_within_http_limit_and_surrogate_rejection(self):
+        """V1-A-R2-M2: multi-byte UTF-8 within 8192 HTTP limit succeeds without ASCII expansion; surrogates get 400."""
+        import v1_worker_bridge as bridge
+        from run_explorer import create_server
+
+        baseline_pipes = _list_open_pipe_inodes()
+        mgr = bridge.WorkerManager(response_deadline_s=2.0, worker_reap_timeout_s=0.8)
+        server, port = create_server("127.0.0.1", 0, worker_manager=mgr)
+        th = threading.Thread(target=server.serve_forever, daemon=True)
+        th.start()
+        try:
+            # 1. Valid UTF-8 payload: 4000 x 'é' -> 8023 bytes <= 8192 (previously expanded > 16384!)
+            utf8_body = json.dumps({"request_id": 1, "x": "\u00e9" * 4000}, ensure_ascii=False).encode("utf-8")
+            self.assertLessEqual(len(utf8_body), bridge.MAX_HTTP_BODY_BYTES)
+            conn1 = http.client.HTTPConnection("127.0.0.1", port, timeout=3.0)
+            try:
+                conn1.request(
+                    "POST",
+                    "/api/v1/solve",
+                    body=utf8_body,
+                    headers={
+                        "Host": f"127.0.0.1:{port}",
+                        "Origin": f"http://127.0.0.1:{port}",
+                        "Content-Type": "application/json; charset=utf-8",
+                        "Content-Length": str(len(utf8_body)),
+                    },
+                )
+                r1 = conn1.getresponse()
+                p1 = json.loads(r1.read().decode("utf-8"))
+                self.assertEqual(r1.status, 200)
+                first_pid = p1["worker_pid"]
+            finally:
+                conn1.close()
+
+            # 2. Lone surrogate escape -> rejected BEFORE admission with 400 INVALID_JSON; healthy worker untouched
+            surrogate_body = b'{"request_id": 2, "x": "\\ud800"}'
+            conn2 = http.client.HTTPConnection("127.0.0.1", port, timeout=3.0)
+            try:
+                conn2.request(
+                    "POST",
+                    "/api/v1/solve",
+                    body=surrogate_body,
+                    headers={
+                        "Host": f"127.0.0.1:{port}",
+                        "Origin": f"http://127.0.0.1:{port}",
+                        "Content-Type": "application/json",
+                        "Content-Length": str(len(surrogate_body)),
+                    },
+                )
+                r2 = conn2.getresponse()
+                p2 = json.loads(r2.read().decode("utf-8"))
+                self.assertEqual(r2.status, 400)
+                self.assertEqual(p2["error"]["code"], "INVALID_JSON")
+            finally:
+                conn2.close()
+
+            # 3. Follow-up request reuses exact same healthy worker PID
+            body3 = json.dumps({"request_id": 3}).encode("utf-8")
+            conn3 = http.client.HTTPConnection("127.0.0.1", port, timeout=3.0)
+            try:
+                conn3.request(
+                    "POST",
+                    "/api/v1/solve",
+                    body=body3,
+                    headers={
+                        "Host": f"127.0.0.1:{port}",
+                        "Origin": f"http://127.0.0.1:{port}",
+                        "Content-Type": "application/json",
+                        "Content-Length": str(len(body3)),
+                    },
+                )
+                r3 = conn3.getresponse()
+                p3 = json.loads(r3.read().decode("utf-8"))
+                self.assertEqual(r3.status, 200)
+                self.assertEqual(p3["worker_pid"], first_pid)
+                self.assertEqual(len(mgr.spawned_pids), 1)
+            finally:
+                conn3.close()
+        finally:
+            server.shutdown()
+            server.server_close()
+            th.join(timeout=2.0)
+
+        self.assertTrue(_is_pid_reaped(first_pid))
+        self.assertEqual(_list_open_pipe_inodes(), baseline_pipes)
 
 
 if __name__ == "__main__":
