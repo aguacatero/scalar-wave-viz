@@ -2842,6 +2842,312 @@ class V1WorkerLifecycleAndR5I1Tests(unittest.TestCase):
 
         self.assertEqual(_list_open_pipe_inodes(), baseline_pipes)
 
+    def test_r5_f1_supervisor_thread_start_failure_warmed_timeout_launch_abort_and_shutdown(self):
+        """V1-A-R5-F1: one-shot Thread.start failure in kill supervisor poisons synchronously, retains PID, closes FDs, blocks duplicate workers, and reaps on bounded shutdown retry."""
+        import v1_worker_bridge as bridge
+
+        baseline_pipes = _list_open_pipe_inodes()
+        orig_thread_start = threading.Thread.start
+        fail_remaining = [0]
+
+        def patched_thread_start(th_self, *args, **kwargs):
+            target = getattr(th_self, "_target", None)
+            if (
+                fail_remaining[0] > 0
+                and target is not None
+                and getattr(target, "__qualname__", "") == "_ProcKillReapSupervisor._run_kill_loop"
+            ):
+                fail_remaining[0] -= 1
+                raise RuntimeError("can't start new thread")
+            return orig_thread_start(th_self, *args, **kwargs)
+
+        sleeping_cmd = self._make_fault_worker_script("import time\ntime.sleep(5)\n")
+
+        with mock.patch.object(threading.Thread, "start", autospec=True, side_effect=patched_thread_start):
+            # (a) Warmed-worker timeout under one-shot supervisor Thread.start failure
+            mgr_a = bridge.WorkerManager(response_deadline_s=2.0, worker_reap_timeout_s=0.4)
+            warm_a = mgr_a.execute("/api/v1/solve", {"request_id": 1})
+            self.assertEqual(warm_a.status_code, 200)
+            warm_pid_a = warm_a.payload["worker_pid"]
+            handle_a = mgr_a._active_worker
+            self.assertIsNotNone(handle_a)
+
+            mgr_a.response_deadline_s = 0.15
+            fail_remaining[0] = 1
+            res_a = mgr_a.execute("/api/v1/solve", {"request_id": 2, "delay_s": 2.0})
+            self.assertEqual(res_a.status_code, 503)
+            self.assertEqual(res_a.payload["error"]["code"], "WORKER_UNAVAILABLE_POISONED")
+            self.assertTrue(mgr_a._worker_poisoned)
+            self.assertEqual(mgr_a.quarantined_pids, [warm_pid_a])
+            self.assertIsNone(mgr_a._active_worker)
+            self.assertIsNone(handle_a.req_w)
+            self.assertIsNone(handle_a.resp_r)
+
+            # Subsequent admission sees sticky 503 POISONED and spawns zero duplicate workers
+            conc_a = mgr_a.execute("/api/v1/study", {"request_id": 3})
+            self.assertEqual(conc_a.status_code, 503)
+            self.assertEqual(conc_a.payload["error"]["code"], "WORKER_UNAVAILABLE_POISONED")
+            self.assertEqual(mgr_a.spawned_pids, [warm_pid_a])
+
+            # Restored thread startup allows bounded shutdown() retry to reap retained PID cleanly
+            t0_shut_a = time.monotonic()
+            mgr_a.shutdown()
+            self.assertLess(time.monotonic() - t0_shut_a, 1.0)
+            self.assertEqual(mgr_a.quarantined_pids, [])
+            self.assertTrue(_is_pid_reaped(warm_pid_a))
+            self.assertEqual(_list_open_pipe_inodes(), baseline_pipes)
+
+            # (b1) Post-PID launch abort (runner raises after registering PID) under one-shot supervisor start failure
+            procs_b1: list[subprocess.Popen] = []
+
+            def launch_reg_then_raise(cmd, pass_fds, register_pid=None):
+                proc = subprocess.Popen(sleeping_cmd, pass_fds=pass_fds, close_fds=True)
+                procs_b1.append(proc)
+                if register_pid is not None:
+                    register_pid(proc)
+                raise RuntimeError("simulated launch failure after PID creation")
+
+            mgr_b1 = bridge.WorkerManager(
+                response_deadline_s=1.0,
+                worker_reap_timeout_s=0.4,
+                launch_fn=launch_reg_then_raise,
+            )
+            fail_remaining[0] = 1
+            res_b1 = mgr_b1.execute("/api/v1/solve", {"request_id": 10})
+            self.assertEqual(res_b1.status_code, 503)
+            self.assertEqual(res_b1.payload["error"]["code"], "WORKER_UNAVAILABLE_POISONED")
+            self.assertTrue(mgr_b1._worker_poisoned)
+            self.assertEqual(len(procs_b1), 1)
+            self.assertEqual(mgr_b1.quarantined_pids, [procs_b1[0].pid])
+            expected_cancel_pipes = dict(baseline_pipes)
+            assert mgr_b1._cancel_r is not None and mgr_b1._cancel_w is not None
+            expected_cancel_pipes[mgr_b1._cancel_r] = os.fstat(mgr_b1._cancel_r).st_ino
+            expected_cancel_pipes[mgr_b1._cancel_w] = os.fstat(mgr_b1._cancel_w).st_ino
+            self.assertEqual(_list_open_pipe_inodes(), expected_cancel_pipes)
+
+            conc_b1 = mgr_b1.execute("/api/v1/solve", {"request_id": 11})
+            self.assertEqual(conc_b1.status_code, 503)
+            self.assertEqual(conc_b1.payload["error"]["code"], "WORKER_UNAVAILABLE_POISONED")
+            self.assertEqual(mgr_b1.spawned_pids, [procs_b1[0].pid])
+
+            mgr_b1.shutdown()
+            self.assertEqual(mgr_b1.quarantined_pids, [])
+            self.assertTrue(_is_pid_reaped(procs_b1[0].pid))
+            self.assertEqual(_list_open_pipe_inodes(), baseline_pipes)
+
+            # (b2) Post-PID launch timeout stall (runner still blocked past deadline) under one-shot start failure
+            procs_b2: list[subprocess.Popen] = []
+            launch_rel_b2 = threading.Event()
+            pid_reg_b2 = threading.Event()
+
+            def launch_reg_then_stall(cmd, pass_fds, register_pid=None):
+                proc = subprocess.Popen(sleeping_cmd, pass_fds=pass_fds, close_fds=True)
+                procs_b2.append(proc)
+                if register_pid is not None:
+                    register_pid(proc)
+                pid_reg_b2.set()
+                launch_rel_b2.wait(timeout=3.0)
+                return proc
+
+            mgr_b2 = bridge.WorkerManager(
+                response_deadline_s=0.15,
+                worker_reap_timeout_s=0.35,
+                launch_fn=launch_reg_then_stall,
+            )
+            fail_remaining[0] = 1
+            res_b2 = mgr_b2.execute("/api/v1/solve", {"request_id": 20})
+            self.assertTrue(pid_reg_b2.is_set())
+            self.assertEqual(res_b2.status_code, 503)
+            self.assertEqual(res_b2.payload["error"]["code"], "WORKER_UNAVAILABLE_POISONED")
+            self.assertTrue(mgr_b2._worker_poisoned)
+            self.assertEqual(mgr_b2.quarantined_pids, [procs_b2[0].pid])
+            self.assertEqual(mgr_b2.spawned_pids, [procs_b2[0].pid])
+
+            conc_b2 = mgr_b2.execute("/api/v1/solve", {"request_id": 21})
+            self.assertEqual(conc_b2.status_code, 503)
+            self.assertEqual(conc_b2.payload["error"]["code"], "WORKER_UNAVAILABLE_POISONED")
+            self.assertEqual(mgr_b2.spawned_pids, [procs_b2[0].pid])
+
+            launch_rel_b2.set()
+            mgr_b2.shutdown()
+            self.assertEqual(mgr_b2.quarantined_pids, [])
+            self.assertTrue(_is_pid_reaped(procs_b2[0].pid))
+            self.assertEqual(_list_open_pipe_inodes(), baseline_pipes)
+
+            # (c) Shutdown under one-shot supervisor Thread.start failure
+            mgr_c = bridge.WorkerManager(response_deadline_s=2.0, worker_reap_timeout_s=0.4)
+            warm_c = mgr_c.execute("/api/v1/solve", {"request_id": 30})
+            self.assertEqual(warm_c.status_code, 200)
+            warm_pid_c = warm_c.payload["worker_pid"]
+            handle_c = mgr_c._active_worker
+            self.assertIsNotNone(handle_c)
+
+            fail_remaining[0] = 1
+            t0_shut_c = time.monotonic()
+            mgr_c.shutdown()
+            self.assertLess(time.monotonic() - t0_shut_c, 0.8)
+            self.assertTrue(mgr_c._worker_poisoned)
+            self.assertEqual(mgr_c.quarantined_pids, [warm_pid_c])
+            self.assertIsNone(handle_c.req_w)
+            self.assertIsNone(handle_c.resp_r)
+
+            conc_c = mgr_c.execute("/api/v1/solve", {"request_id": 31})
+            self.assertEqual(conc_c.status_code, 503)
+            self.assertEqual(conc_c.payload["error"]["code"], "WORKER_UNAVAILABLE_POISONED")
+            self.assertEqual(mgr_c.spawned_pids, [warm_pid_c])
+
+            # Second shutdown after thread creation recovers kills and reaps retained worker cleanly
+            mgr_c.shutdown()
+            self.assertEqual(mgr_c.quarantined_pids, [])
+            self.assertTrue(_is_pid_reaped(warm_pid_c))
+            self.assertEqual(_list_open_pipe_inodes(), baseline_pipes)
+
+    def test_r5_m1_immutable_raw_snapshot_subclass_rejection_and_removed_fast_path(self):
+        """V1-A-R5-M1: single immutable snapshot prevents bytearray mutation TOCTOU, rejects bytes/bytearray subclasses, removes unchecked private fast path, and isolates cold/warmed managers."""
+        import v1_worker_bridge as bridge
+
+        baseline_pipes = _list_open_pipe_inodes()
+
+        # Verify unchecked _ValidatedRawRequest fast path is completely eliminated
+        self.assertFalse(hasattr(bridge, "_ValidatedRawRequest"))
+
+        class SwappingByteArray(bytearray):
+            def __init__(self, first: bytes, second: bytes) -> None:
+                super().__init__(first)
+                self._first = first
+                self._second = second
+                self._calls = 0
+
+            def __bytes__(self) -> bytes:
+                self._calls += 1
+                return self._first if self._calls == 1 else self._second
+
+        class SwappingBytes(bytes):
+            def __new__(cls, first: bytes):
+                return super().__new__(cls, first)
+
+        rejected_raw_inputs: list[tuple[str, dict[str, Any], Any, str]] = [
+            (
+                "swapping_bytearray_mismatched_second",
+                {"request_id": 1},
+                SwappingByteArray(b'{"request_id":1}', b'{"request_id":2}'),
+                "INVALID_JSON",
+            ),
+            (
+                "swapping_bytearray_duplicate_second",
+                {"request_id": 1, "a": 1},
+                SwappingByteArray(b'{"request_id":1,"a":1}', b'{"request_id":1,"a":1,"a":2}'),
+                "INVALID_JSON",
+            ),
+            (
+                "swapping_bytearray_invalid_second",
+                {"request_id": 1, "a": 1},
+                SwappingByteArray(b'{"request_id":1,"a":1}', b'{"request_id":1,"a":NaN}'),
+                "INVALID_JSON",
+            ),
+            (
+                "bytes_subclass",
+                {"request_id": 1},
+                SwappingBytes(b'{"request_id":1}'),
+                "INVALID_JSON",
+            ),
+            (
+                "memoryview_rejected",
+                {"request_id": 1},
+                memoryview(b'{"request_id":1}'),
+                "INVALID_JSON",
+            ),
+        ]
+
+        # 1. Cold manager: all subclass/mutable-bypass inputs rejected pre-admission with zero worker spawns
+        cold_mgr = bridge.WorkerManager(response_deadline_s=2.0, worker_reap_timeout_s=0.6)
+        try:
+            for label, payload, raw_val, exp_code in rejected_raw_inputs:
+                res = cold_mgr.execute("/api/v1/solve", payload, raw_request_bytes=raw_val)
+                self.assertEqual(res.status_code, 400, f"Cold status mismatch for {label}")
+                self.assertEqual(res.payload["error"]["code"], exp_code, f"Cold code mismatch for {label}")
+            with self.assertRaises(TypeError):
+                cold_mgr.execute("/api/v1/solve", {"request_id": 1}, _validated_raw=object())  # type: ignore[call-arg]
+            self.assertEqual(cold_mgr.spawned_pids, [])
+            self.assertIsNone(cold_mgr._active_worker)
+            self.assertEqual(cold_mgr._ipc_token_counter, 0)
+        finally:
+            cold_mgr.shutdown()
+
+        # 2. Warmed IPC-logging manager: zero rejected requests reach IPC, plain bytearray snapshotted once safely
+        with tempfile.TemporaryDirectory() as tmpdir:
+            ipc_log_path = Path(tmpdir) / "ipc_r5_m1.jsonl"
+            spying_worker_cmd = self._make_fault_worker_script(
+                "import argparse, json, os, struct\n"
+                "def read_exact(fd, n):\n"
+                "  b = bytearray()\n"
+                "  while len(b) < n:\n"
+                "    c = os.read(fd, n - len(b))\n"
+                "    if not c: raise EOFError()\n"
+                "    b.extend(c)\n"
+                "  return bytes(b)\n"
+                "p = argparse.ArgumentParser()\n"
+                "p.add_argument('--req-fd', type=int); p.add_argument('--resp-fd', type=int)\n"
+                "a, _ = p.parse_known_args()\n"
+                "ready = json.dumps({'type':'READY','pid':os.getpid(),'req_ino':os.fstat(a.req_fd).st_ino,'resp_ino':os.fstat(a.resp_fd).st_ino}).encode()\n"
+                "os.write(a.resp_fd, struct.pack('>I', len(ready)) + ready)\n"
+                f"log_path = {str(ipc_log_path)!r}\n"
+                "while True:\n"
+                "  try: hdr = read_exact(a.req_fd, 4)\n"
+                "  except EOFError: break\n"
+                "  n = struct.unpack('>I', hdr)[0]\n"
+                "  raw = read_exact(a.req_fd, n)\n"
+                "  with open(log_path, 'ab') as fp:\n"
+                "    fp.write(raw + b'\\n')\n"
+                "  msg = json.loads(raw.decode('utf-8'))\n"
+                "  req = msg.get('request', {})\n"
+                "  out = json.dumps({'ipc_token': msg['ipc_token'], 'worker_pid': os.getpid(), 'request_id': req.get('request_id')}).encode()\n"
+                "  os.write(a.resp_fd, struct.pack('>I', len(out)) + out)\n"
+            )
+            mutable_ba = bytearray(b'{"request_id":201,"flag":true}')
+            mutate_armed = [False]
+
+            def mutate_ba_if_reached(_slot_or_handle=None):
+                if mutate_armed[0]:
+                    mutable_ba[:] = b'{"request_id":999,"flag":false}'
+
+            warm_mgr = bridge.WorkerManager(
+                response_deadline_s=2.0,
+                worker_reap_timeout_s=0.6,
+                custom_worker_cmd=spying_worker_cmd,
+                on_before_selector_register=mutate_ba_if_reached,
+            )
+            try:
+                warm = warm_mgr.execute("/api/v1/solve", {"request_id": 200})
+                self.assertEqual(warm.status_code, 200)
+                healthy_pid = warm.payload["worker_pid"]
+
+                for label, payload, raw_val, exp_code in rejected_raw_inputs:
+                    res = warm_mgr.execute("/api/v1/solve", payload, raw_request_bytes=raw_val)
+                    self.assertEqual(res.status_code, 400, f"Warm status mismatch for {label}")
+                    self.assertEqual(res.payload["error"]["code"], exp_code, f"Warm code mismatch for {label}")
+
+                # Plain bytearray is snapshotted once before admission; later mutation cannot alter sent IPC frame
+                mutate_armed[0] = True
+                res_ba = warm_mgr.execute("/api/v1/solve", {"request_id": 201, "flag": True}, raw_request_bytes=mutable_ba)
+                self.assertEqual(res_ba.status_code, 200)
+                self.assertEqual(res_ba.payload["request_id"], 201)
+                self.assertEqual(res_ba.payload["worker_pid"], healthy_pid)
+
+                self.assertFalse(_is_pid_reaped(healthy_pid))
+                self.assertEqual(warm_mgr.spawned_pids, [healthy_pid])
+                self.assertEqual(warm_mgr._ipc_token_counter, 2)
+
+                logged = [json.loads(line) for line in ipc_log_path.read_text(encoding="utf-8").splitlines()]
+                self.assertEqual(len(logged), 2)
+                self.assertEqual(logged[1]["request"], {"request_id": 201, "flag": True})
+            finally:
+                warm_mgr.shutdown()
+
+            self.assertTrue(_is_pid_reaped(healthy_pid))
+
+        self.assertEqual(_list_open_pipe_inodes(), baseline_pipes)
+
 
 if __name__ == "__main__":
     unittest.main()

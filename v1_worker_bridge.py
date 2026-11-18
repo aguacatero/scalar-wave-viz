@@ -330,14 +330,6 @@ def _pack_frame(payload_bytes: bytes, max_bytes: int) -> bytes:
     return struct.pack(">I", len(payload_bytes)) + payload_bytes
 
 
-@dataclass(frozen=True)
-class _ValidatedRawRequest:
-    """Private invariant token carrying raw UTF-8 JSON bytes already validated against `payload`."""
-
-    raw_bytes: bytes
-    payload: dict[str, Any]
-
-
 @dataclass
 class BridgeResult:
     """HTTP-ready result returned by `WorkerManager.execute`."""
@@ -405,9 +397,13 @@ class _ProcKillReapSupervisor:
                 self.cond.notify_all()
                 return
 
-    def ensure_kill_started(self, *, request_retry_if_failed: bool = False) -> None:
-        """Start an authoritative kill operation on a daemon thread unless one is in flight or succeeded."""
-        th: threading.Thread | None = None
+    def ensure_kill_started(self, *, request_retry_if_failed: bool = False) -> bool:
+        """Transactionally start an authoritative kill thread unless already running or succeeded.
+
+        Returns True if the process is already reaped or a kill thread is running/succeeded;
+        returns False (rolling back cleanly without leaving a phantom in-flight owner) if
+        thread creation/startup fails.
+        """
         with self.lock:
             if self.proc.poll() is not None and self.proc.returncode is not None:
                 self.kill_started = True
@@ -415,23 +411,32 @@ class _ProcKillReapSupervisor:
                 self.kill_ok = True
                 self.reaped = True
                 self.cond.notify_all()
-                return
+                return True
             if self.kill_started and not self.kill_completed:
                 if request_retry_if_failed:
                     self._retry_requested = True
-                return
+                return True
             if self.kill_completed and self.kill_ok:
-                return
+                return True
             if self.kill_completed and not self.kill_ok and not request_retry_if_failed:
-                return
+                return False
             self.kill_started = True
             self.kill_completed = False
             self.kill_ok = None
             self._retry_requested = False
             th = threading.Thread(target=self._run_kill_loop, daemon=True)
             self._worker_thread = th
-        if th is not None:
-            th.start()
+            try:
+                th.start()
+            except BaseException:
+                self.kill_started = False
+                self.kill_completed = False
+                self.kill_ok = None
+                self._retry_requested = False
+                self._worker_thread = None
+                self.cond.notify_all()
+                return False
+            return True
 
     def wait_kill_before(
         self,
@@ -441,8 +446,10 @@ class _ProcKillReapSupervisor:
         request_retry_if_failed: bool = False,
     ) -> bool | None:
         """Wait up to `abs_deadline` for the authoritative kill attempt to complete; return `None` if still in flight."""
-        self.ensure_kill_started(request_retry_if_failed=request_retry_if_failed)
+        started = self.ensure_kill_started(request_retry_if_failed=request_retry_if_failed)
         with self.lock:
+            if not started:
+                return self.kill_ok if self.kill_completed else False
             while not self.kill_completed or self._retry_requested:
                 rem = abs_deadline - clock()
                 if rem <= 0.0:
@@ -762,11 +769,12 @@ class WorkerManager:
                 self._state_cond.notify_all()
 
             sup: _ProcKillReapSupervisor | None = None
+            kill_start_failed = False
             if handle.proc is not None:
                 sup = handle.supervisor or self._get_or_create_supervisor(handle.proc)
                 handle.supervisor = sup
                 sup.register_close_callback(handle.close_fds)
-                sup.ensure_kill_started(request_retry_if_failed=True)
+                kill_start_failed = not sup.ensure_kill_started(request_retry_if_failed=True)
 
             with self._admission_lock:
                 while handle.active_io > 0:
@@ -790,11 +798,15 @@ class WorkerManager:
                 handle.reaped = True
                 return True
 
-            reaped = sup.wait_reaped_before(
-                abs_deadline,
-                close_cb=handle.close_fds,
-                request_retry_if_failed=True,
-            )
+            if kill_start_failed:
+                sup._drain_close_callbacks()
+                reaped = handle.proc.poll() is not None and handle.proc.returncode is not None
+            else:
+                reaped = sup.wait_reaped_before(
+                    abs_deadline,
+                    close_cb=handle.close_fds,
+                    request_retry_if_failed=True,
+                )
             handle.reaped = reaped
             with self._admission_lock:
                 if reaped:
@@ -1022,7 +1034,15 @@ class WorkerManager:
         with self._admission_lock:
             self._active_decode_threads.add(th)
             self._active_decode_cancels.add(cancel_ev)
-        th.start()
+        try:
+            th.start()
+        except BaseException as exc:  # noqa: BLE001
+            cancel_ev.set()
+            with self._admission_lock:
+                self._active_decode_threads.discard(th)
+                self._active_decode_cancels.discard(cancel_ev)
+                self._state_cond.notify_all()
+            raise _IpcProtocolError(f"Decode thread startup failed: {exc}") from exc
         try:
             while not done.is_set():
                 with self._admission_lock:
@@ -1065,13 +1085,14 @@ class WorkerManager:
             early_proc = slot.proc
             early_sup = slot.supervisor
 
+        early_kill_failed = False
         if early_proc is not None:
             if early_sup is None:
                 early_sup = self._get_or_create_supervisor(early_proc)
                 with slot.lock:
                     slot.supervisor = early_sup
             early_sup.register_close_callback(slot.close_parent_fds)
-            early_sup.ensure_kill_started()
+            early_kill_failed = not early_sup.ensure_kill_started(request_retry_if_failed=True)
 
         if wait_for_runner and th is not None and th.is_alive():
             join_wait = max(0.0, eff_deadline - time.monotonic())
@@ -1119,7 +1140,8 @@ class WorkerManager:
                 if sup_pending is None:
                     sup_pending = self._get_or_create_supervisor(proc_pending)
                 sup_pending.register_close_callback(slot.close_parent_fds)
-                sup_pending.ensure_kill_started()
+                if not (early_kill_failed and early_proc is proc_pending):
+                    sup_pending.ensure_kill_started(request_retry_if_failed=True)
                 self._quarantine_orphan_proc(
                     proc_pending,
                     None,
@@ -1138,7 +1160,16 @@ class WorkerManager:
                 with slot.lock:
                     slot.supervisor = sup_pending
             close_fn = lambda: (_safe_close_fd(p0), _safe_close_fd(p1), slot.close_parent_fds())
-            verified = sup_pending.wait_reaped_before(eff_deadline, close_cb=close_fn)
+            if early_kill_failed and early_proc is proc_pending:
+                sup_pending.register_close_callback(close_fn)
+                sup_pending._drain_close_callbacks()
+                verified = proc_pending.poll() is not None and proc_pending.returncode is not None
+            else:
+                verified = sup_pending.wait_reaped_before(
+                    eff_deadline,
+                    close_cb=close_fn,
+                    request_retry_if_failed=True,
+                )
             if verified:
                 with self._admission_lock:
                     if self._active_worker is None and self._pending_handle is None:
@@ -1629,11 +1660,10 @@ class WorkerManager:
         self,
         endpoint: str,
         request_payload: dict[str, Any],
-        validated_raw: _ValidatedRawRequest | None,
-        raw_request_bytes: bytes | None,
+        raw_request_bytes: bytes | bytearray | None,
         req_id: int | None,
     ) -> bytes | BridgeResult:
-        """Validate exact serialized request JSON representation before admission and return raw request JSON bytes."""
+        """Validate exact serialized request JSON representation before admission and return immutable JSON bytes."""
         if not isinstance(endpoint, str) or not endpoint:
             return BridgeResult(
                 400,
@@ -1645,20 +1675,27 @@ class WorkerManager:
                 make_error_payload("INVALID_JSON", "Request payload must be a JSON object", request_id=req_id),
             )
 
-        if validated_raw is not None:
-            if not isinstance(validated_raw, _ValidatedRawRequest) or validated_raw.payload is not request_payload:
+        if raw_request_bytes is not None:
+            raw_type = type(raw_request_bytes)
+            if raw_type is bytes:
+                raw_snapshot = raw_request_bytes
+            elif raw_type is bytearray:
+                raw_snapshot = bytes(raw_request_bytes)
+            else:
                 return BridgeResult(
                     400,
-                    make_error_payload("INVALID_JSON", "Invalid or mismatched validated raw request token", request_id=req_id),
+                    make_error_payload(
+                        "INVALID_JSON",
+                        f"raw_request_bytes must be exact bytes or bytearray, got {raw_type.__name__}",
+                        request_id=req_id,
+                    ),
                 )
-            req_bytes = validated_raw.raw_bytes
-        elif raw_request_bytes is not None:
-            if not isinstance(raw_request_bytes, (bytes, bytearray)) or len(raw_request_bytes) == 0:
+            if len(raw_snapshot) == 0:
                 return BridgeResult(
                     400,
                     make_error_payload("INVALID_JSON", "Raw request bytes must be non-empty UTF-8 JSON", request_id=req_id),
                 )
-            if len(raw_request_bytes) > MAX_IPC_REQUEST_BYTES:
+            if len(raw_snapshot) > MAX_IPC_REQUEST_BYTES:
                 return BridgeResult(
                     413,
                     make_error_payload(
@@ -1669,7 +1706,7 @@ class WorkerManager:
                 )
             try:
                 _validate_json_depth_and_finiteness(request_payload, max_depth=MAX_CLIENT_JSON_DEPTH)
-                parsed_raw = strict_json_loads(bytes(raw_request_bytes), max_depth=MAX_CLIENT_JSON_DEPTH)
+                parsed_raw = strict_json_loads(raw_snapshot, max_depth=MAX_CLIENT_JSON_DEPTH)
             except DuplicateKeyError as exc:
                 return BridgeResult(
                     400,
@@ -1689,7 +1726,7 @@ class WorkerManager:
                         request_id=req_id,
                     ),
                 )
-            req_bytes = bytes(raw_request_bytes)
+            req_bytes = raw_snapshot
         else:
             try:
                 _validate_json_depth_and_finiteness(request_payload, max_depth=MAX_CLIENT_JSON_DEPTH)
@@ -1740,17 +1777,15 @@ class WorkerManager:
         endpoint: str,
         request_payload: dict[str, Any],
         *,
-        raw_request_bytes: bytes | None = None,
-        _validated_raw: _ValidatedRawRequest | None = None,
+        raw_request_bytes: bytes | bytearray | None = None,
     ) -> BridgeResult:
         """Admit, supervise, and execute one bounded IPC request against the single worker."""
         req_id = extract_safe_request_id(request_payload)
 
-        # V1-A-R3-M1 / R4-M1: Validate exact serialized JSON representation BEFORE admitting or touching a worker
+        # V1-A-R3-M1 / R4-M1 / R5-M1: Validate exact immutable JSON byte snapshot BEFORE admitting or touching a worker
         validated_or_err = self._validate_and_serialize_request(
             endpoint,
             request_payload,
-            _validated_raw,
             raw_request_bytes,
             req_id,
         )
@@ -2111,7 +2146,7 @@ class ExplorerHTTPRequestHandler(http.server.SimpleHTTPRequestHandler):
         result = self.server.worker_manager.execute(
             self.path,
             payload,
-            _validated_raw=_ValidatedRawRequest(raw_bytes=body_bytes, payload=payload),
+            raw_request_bytes=body_bytes,
         )  # type: ignore[attr-defined]
         self._send_json_response(result.status_code, result.payload)
 
