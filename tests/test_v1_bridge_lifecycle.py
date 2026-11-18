@@ -2939,6 +2939,19 @@ class V1WorkerLifecycleAndR5I1Tests(unittest.TestCase):
             procs_b2: list[subprocess.Popen] = []
             launch_rel_b2 = threading.Event()
             pid_reg_b2 = threading.Event()
+            slot_b2_box: list[Any] = []
+            orig_parent_fds_b2: list[tuple[int, int]] = []
+            orig_child_fds_b2: list[tuple[int, int]] = []
+            orig_parent_inos_b2: list[tuple[int, int]] = []
+
+            def capture_slot_b2(slot):
+                slot_b2_box.append(slot)
+                p0, p1 = slot.parent_fds
+                c0, c1 = slot.child_fds
+                assert p0 is not None and p1 is not None and c0 is not None and c1 is not None
+                orig_parent_fds_b2.append((p0, p1))
+                orig_child_fds_b2.append((c0, c1))
+                orig_parent_inos_b2.append((os.fstat(p0).st_ino, os.fstat(p1).st_ino))
 
             def launch_reg_then_stall(cmd, pass_fds, register_pid=None):
                 proc = subprocess.Popen(sleeping_cmd, pass_fds=pass_fds, close_fds=True)
@@ -2951,22 +2964,49 @@ class V1WorkerLifecycleAndR5I1Tests(unittest.TestCase):
 
             mgr_b2 = bridge.WorkerManager(
                 response_deadline_s=0.15,
-                worker_reap_timeout_s=0.35,
+                worker_reap_timeout_s=0.25,
                 launch_fn=launch_reg_then_stall,
+                on_after_slot_publish_before_runner=capture_slot_b2,
             )
             fail_remaining[0] = 1
+            t0_b2 = time.monotonic()
             res_b2 = mgr_b2.execute("/api/v1/solve", {"request_id": 20})
+            elapsed_b2 = time.monotonic() - t0_b2
             self.assertTrue(pid_reg_b2.is_set())
+            self.assertLess(elapsed_b2, 1.0)
             self.assertEqual(res_b2.status_code, 503)
             self.assertEqual(res_b2.payload["error"]["code"], "WORKER_UNAVAILABLE_POISONED")
             self.assertTrue(mgr_b2._worker_poisoned)
             self.assertEqual(mgr_b2.quarantined_pids, [procs_b2[0].pid])
             self.assertEqual(mgr_b2.spawned_pids, [procs_b2[0].pid])
 
+            # V1-A-R6-M1: BEFORE releasing launcher or invoking shutdown(), parent pipes MUST be closed immediately
+            # while launcher-owned child_fds remain safely untouched until runner returns.
+            slot_b2 = slot_b2_box[0]
+            orig_req_w, orig_resp_r = orig_parent_fds_b2[0]
+            orig_req_r, orig_resp_w = orig_child_fds_b2[0]
+            orig_req_w_ino, orig_resp_r_ino = orig_parent_inos_b2[0]
+            self.assertEqual(slot_b2.parent_fds, (None, None))
+            self.assertFalse(bridge._is_fd_open(orig_req_w))
+            self.assertFalse(bridge._is_fd_open(orig_resp_r))
+            open_pipes_mid = _list_open_pipe_inodes()
+            self.assertNotIn(orig_req_w_ino, open_pipes_mid.values())
+            self.assertNotIn(orig_resp_r_ino, open_pipes_mid.values())
+            self.assertEqual(slot_b2.child_fds, (orig_req_r, orig_resp_w))
+            self.assertTrue(bridge._is_fd_open(orig_req_r))
+            self.assertTrue(bridge._is_fd_open(orig_resp_w))
+
             conc_b2 = mgr_b2.execute("/api/v1/solve", {"request_id": 21})
             self.assertEqual(conc_b2.status_code, 503)
             self.assertEqual(conc_b2.payload["error"]["code"], "WORKER_UNAVAILABLE_POISONED")
             self.assertEqual(mgr_b2.spawned_pids, [procs_b2[0].pid])
+
+            # Overlapping shutdown() with repeated Thread.start failure while runner still blocked remains bounded and retains PID
+            fail_remaining[0] = 1
+            t0_shut_b2 = time.monotonic()
+            mgr_b2.shutdown()
+            self.assertLess(time.monotonic() - t0_shut_b2, 0.8)
+            self.assertEqual(mgr_b2.quarantined_pids, [procs_b2[0].pid])
 
             launch_rel_b2.set()
             mgr_b2.shutdown()
@@ -3147,6 +3187,182 @@ class V1WorkerLifecycleAndR5I1Tests(unittest.TestCase):
             self.assertTrue(_is_pid_reaped(healthy_pid))
 
         self.assertEqual(_list_open_pipe_inodes(), baseline_pipes)
+
+    def test_r6_f1_thread_constructor_failures_across_supervisor_launcher_and_decode(self):
+        """V1-A-R6-F1: Thread constructor failures (MemoryError/RuntimeError) across kill supervisor, launch runner, and decode runner are transactional, never detach live PIDs/FDs or leak slots, and allow bounded recovery/reap."""
+        import v1_worker_bridge as bridge
+
+        baseline_pipes = _list_open_pipe_inodes()
+        orig_thread_cls = threading.Thread
+        ctor_fail_qualname: list[str | None] = [None]
+        ctor_fail_remaining = [0]
+
+        def fault_thread_ctor(*args, **kwargs):
+            target = kwargs.get("target")
+            if target is None and len(args) >= 2:
+                target = args[1]
+            qual = getattr(target, "__qualname__", "") if target is not None else ""
+            if (
+                ctor_fail_remaining[0] > 0
+                and ctor_fail_qualname[0] is not None
+                and ctor_fail_qualname[0] in qual
+            ):
+                ctor_fail_remaining[0] -= 1
+                raise MemoryError(f"simulated Thread.__init__ failure for {qual}")
+            return orig_thread_cls(*args, **kwargs)
+
+        with mock.patch("v1_worker_bridge.threading.Thread", side_effect=fault_thread_ctor):
+            # (a) Kill supervisor thread constructor failure on warmed-worker timeout + repeated shutdown failure
+            mgr_a = bridge.WorkerManager(response_deadline_s=2.0, worker_reap_timeout_s=0.4)
+            warm_a = mgr_a.execute("/api/v1/solve", {"request_id": 1})
+            self.assertEqual(warm_a.status_code, 200)
+            warm_pid_a = warm_a.payload["worker_pid"]
+            handle_a = mgr_a._active_worker
+            self.assertIsNotNone(handle_a)
+            sup_a = handle_a.supervisor
+            self.assertIsNotNone(sup_a)
+
+            mgr_a.response_deadline_s = 0.15
+            ctor_fail_qualname[0] = "_ProcKillReapSupervisor._run_kill_loop"
+            ctor_fail_remaining[0] = 1
+            res_a = mgr_a.execute("/api/v1/solve", {"request_id": 2, "delay_s": 2.0})
+            self.assertEqual(res_a.status_code, 503)
+            self.assertEqual(res_a.payload["error"]["code"], "WORKER_UNAVAILABLE_POISONED")
+            self.assertTrue(mgr_a._worker_poisoned)
+            self.assertEqual(mgr_a.quarantined_pids, [warm_pid_a])
+            self.assertIsNone(mgr_a._active_worker)
+            self.assertIsNone(mgr_a._pending_handle)
+            self.assertIsNone(handle_a.req_w)
+            self.assertIsNone(handle_a.resp_r)
+            # No phantom in-flight kill owner left behind
+            assert sup_a is not None
+            self.assertFalse(sup_a.kill_started)
+            self.assertFalse(sup_a.kill_completed)
+            self.assertIsNone(sup_a._worker_thread)
+
+            # Subsequent admission sees sticky poison and spawns zero duplicate workers
+            conc_a = mgr_a.execute("/api/v1/study", {"request_id": 3})
+            self.assertEqual(conc_a.status_code, 503)
+            self.assertEqual(conc_a.payload["error"]["code"], "WORKER_UNAVAILABLE_POISONED")
+            self.assertEqual(mgr_a.spawned_pids, [warm_pid_a])
+
+            # Even if shutdown hits another supervisor constructor fault, it stays bounded and retains PID; next shutdown reaps cleanly
+            ctor_fail_remaining[0] = 1
+            t0_s1 = time.monotonic()
+            mgr_a.shutdown()
+            self.assertLess(time.monotonic() - t0_s1, 0.8)
+            self.assertEqual(mgr_a.quarantined_pids, [warm_pid_a])
+
+            mgr_a.shutdown()
+            self.assertEqual(mgr_a.quarantined_pids, [])
+            self.assertTrue(_is_pid_reaped(warm_pid_a))
+            self.assertEqual(_list_open_pipe_inodes(), baseline_pipes)
+
+            # (b) Launch runner thread constructor failure after slot publication rolls back slot & closes all 4 launch pipes
+            mgr_b = bridge.WorkerManager(response_deadline_s=2.0, worker_reap_timeout_s=0.4)
+            try:
+                ctor_fail_qualname[0] = "_launch_runner"
+                ctor_fail_remaining[0] = 1
+                res_b = mgr_b.execute("/api/v1/solve", {"request_id": 10})
+                self.assertEqual(res_b.status_code, 503)
+                self.assertEqual(res_b.payload["error"]["code"], "WORKER_STARTUP_FAILED")
+                self.assertIsNone(mgr_b._active_launch)
+                self.assertEqual(mgr_b.spawned_pids, [])
+
+                # Only mgr_b's own cancel pipe remains open (all 4 launch pipes were closed immediately)
+                expected_b_pipes = dict(baseline_pipes)
+                assert mgr_b._cancel_r is not None and mgr_b._cancel_w is not None
+                expected_b_pipes[mgr_b._cancel_r] = os.fstat(mgr_b._cancel_r).st_ino
+                expected_b_pipes[mgr_b._cancel_w] = os.fstat(mgr_b._cancel_w).st_ino
+                self.assertEqual(_list_open_pipe_inodes(), expected_b_pipes)
+
+                # Subsequent request recovers cleanly with a healthy worker
+                res_b2 = mgr_b.execute("/api/v1/solve", {"request_id": 11})
+                self.assertEqual(res_b2.status_code, 200)
+                self.assertEqual(len(mgr_b.spawned_pids), 1)
+                pid_b = res_b2.payload["worker_pid"]
+            finally:
+                mgr_b.shutdown()
+            self.assertTrue(_is_pid_reaped(pid_b))
+            self.assertEqual(_list_open_pipe_inodes(), baseline_pipes)
+
+            # (c1) Decode runner thread constructor failure on large (>64 KiB) worker response enters structured teardown
+            large_resp_cmd = self._make_fault_worker_script(
+                "import argparse, json, os, struct\n"
+                "def read_exact(fd, n):\n"
+                "  b = bytearray()\n"
+                "  while len(b) < n:\n"
+                "    c = os.read(fd, n - len(b))\n"
+                "    if not c: raise EOFError()\n"
+                "    b.extend(c)\n"
+                "  return bytes(b)\n"
+                "p = argparse.ArgumentParser()\n"
+                "p.add_argument('--req-fd', type=int); p.add_argument('--resp-fd', type=int)\n"
+                "a, _ = p.parse_known_args()\n"
+                "ready = json.dumps({'type':'READY','pid':os.getpid(),'req_ino':os.fstat(a.req_fd).st_ino,'resp_ino':os.fstat(a.resp_fd).st_ino}).encode()\n"
+                "os.write(a.resp_fd, struct.pack('>I', len(ready)) + ready)\n"
+                "blob = 'x' * 70000\n"
+                "while True:\n"
+                "  try: hdr = read_exact(a.req_fd, 4)\n"
+                "  except EOFError: break\n"
+                "  n = struct.unpack('>I', hdr)[0]\n"
+                "  msg = json.loads(read_exact(a.req_fd, n).decode('utf-8'))\n"
+                "  out = json.dumps({'ipc_token': msg['ipc_token'], 'worker_pid': os.getpid(), 'blob': blob}).encode()\n"
+                "  mv = memoryview(struct.pack('>I', len(out)) + out)\n"
+                "  sent = 0\n"
+                "  while sent < len(mv): sent += os.write(a.resp_fd, mv[sent:])\n"
+            )
+            mgr_c1 = bridge.WorkerManager(
+                response_deadline_s=2.0,
+                worker_reap_timeout_s=0.5,
+                custom_worker_cmd=large_resp_cmd,
+            )
+            try:
+                ok_c1 = mgr_c1.execute("/api/v1/solve", {"request_id": 20})
+                self.assertEqual(ok_c1.status_code, 200)
+                pid_c1_first = ok_c1.payload["worker_pid"]
+
+                ctor_fail_qualname[0] = "_decode_and_verify_before.<locals>._runner"
+                ctor_fail_remaining[0] = 1
+                err_c1 = mgr_c1.execute("/api/v1/solve", {"request_id": 21})
+                self.assertEqual(err_c1.status_code, 500)
+                self.assertEqual(err_c1.payload["error"]["code"], "IPC_PROTOCOL_ERROR")
+                self.assertEqual(mgr_c1._active_decode_threads, set())
+                self.assertEqual(mgr_c1._active_decode_cancels, set())
+                self.assertIsNone(mgr_c1._active_worker)
+                self.assertTrue(_is_pid_reaped(pid_c1_first))
+
+                # Fresh worker spawns cleanly on subsequent healthy request
+                ok_c1_next = mgr_c1.execute("/api/v1/solve", {"request_id": 22})
+                self.assertEqual(ok_c1_next.status_code, 200)
+                pid_c1_second = ok_c1_next.payload["worker_pid"]
+                self.assertNotEqual(pid_c1_first, pid_c1_second)
+            finally:
+                mgr_c1.shutdown()
+            self.assertTrue(_is_pid_reaped(pid_c1_second))
+            self.assertEqual(_list_open_pipe_inodes(), baseline_pipes)
+
+            # (c2) Decode runner thread constructor failure during READY handshake tears down child & FDs cleanly
+            mgr_c2 = bridge.WorkerManager(
+                response_deadline_s=2.0,
+                worker_reap_timeout_s=0.5,
+                on_decode_transform=lambda obj: obj,
+            )
+            try:
+                ctor_fail_qualname[0] = "_decode_and_verify_before.<locals>._runner"
+                ctor_fail_remaining[0] = 1
+                err_c2 = mgr_c2.execute("/api/v1/solve", {"request_id": 30})
+                self.assertEqual(err_c2.status_code, 503)
+                self.assertEqual(err_c2.payload["error"]["code"], "WORKER_STARTUP_FAILED")
+                self.assertEqual(mgr_c2._active_decode_threads, set())
+                self.assertEqual(mgr_c2._active_decode_cancels, set())
+                self.assertEqual(len(mgr_c2.spawned_pids), 1)
+                self.assertTrue(_is_pid_reaped(mgr_c2.spawned_pids[0]))
+                self.assertIsNone(mgr_c2._pending_handle)
+                self.assertIsNone(mgr_c2._active_worker)
+            finally:
+                mgr_c2.shutdown()
+            self.assertEqual(_list_open_pipe_inodes(), baseline_pipes)
 
 
 if __name__ == "__main__":

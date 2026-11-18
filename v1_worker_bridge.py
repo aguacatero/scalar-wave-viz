@@ -420,13 +420,13 @@ class _ProcKillReapSupervisor:
                 return True
             if self.kill_completed and not self.kill_ok and not request_retry_if_failed:
                 return False
-            self.kill_started = True
-            self.kill_completed = False
-            self.kill_ok = None
-            self._retry_requested = False
-            th = threading.Thread(target=self._run_kill_loop, daemon=True)
-            self._worker_thread = th
             try:
+                th = threading.Thread(target=self._run_kill_loop, daemon=True)
+                self.kill_started = True
+                self.kill_completed = False
+                self.kill_ok = None
+                self._retry_requested = False
+                self._worker_thread = th
                 th.start()
             except BaseException:
                 self.kill_started = False
@@ -823,6 +823,15 @@ class WorkerManager:
                         self._quarantined_handles.append(handle)
                 self._state_cond.notify_all()
             return reaped
+        except BaseException:
+            handle.close_fds()
+            with self._admission_lock:
+                self._worker_poisoned = True
+                self._poison_reason = "WORKER_TEARDOWN_UNVERIFIED"
+                if not handle.reaped and handle not in self._quarantined_handles:
+                    self._quarantined_handles.append(handle)
+                self._state_cond.notify_all()
+            return False
         finally:
             handle.teardown_exec_lock.release()
 
@@ -1033,16 +1042,18 @@ class WorkerManager:
                     self._state_cond.notify_all()
                 done.set()
 
-        th = threading.Thread(target=_runner, daemon=True)
-        with self._admission_lock:
-            self._active_decode_threads.add(th)
-            self._active_decode_cancels.add(cancel_ev)
+        th: threading.Thread | None = None
         try:
+            th = threading.Thread(target=_runner, daemon=True)
+            with self._admission_lock:
+                self._active_decode_threads.add(th)
+                self._active_decode_cancels.add(cancel_ev)
             th.start()
         except BaseException as exc:  # noqa: BLE001
             cancel_ev.set()
             with self._admission_lock:
-                self._active_decode_threads.discard(th)
+                if th is not None:
+                    self._active_decode_threads.discard(th)
                 self._active_decode_cancels.discard(cancel_ev)
                 self._state_cond.notify_all()
             raise _IpcProtocolError(f"Decode thread startup failed: {exc}") from exc
@@ -1168,6 +1179,9 @@ class WorkerManager:
 
         if wait_exhausted:
             self._poison("LAUNCH_CLEANUP_UNVERIFIED")
+            # Slot is definitively ABORTED/nontransferable: close parent endpoints promptly and at-most-once
+            # without touching launcher-owned child_fds while runner state may remain uncertain.
+            slot.close_parent_fds()
             if proc_pending is not None:
                 if sup_pending is None:
                     sup_pending = self._get_or_create_supervisor(proc_pending)
@@ -1330,13 +1344,21 @@ class WorkerManager:
                         wait_for_runner=False,
                     )
 
+        th: threading.Thread | None = None
+        launch_thread_err: BaseException | None = None
         with slot.lock:
             if slot.abandoned or slot.state != "PENDING":
                 start_runner = False
             else:
-                th = threading.Thread(target=_launch_runner, daemon=True)
-                slot.thread = th
                 start_runner = True
+                try:
+                    th = threading.Thread(target=_launch_runner, daemon=True)
+                    slot.thread = th
+                except BaseException as exc:  # noqa: BLE001
+                    slot.thread = None
+                    slot.runner_returned = True
+                    slot.error = exc
+                    launch_thread_err = exc
 
         if not start_runner:
             td = self._ensure_cleanup_deadline(cleanup_box)
@@ -1348,13 +1370,18 @@ class WorkerManager:
             )
             return self._terminal_error_result(503, "SERVER_SHUTTING_DOWN", "Bridge shutting down.", req_id)
 
-        try:
-            th.start()
-        except Exception as exc:
-            with slot.lock:
-                slot.thread = None
-                slot.runner_returned = True
-                slot.error = exc
+        if launch_thread_err is None:
+            try:
+                assert th is not None
+                th.start()
+            except BaseException as exc:  # noqa: BLE001
+                launch_thread_err = exc
+                with slot.lock:
+                    slot.thread = None
+                    slot.runner_returned = True
+                    slot.error = exc
+
+        if launch_thread_err is not None:
             td = self._ensure_cleanup_deadline(cleanup_box)
             self._abort_launch_slot(
                 slot,
@@ -1365,7 +1392,7 @@ class WorkerManager:
             return self._terminal_error_result(
                 503,
                 "WORKER_STARTUP_FAILED",
-                f"Failed to start launch supervisor thread: {exc}",
+                f"Failed to start launch supervisor thread: {launch_thread_err}",
                 req_id,
             )
 
