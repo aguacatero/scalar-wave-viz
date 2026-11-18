@@ -2942,7 +2942,7 @@ class V1WorkerLifecycleAndR5I1Tests(unittest.TestCase):
             slot_b2_box: list[Any] = []
             orig_parent_fds_b2: list[tuple[int, int]] = []
             orig_child_fds_b2: list[tuple[int, int]] = []
-            orig_parent_inos_b2: list[tuple[int, int]] = []
+            orig_child_inos_b2: list[tuple[int, int]] = []
 
             def capture_slot_b2(slot):
                 slot_b2_box.append(slot)
@@ -2951,7 +2951,7 @@ class V1WorkerLifecycleAndR5I1Tests(unittest.TestCase):
                 assert p0 is not None and p1 is not None and c0 is not None and c1 is not None
                 orig_parent_fds_b2.append((p0, p1))
                 orig_child_fds_b2.append((c0, c1))
-                orig_parent_inos_b2.append((os.fstat(p0).st_ino, os.fstat(p1).st_ino))
+                orig_child_inos_b2.append((os.fstat(c0).st_ino, os.fstat(c1).st_ino))
 
             def launch_reg_then_stall(cmd, pass_fds, register_pid=None):
                 proc = subprocess.Popen(sleeping_cmd, pass_fds=pass_fds, close_fds=True)
@@ -2985,13 +2985,20 @@ class V1WorkerLifecycleAndR5I1Tests(unittest.TestCase):
             slot_b2 = slot_b2_box[0]
             orig_req_w, orig_resp_r = orig_parent_fds_b2[0]
             orig_req_r, orig_resp_w = orig_child_fds_b2[0]
-            orig_req_w_ino, orig_resp_r_ino = orig_parent_inos_b2[0]
+            orig_req_r_ino, orig_resp_w_ino = orig_child_inos_b2[0]
             self.assertEqual(slot_b2.parent_fds, (None, None))
             self.assertFalse(bridge._is_fd_open(orig_req_w))
             self.assertFalse(bridge._is_fd_open(orig_resp_r))
             open_pipes_mid = _list_open_pipe_inodes()
-            self.assertNotIn(orig_req_w_ino, open_pipes_mid.values())
-            self.assertNotIn(orig_resp_r_ino, open_pipes_mid.values())
+            self.assertNotIn(orig_req_w, open_pipes_mid)
+            self.assertNotIn(orig_resp_r, open_pipes_mid)
+            expected_mid_pipes = dict(baseline_pipes)
+            assert mgr_b2._cancel_r is not None and mgr_b2._cancel_w is not None
+            expected_mid_pipes[mgr_b2._cancel_r] = os.fstat(mgr_b2._cancel_r).st_ino
+            expected_mid_pipes[mgr_b2._cancel_w] = os.fstat(mgr_b2._cancel_w).st_ino
+            expected_mid_pipes[orig_req_r] = orig_req_r_ino
+            expected_mid_pipes[orig_resp_w] = orig_resp_w_ino
+            self.assertEqual(open_pipes_mid, expected_mid_pipes)
             self.assertEqual(slot_b2.child_fds, (orig_req_r, orig_resp_w))
             self.assertTrue(bridge._is_fd_open(orig_req_r))
             self.assertTrue(bridge._is_fd_open(orig_resp_w))
