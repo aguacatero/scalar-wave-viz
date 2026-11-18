@@ -551,6 +551,9 @@ class _LaunchSlot:
         self.cleanup_done: bool = False
         self.cleanup_verified: bool | None = None
         self.cleanup_deadline: float | None = None
+        self.kill_attempt_started: bool = False
+        self.kill_attempt_finished: bool = False
+        self.kill_start_failed: bool = False
         self.child_req_fd_closed: bool = False
         self.child_resp_fd_closed: bool = False
         self.child_fds: tuple[int | None, int | None] = child_fds
@@ -1074,6 +1077,7 @@ class WorkerManager:
     ) -> bool:
         """Abandon `slot` with ONE authoritative owner, shared deadline, bounded kill/reap, and synchronous poison if unverified."""
         early_sup: _ProcKillReapSupervisor | None = None
+        do_early_kill = False
         with slot.lock:
             slot.abandoned = True
             slot.state = "ABORTED"
@@ -1084,6 +1088,12 @@ class WorkerManager:
             th = slot.thread
             early_proc = slot.proc
             early_sup = slot.supervisor
+            if early_proc is not None:
+                if not slot.kill_attempt_started or (wait_for_runner and slot.cleanup_done and not slot.cleanup_verified):
+                    slot.kill_attempt_started = True
+                    slot.kill_attempt_finished = False
+                    slot.kill_start_failed = False
+                    do_early_kill = True
 
         early_kill_failed = False
         if early_proc is not None:
@@ -1092,7 +1102,29 @@ class WorkerManager:
                 with slot.lock:
                     slot.supervisor = early_sup
             early_sup.register_close_callback(slot.close_parent_fds)
-            early_kill_failed = not early_sup.ensure_kill_started(request_retry_if_failed=True)
+            if do_early_kill:
+                started_ok = early_sup.ensure_kill_started(request_retry_if_failed=True)
+                if not started_ok:
+                    self._quarantine_orphan_proc(
+                        early_proc,
+                        None,
+                        None,
+                        reason,
+                        supervisor=early_sup,
+                    )
+                with slot.lock:
+                    slot.kill_start_failed = not started_ok
+                    slot.kill_attempt_finished = True
+                    slot.done_cond.notify_all()
+                early_kill_failed = not started_ok
+            else:
+                with slot.lock:
+                    while slot.kill_attempt_started and not slot.kill_attempt_finished:
+                        rem = eff_deadline - time.monotonic()
+                        if rem <= 0.0:
+                            break
+                        slot.done_cond.wait(timeout=rem)
+                    early_kill_failed = slot.kill_start_failed or not slot.kill_attempt_finished
 
         if wait_for_runner and th is not None and th.is_alive():
             join_wait = max(0.0, eff_deadline - time.monotonic())
