@@ -153,7 +153,9 @@ def _validate_json_depth_and_finiteness(
     max_depth: int = MAX_JSON_DEPTH,
     tick: Callable[[], None] | None = None,
 ) -> None:
-    """Iteratively validate nesting depth, UTF-8 encodability (no lone surrogates), and finite floats."""
+    """Iteratively validate strict JSON value types, string keys, nesting depth, UTF-8 encodability, and finite floats."""
+    if not isinstance(value, dict):
+        raise ValueError("JSON request payload must be a dict object")
     stack: list[tuple[Any, int]] = [(value, 1)]
     while stack:
         if tick is not None:
@@ -161,19 +163,64 @@ def _validate_json_depth_and_finiteness(
         current, depth = stack.pop()
         if depth > max_depth:
             raise ValueError(f"JSON nesting depth exceeds limit ({max_depth})")
-        if isinstance(current, float):
-            if not math.isfinite(current):
-                raise ValueError("Non-finite float value is not allowed in JSON")
-        elif isinstance(current, str):
-            current.encode("utf-8", errors="strict")
-        elif isinstance(current, dict):
+        t = type(current)
+        if t is dict:
             for k, v in current.items():
-                if isinstance(k, str):
-                    k.encode("utf-8", errors="strict")
+                if type(k) is not str:
+                    raise ValueError(f"JSON object key must be strictly a string, got {type(k).__name__}")
+                k.encode("utf-8", errors="strict")
                 stack.append((v, depth + 1))
-        elif isinstance(current, list):
+        elif t is list:
             for item in current:
                 stack.append((item, depth + 1))
+        elif t is str:
+            current.encode("utf-8", errors="strict")
+        elif t is float:
+            if not math.isfinite(current):
+                raise ValueError("Non-finite float value is not allowed in JSON")
+        elif t is int or t is bool or current is None:
+            continue
+        else:
+            raise ValueError(f"Non-JSON container or scalar type is not allowed: {t.__name__}")
+
+
+def _json_values_strictly_equal(lhs: Any, rhs: Any) -> bool:
+    """Compare two pre-validated JSON structures requiring identical Python types at every node.
+
+    Unlike Python's ``==``, this rejects boolean/integer (``True`` vs ``1``, ``False`` vs ``0``),
+    boolean/float, and integer/float (``1`` vs ``1.0``) cross-type coercions in both directions.
+    Positive and negative floating-point zero (``+0.0`` vs ``-0.0``) are treated as distinct
+    representations (requiring matching ``math.copysign`` sign bit) so raw JSON bytes cannot alter
+    IEEE-754 signed zero relative to ``request_payload``. Object key ordering and JSON whitespace
+    differences are permitted.
+    """
+    stack: list[tuple[Any, Any]] = [(lhs, rhs)]
+    while stack:
+        a, b = stack.pop()
+        ta = type(a)
+        if ta is not type(b):
+            return False
+        if ta is dict:
+            if a.keys() != b.keys():
+                return False
+            for key, aval in a.items():
+                stack.append((aval, b[key]))
+        elif ta is list:
+            if len(a) != len(b):
+                return False
+            for aitem, bitem in zip(a, b):
+                stack.append((aitem, bitem))
+        elif ta is float:
+            if not (math.isfinite(a) and math.isfinite(b)):
+                return False
+            if a != b or math.copysign(1.0, a) != math.copysign(1.0, b):
+                return False
+        elif ta is str or ta is int or ta is bool or a is None:
+            if a != b:
+                return False
+        else:
+            return False
+    return True
 
 
 def strict_json_loads(
@@ -283,6 +330,14 @@ def _pack_frame(payload_bytes: bytes, max_bytes: int) -> bytes:
     return struct.pack(">I", len(payload_bytes)) + payload_bytes
 
 
+@dataclass(frozen=True)
+class _ValidatedRawRequest:
+    """Private invariant token carrying raw UTF-8 JSON bytes already validated against `payload`."""
+
+    raw_bytes: bytes
+    payload: dict[str, Any]
+
+
 @dataclass
 class BridgeResult:
     """HTTP-ready result returned by `WorkerManager.execute`."""
@@ -291,8 +346,153 @@ class BridgeResult:
     payload: dict[str, Any]
 
 
+class _ProcKillReapSupervisor:
+    """Authoritative single-owner kill/reap supervisor per spawned child PID (retained across quarantine)."""
+
+    def __init__(self, proc: subprocess.Popen[bytes], kill_fn: Callable[[subprocess.Popen[bytes]], None] | None) -> None:
+        self.proc = proc
+        self.pid: int = proc.pid
+        self._kill_fn = kill_fn
+        self.lock = threading.Lock()
+        self.cond = threading.Condition(self.lock)
+        self.kill_started: bool = False
+        self.kill_completed: bool = False
+        self.kill_ok: bool | None = None
+        self.reaped: bool = False
+        self._retry_requested: bool = False
+        self._close_cbs: list[Callable[[], None]] = []
+        self._worker_thread: threading.Thread | None = None
+
+    def register_close_callback(self, cb: Callable[[], None] | None) -> None:
+        if cb is None:
+            return
+        with self.lock:
+            self._close_cbs.append(cb)
+
+    def _drain_close_callbacks(self) -> None:
+        with self.lock:
+            cbs = list(self._close_cbs)
+            self._close_cbs.clear()
+        for cb in cbs:
+            try:
+                cb()
+            except Exception:
+                pass
+
+    def _run_kill_loop(self) -> None:
+        while True:
+            ok = False
+            try:
+                if self.proc.poll() is None:
+                    if self._kill_fn is not None:
+                        self._kill_fn(self.proc)
+                    else:
+                        self.proc.kill()
+                ok = True
+            except Exception:
+                ok = self.proc.poll() is not None
+            with self.lock:
+                self.kill_ok = ok
+                if self.proc.poll() is not None and self.proc.returncode is not None:
+                    self.reaped = True
+                if not ok and self.proc.poll() is None and self._retry_requested:
+                    self._retry_requested = False
+                    self.kill_completed = False
+                    self.kill_ok = None
+                    continue
+                self._retry_requested = False
+                self.kill_completed = True
+                self.cond.notify_all()
+                return
+
+    def ensure_kill_started(self, *, request_retry_if_failed: bool = False) -> None:
+        """Start an authoritative kill operation on a daemon thread unless one is in flight or succeeded."""
+        th: threading.Thread | None = None
+        with self.lock:
+            if self.proc.poll() is not None and self.proc.returncode is not None:
+                self.kill_started = True
+                self.kill_completed = True
+                self.kill_ok = True
+                self.reaped = True
+                self.cond.notify_all()
+                return
+            if self.kill_started and not self.kill_completed:
+                if request_retry_if_failed:
+                    self._retry_requested = True
+                return
+            if self.kill_completed and self.kill_ok:
+                return
+            if self.kill_completed and not self.kill_ok and not request_retry_if_failed:
+                return
+            self.kill_started = True
+            self.kill_completed = False
+            self.kill_ok = None
+            self._retry_requested = False
+            th = threading.Thread(target=self._run_kill_loop, daemon=True)
+            self._worker_thread = th
+        if th is not None:
+            th.start()
+
+    def wait_kill_before(
+        self,
+        abs_deadline: float,
+        clock: Callable[[], float] = time.monotonic,
+        *,
+        request_retry_if_failed: bool = False,
+    ) -> bool | None:
+        """Wait up to `abs_deadline` for the authoritative kill attempt to complete; return `None` if still in flight."""
+        self.ensure_kill_started(request_retry_if_failed=request_retry_if_failed)
+        with self.lock:
+            while not self.kill_completed or self._retry_requested:
+                rem = abs_deadline - clock()
+                if rem <= 0.0:
+                    return None
+                self.cond.wait(timeout=rem)
+            return self.kill_ok
+
+    def wait_reaped_before(
+        self,
+        abs_deadline: float,
+        close_cb: Callable[[], None] | None = None,
+        clock: Callable[[], float] = time.monotonic,
+        *,
+        request_retry_if_failed: bool = False,
+    ) -> bool:
+        """Wait for kill completion, close pipes via `close_cb`, and verify child reap before `abs_deadline`."""
+        self.register_close_callback(close_cb)
+        kill_state = self.wait_kill_before(
+            abs_deadline,
+            clock=clock,
+            request_retry_if_failed=request_retry_if_failed,
+        )
+        self._drain_close_callbacks()
+        if kill_state is None:
+            return False
+        if not kill_state and self.proc.poll() is None:
+            return False
+
+        with self.lock:
+            if self.reaped or (self.proc.poll() is not None and self.proc.returncode is not None):
+                self.reaped = True
+                self.cond.notify_all()
+                return True
+
+        wait_s = max(0.0, abs_deadline - clock())
+        try:
+            self.proc.wait(timeout=wait_s)
+        except (subprocess.TimeoutExpired, OSError):
+            pass
+
+        is_reaped = self.proc.poll() is not None and self.proc.returncode is not None
+        with self.lock:
+            if is_reaped:
+                self.reaped = True
+            self.cond.notify_all()
+        return is_reaped
+
+
 class _WorkerHandle:
-    """Owns one spawned worker process and its parent-side pipe descriptors."""
+    """Owns one spawned worker process, its authoritative kill/reap supervisor, and parent pipe descriptors."""
 
     def __init__(
         self,
@@ -302,11 +502,13 @@ class _WorkerHandle:
         expected_req_ino: int,
         expected_resp_ino: int,
         parent_closed_unused_ends: bool,
+        supervisor: _ProcKillReapSupervisor | None = None,
     ) -> None:
         self.lock = threading.Lock()
         self.teardown_exec_lock = threading.Lock()
         self.proc: subprocess.Popen[bytes] | None = proc
         self.pid: int = proc.pid
+        self.supervisor: _ProcKillReapSupervisor | None = supervisor
         self.req_w: int | None = req_w
         self.resp_r: int | None = resp_r
         self.expected_req_ino = expected_req_ino
@@ -342,13 +544,12 @@ class _LaunchSlot:
         self.cleanup_done: bool = False
         self.cleanup_verified: bool | None = None
         self.cleanup_deadline: float | None = None
-        self.kill_issued: bool = False
-        self.kill_ok: bool = True
         self.child_req_fd_closed: bool = False
         self.child_resp_fd_closed: bool = False
         self.child_fds: tuple[int | None, int | None] = child_fds
         self.parent_fds: tuple[int | None, int | None] = parent_fds
         self.proc: subprocess.Popen[bytes] | None = None
+        self.supervisor: _ProcKillReapSupervisor | None = None
         self.error: BaseException | None = None
         self.thread: threading.Thread | None = None
 
@@ -453,6 +654,7 @@ class WorkerManager:
         self._active_worker: _WorkerHandle | None = None
         self._pending_handle: _WorkerHandle | None = None
         self._quarantined_handles: list[_WorkerHandle] = []
+        self._proc_supervisors: dict[int, _ProcKillReapSupervisor] = {}
         self._active_launch: _LaunchSlot | None = None
         self.spawned_pids: list[int] = []
 
@@ -523,58 +725,17 @@ class WorkerManager:
         if self._clock() >= deadline:
             raise _IpcTimeoutError(msg)
 
-    def _kill_only_proc(self, proc: subprocess.Popen[bytes]) -> bool:
-        """Issue kill signal at most once if process is still running (without closing pipe FDs)."""
-        try:
-            if proc.poll() is None:
-                if self._kill_fn is not None:
-                    self._kill_fn(proc)
-                else:
-                    proc.kill()
-            return True
-        except Exception:
-            return proc.poll() is not None
-
-    def _reap_proc_after_kill(
-        self,
-        proc: subprocess.Popen[bytes],
-        close_cb: Callable[[], None] | None = None,
-        *,
-        kill_ok: bool = True,
-        deadline: float | None = None,
-    ) -> bool:
-        """Close optional pipe FDs, join child within single absolute teardown deadline, verify reaped."""
-        try:
-            if not kill_ok and proc.poll() is None:
-                return False
-        finally:
-            if close_cb is not None:
-                close_cb()
-
-        abs_deadline = deadline if deadline is not None else (time.monotonic() + self.worker_reap_timeout_s)
-        wait_s = max(0.0, abs_deadline - time.monotonic())
-        try:
-            proc.wait(timeout=wait_s)
-        except subprocess.TimeoutExpired:
-            return False
-        except OSError:
-            return False
-
-        return proc.poll() is not None and proc.returncode is not None
-
-    def _kill_and_reap_proc(
-        self,
-        proc: subprocess.Popen[bytes],
-        close_cb: Callable[[], None] | None = None,
-        *,
-        deadline: float | None = None,
-    ) -> bool:
-        """Kill child once, close pipes, join within single absolute deadline, verify reaped."""
-        kill_ok = self._kill_only_proc(proc)
-        return self._reap_proc_after_kill(proc, close_cb, kill_ok=kill_ok, deadline=deadline)
+    def _get_or_create_supervisor(self, proc: subprocess.Popen[bytes]) -> _ProcKillReapSupervisor:
+        """Return the single authoritative `_ProcKillReapSupervisor` for `proc`."""
+        with self._admission_lock:
+            sup = self._proc_supervisors.get(proc.pid)
+            if sup is None or sup.proc is not proc:
+                sup = _ProcKillReapSupervisor(proc, self._kill_fn)
+                self._proc_supervisors[proc.pid] = sup
+            return sup
 
     def _terminate_and_verify_handle(self, handle: _WorkerHandle, *, deadline: float | None = None) -> bool:
-        """Single-owner teardown bounded by ONE absolute deadline across lock, I/O drain, and reap."""
+        """Single-owner teardown bounded by ONE absolute deadline across lock, I/O drain, kill, and reap."""
         abs_deadline = deadline if deadline is not None else (time.monotonic() + self.worker_reap_timeout_s)
         lock_wait = max(0.0, abs_deadline - time.monotonic())
         if not handle.teardown_exec_lock.acquire(timeout=lock_wait):
@@ -589,6 +750,7 @@ class WorkerManager:
                 with self._admission_lock:
                     if handle in self._quarantined_handles:
                         self._quarantined_handles.remove(handle)
+                    self._proc_supervisors.pop(handle.pid, None)
                 return True
 
             with self._admission_lock:
@@ -599,9 +761,12 @@ class WorkerManager:
                     self._pending_handle = None
                 self._state_cond.notify_all()
 
-            kill_ok = True
+            sup: _ProcKillReapSupervisor | None = None
             if handle.proc is not None:
-                kill_ok = self._kill_only_proc(handle.proc)
+                sup = handle.supervisor or self._get_or_create_supervisor(handle.proc)
+                handle.supervisor = sup
+                sup.register_close_callback(handle.close_fds)
+                sup.ensure_kill_started(request_retry_if_failed=True)
 
             with self._admission_lock:
                 while handle.active_io > 0:
@@ -620,22 +785,22 @@ class WorkerManager:
                     self._state_cond.notify_all()
                 return False
 
-            if handle.proc is None:
+            if handle.proc is None or sup is None:
                 handle.close_fds()
                 handle.reaped = True
                 return True
 
-            reaped = self._reap_proc_after_kill(
-                handle.proc,
-                handle.close_fds,
-                kill_ok=kill_ok,
-                deadline=abs_deadline,
+            reaped = sup.wait_reaped_before(
+                abs_deadline,
+                close_cb=handle.close_fds,
+                request_retry_if_failed=True,
             )
             handle.reaped = reaped
             with self._admission_lock:
                 if reaped:
                     if handle in self._quarantined_handles:
                         self._quarantined_handles.remove(handle)
+                    self._proc_supervisors.pop(handle.pid, None)
                 else:
                     self._worker_poisoned = True
                     self._poison_reason = "WORKER_TEARDOWN_UNVERIFIED"
@@ -652,27 +817,47 @@ class WorkerManager:
         req_w: int | None,
         resp_r: int | None,
         reason: str,
-    ) -> None:
-        """Retain process ownership in `_quarantined_handles` (deduplicated) and poison manager."""
+        *,
+        supervisor: _ProcKillReapSupervisor | None = None,
+    ) -> _WorkerHandle:
+        """Retain process and authoritative supervisor ownership in `_quarantined_handles` and poison manager."""
+        sup = supervisor or self._get_or_create_supervisor(proc)
         with self._admission_lock:
             self._worker_poisoned = True
             self._poison_reason = reason
-            already_tracked = any(h.proc is proc or h.pid == proc.pid for h in self._quarantined_handles)
-            if not already_tracked:
-                qh = _WorkerHandle(
-                    proc=proc,
-                    req_w=req_w if req_w is not None else -1,
-                    resp_r=resp_r if resp_r is not None else -1,
-                    expected_req_ino=0,
-                    expected_resp_ino=0,
-                    parent_closed_unused_ends=True,
-                )
-                if req_w is None:
-                    qh.req_w = None
-                if resp_r is None:
-                    qh.resp_r = None
-                self._quarantined_handles.append(qh)
+            existing: _WorkerHandle | None = None
+            for h in self._quarantined_handles:
+                if h.proc is proc or h.pid == proc.pid:
+                    existing = h
+                    break
+            if existing is not None:
+                if existing.supervisor is None:
+                    existing.supervisor = sup
+                if req_w is not None and existing.req_w is None:
+                    existing.req_w = req_w
+                if resp_r is not None and existing.resp_r is None:
+                    existing.resp_r = resp_r
+                sup.register_close_callback(existing.close_fds)
+                self._state_cond.notify_all()
+                return existing
+
+            qh = _WorkerHandle(
+                proc=proc,
+                req_w=req_w if req_w is not None else -1,
+                resp_r=resp_r if resp_r is not None else -1,
+                expected_req_ino=0,
+                expected_resp_ino=0,
+                parent_closed_unused_ends=True,
+                supervisor=sup,
+            )
+            if req_w is None:
+                qh.req_w = None
+            if resp_r is None:
+                qh.resp_r = None
+            sup.register_close_callback(qh.close_fds)
+            self._quarantined_handles.append(qh)
             self._state_cond.notify_all()
+            return qh
 
     def _terminal_error_result(
         self,
@@ -708,8 +893,11 @@ class WorkerManager:
         slot: _LaunchSlot,
     ) -> subprocess.Popen[bytes]:
         def register_pid(proc: subprocess.Popen[bytes]) -> None:
+            sup = self._get_or_create_supervisor(proc)
+            sup.register_close_callback(slot.close_parent_fds)
             with slot.lock:
                 slot.proc = proc
+                slot.supervisor = sup
             with self._admission_lock:
                 if proc.pid not in self.spawned_pids:
                     self.spawned_pids.append(proc.pid)
@@ -864,7 +1052,8 @@ class WorkerManager:
         reason: str,
         wait_for_runner: bool,
     ) -> bool:
-        """Abandon `slot` with ONE authoritative owner, shared deadline, and synchronous poison if unverified."""
+        """Abandon `slot` with ONE authoritative owner, shared deadline, bounded kill/reap, and synchronous poison if unverified."""
+        early_sup: _ProcKillReapSupervisor | None = None
         with slot.lock:
             slot.abandoned = True
             slot.state = "ABORTED"
@@ -874,19 +1063,22 @@ class WorkerManager:
             slot.done_cond.notify_all()
             th = slot.thread
             early_proc = slot.proc
-            do_early_kill = (early_proc is not None) and (not slot.kill_issued)
-            if do_early_kill:
-                slot.kill_issued = True
+            early_sup = slot.supervisor
 
-        if do_early_kill and early_proc is not None:
-            kill_res = self._kill_only_proc(early_proc)
-            with slot.lock:
-                slot.kill_ok = kill_res
+        if early_proc is not None:
+            if early_sup is None:
+                early_sup = self._get_or_create_supervisor(early_proc)
+                with slot.lock:
+                    slot.supervisor = early_sup
+            early_sup.register_close_callback(slot.close_parent_fds)
+            early_sup.ensure_kill_started()
 
         if wait_for_runner and th is not None and th.is_alive():
             join_wait = max(0.0, eff_deadline - time.monotonic())
             th.join(timeout=join_wait)
 
+        proc_pending: subprocess.Popen[bytes] | None = None
+        sup_pending: _ProcKillReapSupervisor | None = None
         with slot.lock:
             claim_close = False
             if slot.cleanup_done:
@@ -899,48 +1091,70 @@ class WorkerManager:
                     slot.cleanup_done_cond.wait(timeout=rem)
                 if slot.cleanup_done:
                     return bool(slot.cleanup_verified)
-                # V1-A-R3-F1: Exhausted wait while another cleanup owner hasn't finished -> poison synchronously & retain!
+                # V1-A-R3-F1 / R4-F1: Exhausted wait while another cleanup owner hasn't finished -> poison synchronously & retain!
                 proc_pending = slot.proc
+                sup_pending = slot.supervisor
             else:
                 runner_returned = slot.runner_returned
                 proc_still = slot.proc
+                sup_still = slot.supervisor
                 if not runner_returned and th is not None:
                     proc_pending = proc_still
+                    sup_pending = sup_still
                 else:
                     slot.cleanup_started = True
                     p0, p1 = slot.parent_fds
                     slot.parent_fds = (None, None)
                     c0, c1 = slot.child_fds
                     slot.child_fds = (None, None)
-                    need_late_kill = (proc_still is not None) and (not slot.kill_issued)
-                    if need_late_kill:
-                        slot.kill_issued = True
-                    stored_kill_ok = slot.kill_ok
                     claim_close = True
                     proc_pending = proc_still
+                    sup_pending = sup_still
 
             wait_exhausted = not claim_close
 
         if wait_exhausted:
             self._poison("LAUNCH_CLEANUP_UNVERIFIED")
             if proc_pending is not None:
-                self._quarantine_orphan_proc(proc_pending, None, None, reason)
+                if sup_pending is None:
+                    sup_pending = self._get_or_create_supervisor(proc_pending)
+                sup_pending.register_close_callback(slot.close_parent_fds)
+                sup_pending.ensure_kill_started()
+                self._quarantine_orphan_proc(
+                    proc_pending,
+                    None,
+                    None,
+                    reason,
+                    supervisor=sup_pending,
+                )
             return False
 
         _safe_close_fd(c0)
         _safe_close_fd(c1)
 
         if proc_pending is not None:
-            if need_late_kill:
-                kill_ok = self._kill_only_proc(proc_pending)
+            if sup_pending is None:
+                sup_pending = self._get_or_create_supervisor(proc_pending)
                 with slot.lock:
-                    slot.kill_ok = kill_ok
+                    slot.supervisor = sup_pending
+            close_fn = lambda: (_safe_close_fd(p0), _safe_close_fd(p1), slot.close_parent_fds())
+            verified = sup_pending.wait_reaped_before(eff_deadline, close_cb=close_fn)
+            if verified:
+                with self._admission_lock:
+                    if self._active_worker is None and self._pending_handle is None:
+                        for qh in list(self._quarantined_handles):
+                            if qh.pid == proc_pending.pid:
+                                qh.reaped = True
+                                self._quarantined_handles.remove(qh)
+                    self._proc_supervisors.pop(proc_pending.pid, None)
             else:
-                kill_ok = stored_kill_ok
-            close_fn = lambda: (_safe_close_fd(p0), _safe_close_fd(p1))
-            verified = self._reap_proc_after_kill(proc_pending, close_fn, kill_ok=kill_ok, deadline=eff_deadline)
-            if not verified:
-                self._quarantine_orphan_proc(proc_pending, None, None, reason)
+                self._quarantine_orphan_proc(
+                    proc_pending,
+                    None,
+                    None,
+                    reason,
+                    supervisor=sup_pending,
+                )
         else:
             _safe_close_fd(p0)
             _safe_close_fd(p1)
@@ -1178,6 +1392,12 @@ class WorkerManager:
                         and slot.child_resp_fd_closed
                     )
                     assert slot.proc is not None and t_req_w is not None and t_resp_r is not None
+                    sup = slot.supervisor
+                    if sup is None:
+                        sup = self._proc_supervisors.get(slot.proc.pid)
+                        if sup is None or sup.proc is not slot.proc:
+                            sup = _ProcKillReapSupervisor(slot.proc, self._kill_fn)
+                            self._proc_supervisors[slot.proc.pid] = sup
                     handle = _WorkerHandle(
                         proc=slot.proc,
                         req_w=t_req_w,
@@ -1185,7 +1405,9 @@ class WorkerManager:
                         expected_req_ino=expected_req_ino,
                         expected_resp_ino=expected_resp_ino,
                         parent_closed_unused_ends=parent_closed_unused,
+                        supervisor=sup,
                     )
+                    sup.register_close_callback(handle.close_fds)
                     if self._active_launch is slot:
                         self._active_launch = None
                     self._pending_handle = handle
@@ -1403,44 +1625,138 @@ class WorkerManager:
             raise _IpcProtocolError(f"Invalid IPC response frame length {frame_len} (max={max_bytes})")
         return self._recv_exact_before(handle, frame_len, deadline)
 
+    def _validate_and_serialize_request(
+        self,
+        endpoint: str,
+        request_payload: dict[str, Any],
+        validated_raw: _ValidatedRawRequest | None,
+        raw_request_bytes: bytes | None,
+        req_id: int | None,
+    ) -> bytes | BridgeResult:
+        """Validate exact serialized request JSON representation before admission and return raw request JSON bytes."""
+        if not isinstance(endpoint, str) or not endpoint:
+            return BridgeResult(
+                400,
+                make_error_payload("INVALID_JSON", "Invalid endpoint string", request_id=req_id),
+            )
+        if not isinstance(request_payload, dict):
+            return BridgeResult(
+                400,
+                make_error_payload("INVALID_JSON", "Request payload must be a JSON object", request_id=req_id),
+            )
+
+        if validated_raw is not None:
+            if not isinstance(validated_raw, _ValidatedRawRequest) or validated_raw.payload is not request_payload:
+                return BridgeResult(
+                    400,
+                    make_error_payload("INVALID_JSON", "Invalid or mismatched validated raw request token", request_id=req_id),
+                )
+            req_bytes = validated_raw.raw_bytes
+        elif raw_request_bytes is not None:
+            if not isinstance(raw_request_bytes, (bytes, bytearray)) or len(raw_request_bytes) == 0:
+                return BridgeResult(
+                    400,
+                    make_error_payload("INVALID_JSON", "Raw request bytes must be non-empty UTF-8 JSON", request_id=req_id),
+                )
+            if len(raw_request_bytes) > MAX_IPC_REQUEST_BYTES:
+                return BridgeResult(
+                    413,
+                    make_error_payload(
+                        "PAYLOAD_TOO_LARGE",
+                        f"Raw request exceeds maximum {MAX_IPC_REQUEST_BYTES} bytes",
+                        request_id=req_id,
+                    ),
+                )
+            try:
+                _validate_json_depth_and_finiteness(request_payload, max_depth=MAX_CLIENT_JSON_DEPTH)
+                parsed_raw = strict_json_loads(bytes(raw_request_bytes), max_depth=MAX_CLIENT_JSON_DEPTH)
+            except DuplicateKeyError as exc:
+                return BridgeResult(
+                    400,
+                    make_error_payload("DUPLICATE_KEY", str(exc), request_id=req_id),
+                )
+            except (ValueError, UnicodeDecodeError, UnicodeEncodeError, RecursionError, TypeError) as exc:
+                return BridgeResult(
+                    400,
+                    make_error_payload("INVALID_JSON", f"Malformed or invalid raw request JSON: {exc}", request_id=req_id),
+                )
+            if not _json_values_strictly_equal(parsed_raw, request_payload) or extract_safe_request_id(parsed_raw) != req_id:
+                return BridgeResult(
+                    400,
+                    make_error_payload(
+                        "INVALID_JSON",
+                        "raw_request_bytes does not match request_payload",
+                        request_id=req_id,
+                    ),
+                )
+            req_bytes = bytes(raw_request_bytes)
+        else:
+            try:
+                _validate_json_depth_and_finiteness(request_payload, max_depth=MAX_CLIENT_JSON_DEPTH)
+                req_bytes = strict_json_dumps(request_payload)
+                # Parse exact serialized JSON bytes to guarantee zero coercion collisions or unvalidated depth
+                strict_json_loads(req_bytes, max_depth=MAX_CLIENT_JSON_DEPTH)
+            except DuplicateKeyError as exc:
+                return BridgeResult(
+                    400,
+                    make_error_payload("DUPLICATE_KEY", str(exc), request_id=req_id),
+                )
+            except (ValueError, UnicodeDecodeError, UnicodeEncodeError, RecursionError, TypeError) as exc:
+                return BridgeResult(
+                    400,
+                    make_error_payload("INVALID_JSON", f"Malformed or invalid request payload: {exc}", request_id=req_id),
+                )
+
+        try:
+            max_meta_bytes = strict_json_dumps(
+                {
+                    "ipc_token": (1 << 64) - 1,
+                    "endpoint": endpoint,
+                    "expected_req_ino": (1 << 64) - 1,
+                    "expected_resp_ino": (1 << 64) - 1,
+                    "parent_closed_unused_ends": False,
+                }
+            )
+        except (ValueError, UnicodeEncodeError, TypeError) as exc:
+            return BridgeResult(
+                400,
+                make_error_payload("INVALID_JSON", f"Malformed request metadata: {exc}", request_id=req_id),
+            )
+
+        max_wire_len = len(max_meta_bytes) - 1 + len(b',"request":') + len(req_bytes) + 1
+        if max_wire_len > MAX_IPC_REQUEST_BYTES:
+            return BridgeResult(
+                413,
+                make_error_payload(
+                    "PAYLOAD_TOO_LARGE",
+                    f"Serialized IPC request ({max_wire_len} bytes) exceeds maximum {MAX_IPC_REQUEST_BYTES} bytes",
+                    request_id=req_id,
+                ),
+            )
+        return req_bytes
+
     def execute(
         self,
         endpoint: str,
         request_payload: dict[str, Any],
         *,
         raw_request_bytes: bytes | None = None,
+        _validated_raw: _ValidatedRawRequest | None = None,
     ) -> BridgeResult:
         """Admit, supervise, and execute one bounded IPC request against the single worker."""
         req_id = extract_safe_request_id(request_payload)
 
-        # V1-A-R3-M1: Pre-validate request payload size/depth BEFORE admitting or spawning/touching a worker
-        if raw_request_bytes is None:
-            try:
-                _validate_json_depth_and_finiteness(request_payload, max_depth=MAX_CLIENT_JSON_DEPTH)
-                preview_payload = strict_json_dumps(
-                    {
-                        "ipc_token": 0,
-                        "endpoint": endpoint,
-                        "expected_req_ino": 0,
-                        "expected_resp_ino": 0,
-                        "parent_closed_unused_ends": True,
-                        "request": request_payload,
-                    }
-                )
-            except (ValueError, UnicodeEncodeError, RecursionError, TypeError) as exc:
-                return BridgeResult(
-                    400,
-                    make_error_payload("INVALID_JSON", f"Malformed or invalid request payload: {exc}", request_id=req_id),
-                )
-            if len(preview_payload) + 64 > MAX_IPC_REQUEST_BYTES:
-                return BridgeResult(
-                    413,
-                    make_error_payload(
-                        "PAYLOAD_TOO_LARGE",
-                        f"Serialized IPC request exceeds maximum {MAX_IPC_REQUEST_BYTES} bytes",
-                        request_id=req_id,
-                    ),
-                )
+        # V1-A-R3-M1 / R4-M1: Validate exact serialized JSON representation BEFORE admitting or touching a worker
+        validated_or_err = self._validate_and_serialize_request(
+            endpoint,
+            request_payload,
+            _validated_raw,
+            raw_request_bytes,
+            req_id,
+        )
+        if isinstance(validated_or_err, BridgeResult):
+            return validated_or_err
+        verified_req_bytes = validated_or_err
 
         with self._admission_lock:
             # Strict order: poison > shutdown > concurrency > admission
@@ -1483,27 +1799,16 @@ class WorkerManager:
                 handle = spawned
 
             ipc_token = self._next_ipc_token()
-            if raw_request_bytes is not None:
-                meta_bytes = strict_json_dumps(
-                    {
-                        "ipc_token": ipc_token,
-                        "endpoint": endpoint,
-                        "expected_req_ino": handle.expected_req_ino,
-                        "expected_resp_ino": handle.expected_resp_ino,
-                        "parent_closed_unused_ends": handle.parent_closed_unused_ends,
-                    }
-                )
-                payload_wire_bytes = meta_bytes[:-1] + b',"request":' + raw_request_bytes + b"}"
-            else:
-                ipc_request = {
+            meta_bytes = strict_json_dumps(
+                {
                     "ipc_token": ipc_token,
                     "endpoint": endpoint,
-                    "request": request_payload,
                     "expected_req_ino": handle.expected_req_ino,
                     "expected_resp_ino": handle.expected_resp_ino,
                     "parent_closed_unused_ends": handle.parent_closed_unused_ends,
                 }
-                payload_wire_bytes = strict_json_dumps(ipc_request)
+            )
+            payload_wire_bytes = meta_bytes[:-1] + b',"request":' + verified_req_bytes + b"}"
 
             frame = _pack_frame(payload_wire_bytes, MAX_IPC_REQUEST_BYTES)
             self._assert_before_deadline(deadline, "Request serialization exceeded deadline")
@@ -1803,7 +2108,11 @@ class ExplorerHTTPRequestHandler(http.server.SimpleHTTPRequestHandler):
             self._send_json_response(exc.status_code, make_error_payload(exc.code, exc.message, field=exc.field))
             return
 
-        result = self.server.worker_manager.execute(self.path, payload, raw_request_bytes=body_bytes)  # type: ignore[attr-defined]
+        result = self.server.worker_manager.execute(
+            self.path,
+            payload,
+            _validated_raw=_ValidatedRawRequest(raw_bytes=body_bytes, payload=payload),
+        )  # type: ignore[attr-defined]
         self._send_json_response(result.status_code, result.payload)
 
 

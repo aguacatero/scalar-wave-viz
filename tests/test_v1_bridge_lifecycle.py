@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import http.client
+import errno
 import json
 import os
 import selectors
@@ -542,26 +543,64 @@ class V1WorkerLifecycleAndR5I1Tests(unittest.TestCase):
             "os.write(a.resp_fd, struct.pack('>I', len(ready)) + ready)\n"
             "time.sleep(5)\n"
         )
+        ready_published_ev = threading.Event()
+        write_stalled_ev = threading.Event()
+        first_handle_box: list[Any] = []
+
+        def on_ready_publish(handle):
+            first_handle_box.append(handle)
+            ready_published_ev.set()
+
         mgr = bridge.WorkerManager(
-            response_deadline_s=0.25,
-            worker_reap_timeout_s=0.6,
+            response_deadline_s=0.45,
+            worker_reap_timeout_s=0.8,
             custom_worker_cmd=stall_script,
+            on_before_ready_publish=on_ready_publish,
         )
+        orig_os_write = os.write
+
+        def stalled_req_write(fd, data):
+            if ready_published_ev.is_set() and first_handle_box and fd == first_handle_box[0].req_w:
+                write_stalled_ev.set()
+                raise BlockingIOError(errno.EAGAIN, "Simulated request pipe backpressure")
+            return orig_os_write(fd, data)
+
         try:
-            # Force pipe backpressure (BlockingIOError on write) even for small payload after READY
-            with mock.patch("v1_worker_bridge.os.write", side_effect=BlockingIOError):
+            # Force pipe backpressure (BlockingIOError on write) strictly on worker req_w after READY
+            t0 = time.monotonic()
+            with mock.patch("v1_worker_bridge.os.write", side_effect=stalled_req_write):
                 res = mgr.execute("/api/v1/solve", {"request_id": 1})
+            fault_elapsed = time.monotonic() - t0
+            self.assertTrue(ready_published_ev.is_set(), "Fault worker did not reach READY publication")
+            self.assertTrue(write_stalled_ev.is_set(), "Injected blocked-send stall was not exercised")
             self.assertEqual(res.status_code, 504)
             self.assertEqual(res.payload["error"]["code"], "SOLVE_DEADLINE_EXCEEDED")
+            # Real-clock watchdog bounded far below the child's 5.0 s sleep
+            self.assertGreaterEqual(fault_elapsed, 0.35)
+            self.assertLess(fault_elapsed, 1.50)
+
+            first_handle = first_handle_box[0]
             first_pid = mgr.spawned_pids[0]
             self.assertTrue(_is_pid_reaped(first_pid))
+            self.assertIsNone(first_handle.req_w)
+            self.assertIsNone(first_handle.resp_r)
 
-            # Switch to normal worker on next request (simulating recovery cleanly after faulty worker reaped)
+            # Switch to normal worker with a separate reasonable execution budget for recovery
             mgr.custom_worker_cmd = None
+            mgr.on_before_ready_publish = None
+            mgr.response_deadline_s = 2.0
             res2 = mgr.execute("/api/v1/solve", {"request_id": 2})
             self.assertEqual(res2.status_code, 200)
             second_pid = res2.payload["worker_pid"]
             self.assertNotEqual(first_pid, second_pid)
+            self.assertEqual(len(mgr.spawned_pids), 2)
+            self.assertEqual(res2.payload["child_req_ino"], res2.payload["expected_req_ino"])
+            self.assertEqual(res2.payload["child_resp_ino"], res2.payload["expected_resp_ino"])
+            self.assertTrue(res2.payload["parent_closed_unused_ends"])
+            self.assertEqual(
+                sorted(res2.payload["child_open_pipe_inos"]),
+                sorted([res2.payload["child_req_ino"], res2.payload["child_resp_ino"]]),
+            )
             self.assertTrue(_is_pid_reaped(first_pid))
         finally:
             mgr.shutdown()
@@ -2227,6 +2266,10 @@ class V1WorkerLifecycleAndR5I1Tests(unittest.TestCase):
         baseline_pipes = _list_open_pipe_inodes()
         # Allocate a low sentinel pipe FIRST only to know we can refill closed child FD slots cleanly
         held_sentinels: list[tuple[int, int]] = []
+        original_child_fds: list[int] = []
+
+        def capture_original_child_fds(slot):
+            original_child_fds.extend([fd for fd in slot.child_fds if fd is not None])
 
         def occupy_closed_fds(_slot):
             # Create multiple pipes right after launch_runner closed child_fds so freed numeric FD slots are occupied
@@ -2238,11 +2281,18 @@ class V1WorkerLifecycleAndR5I1Tests(unittest.TestCase):
         mgr = bridge.WorkerManager(
             response_deadline_s=2.0,
             worker_reap_timeout_s=0.8,
+            on_after_slot_publish_before_runner=capture_original_child_fds,
             on_before_slot_to_pending_handoff=occupy_closed_fds,
         )
         try:
             res = mgr.execute("/api/v1/solve", {"request_id": 1})
             self.assertEqual(res.status_code, 200)
+            self.assertEqual(len(original_child_fds), 2)
+            reused_fds = {fd for pair in held_sentinels for fd in pair}
+            self.assertTrue(
+                set(original_child_fds).issubset(reused_fds),
+                f"Expected original child FDs {original_child_fds} to be reused by sentinels {reused_fds}",
+            )
             self.assertTrue(res.payload["parent_closed_unused_ends"])
             self.assertEqual(
                 sorted(res.payload["child_open_pipe_inos"]),
@@ -2258,6 +2308,537 @@ class V1WorkerLifecycleAndR5I1Tests(unittest.TestCase):
                 os.close(sr)
                 os.close(sw)
             mgr.shutdown()
+
+        self.assertEqual(_list_open_pipe_inodes(), baseline_pipes)
+
+    def test_r4_f1_caller_owned_kill_stall_watchdog_post_pid_launch_and_warmed_worker(self):
+        """V1-A-R4-F1: caller-owned blocking kill_fn on post-PID launch stall and warmed worker timeout returns bounded 503 POISONED before kill releases, preserves single supervisor, blocks concurrent admission, and reaps on release."""
+        import v1_worker_bridge as bridge
+
+        baseline_pipes = _list_open_pipe_inodes()
+        sleeping_cmd = self._make_fault_worker_script("import time\ntime.sleep(5)\n")
+
+        # (a) Post-PID launch stall where execute thread itself enters _abort_launch_slot and triggers kill_fn that blocks past reap deadline
+        launch_release_ev = threading.Event()
+        kill_entered_a = threading.Event()
+        kill_release_a = threading.Event()
+        pid_registered_a = threading.Event()
+        kill_calls_a = [0]
+        live_procs_a: list[subprocess.Popen] = []
+
+        def stalled_post_pid_launch_a(cmd, pass_fds, register_pid=None):
+            proc = subprocess.Popen(sleeping_cmd, pass_fds=pass_fds, close_fds=True)
+            live_procs_a.append(proc)
+            if register_pid is not None:
+                register_pid(proc)
+            pid_registered_a.set()
+            launch_release_ev.wait(timeout=3.0)
+            return proc
+
+        def blocking_kill_a(proc):
+            kill_calls_a[0] += 1
+            kill_entered_a.set()
+            kill_release_a.wait(timeout=3.0)
+            proc.kill()
+
+        mgr_a = bridge.WorkerManager(
+            response_deadline_s=0.15,
+            worker_reap_timeout_s=0.18,
+            launch_fn=stalled_post_pid_launch_a,
+            kill_fn=blocking_kill_a,
+        )
+        res_a_box: list = []
+        th_a = threading.Thread(target=lambda: res_a_box.append(mgr_a.execute("/api/v1/solve", {"request_id": 1})))
+        t0_a = time.monotonic()
+        th_a.start()
+        self.assertTrue(pid_registered_a.wait(timeout=2.0))
+        self.assertTrue(kill_entered_a.wait(timeout=2.0))
+
+        # Must return BridgeResult strictly BEFORE kill_release_a or launch_release_ev is set!
+        th_a.join(timeout=1.2)
+        elapsed_a = time.monotonic() - t0_a
+        self.assertFalse(th_a.is_alive(), "execute() hung on caller-owned blocking kill_fn during launch abort")
+        self.assertFalse(kill_release_a.is_set())
+        self.assertLess(elapsed_a, 0.70)
+        self.assertEqual(len(res_a_box), 1)
+        self.assertEqual(res_a_box[0].status_code, 503)
+        self.assertEqual(res_a_box[0].payload["error"]["code"], "WORKER_UNAVAILABLE_POISONED")
+        self.assertTrue(mgr_a._worker_poisoned)
+        self.assertEqual(mgr_a.quarantined_pids, [live_procs_a[0].pid])
+        self.assertEqual(kill_calls_a[0], 1)
+
+        # Concurrent/subsequent callers while kill is still blocked get immediate 503 WORKER_UNAVAILABLE_POISONED and zero respawn
+        conc_a = mgr_a.execute("/api/v1/study", {"request_id": 2})
+        self.assertEqual(conc_a.status_code, 503)
+        self.assertEqual(conc_a.payload["error"]["code"], "WORKER_UNAVAILABLE_POISONED")
+        self.assertEqual(len(mgr_a.spawned_pids), 1)
+
+        # Release stalled launcher and kill -> shutdown reuses the same authoritative supervisor (no duplicate kill) and reaps child
+        launch_release_ev.set()
+        kill_release_a.set()
+        mgr_a.shutdown()
+        self.assertEqual(kill_calls_a[0], 1)
+        self.assertEqual(mgr_a.quarantined_pids, [])
+        self.assertTrue(_is_pid_reaped(live_procs_a[0].pid))
+        self.assertEqual(_list_open_pipe_inodes(), baseline_pipes)
+
+        # (b) Warmed worker whose IPC times out while kill_fn blocks past worker_reap_timeout_s on execute's thread
+        kill_entered_b = threading.Event()
+        kill_release_b = threading.Event()
+        kill_calls_b = [0]
+
+        def blocking_kill_b(proc):
+            kill_calls_b[0] += 1
+            kill_entered_b.set()
+            kill_release_b.wait(timeout=3.0)
+            proc.kill()
+
+        mgr_b = bridge.WorkerManager(
+            response_deadline_s=1.0,
+            worker_reap_timeout_s=0.18,
+            kill_fn=blocking_kill_b,
+        )
+        warm_res = mgr_b.execute("/api/v1/solve", {"request_id": 10})
+        self.assertEqual(warm_res.status_code, 200)
+        warm_pid = warm_res.payload["worker_pid"]
+
+        mgr_b.response_deadline_s = 0.15
+        res_b_box: list = []
+        th_b = threading.Thread(
+            target=lambda: res_b_box.append(mgr_b.execute("/api/v1/solve", {"request_id": 11, "delay_s": 2.0}))
+        )
+        t0_b = time.monotonic()
+        th_b.start()
+        self.assertTrue(kill_entered_b.wait(timeout=2.0))
+
+        # Must return 503 WORKER_UNAVAILABLE_POISONED strictly BEFORE kill_release_b is set!
+        th_b.join(timeout=1.2)
+        elapsed_b = time.monotonic() - t0_b
+        self.assertFalse(th_b.is_alive(), "execute() hung on caller-owned blocking kill_fn during warmed worker timeout")
+        self.assertFalse(kill_release_b.is_set())
+        self.assertLess(elapsed_b, 0.70)
+        self.assertEqual(len(res_b_box), 1)
+        self.assertEqual(res_b_box[0].status_code, 503)
+        self.assertEqual(res_b_box[0].payload["error"]["code"], "WORKER_UNAVAILABLE_POISONED")
+        self.assertTrue(mgr_b._worker_poisoned)
+        self.assertEqual(mgr_b.quarantined_pids, [warm_pid])
+        self.assertEqual(kill_calls_b[0], 1)
+
+        # Concurrent caller while kill is still blocked gets 503 POISONED, never 429, zero duplicate workers
+        conc_b = mgr_b.execute("/api/v1/solve", {"request_id": 12})
+        self.assertEqual(conc_b.status_code, 503)
+        self.assertEqual(conc_b.payload["error"]["code"], "WORKER_UNAVAILABLE_POISONED")
+        self.assertEqual(len(mgr_b.spawned_pids), 1)
+
+        # Even if shutdown() is called while kill_fn is blocked, shutdown() itself is bounded by worker_reap_timeout_s!
+        t0_shut = time.monotonic()
+        mgr_b.shutdown()
+        self.assertLess(time.monotonic() - t0_shut, 0.50)
+        self.assertEqual(kill_calls_b[0], 1)
+
+        # Now release blocking kill and run final shutdown to reap cleanly
+        kill_release_b.set()
+        mgr_b.shutdown()
+        self.assertEqual(kill_calls_b[0], 1)
+        self.assertEqual(mgr_b.quarantined_pids, [])
+        self.assertTrue(_is_pid_reaped(warm_pid))
+        self.assertEqual(_list_open_pipe_inodes(), baseline_pipes)
+
+    def test_r4_f1_real_teardown_lock_and_active_io_contention_and_expired_handoff_shared_budget(self):
+        """V1-A-R4-F1: real teardown_exec_lock contender + delayed active_io lease drain + reap share one deadline, real monotonic parser-entry expiry & near-limit 5s success, and expired handoff cleanup budget."""
+        import v1_worker_bridge as bridge
+
+        baseline_pipes = _list_open_pipe_inodes()
+
+        # (a) Real teardown_exec_lock contender + active_io lease holder + kill/reap sharing ONE teardown deadline
+        mgr_a = bridge.WorkerManager(response_deadline_s=1.0, worker_reap_timeout_s=0.45)
+        try:
+            warm_a = mgr_a.execute("/api/v1/solve", {"request_id": 1})
+            self.assertEqual(warm_a.status_code, 200)
+            handle_a = mgr_a._active_worker
+            self.assertIsNotNone(handle_a)
+
+            # Hold teardown_exec_lock for 0.12s AND hold an active_io lease for 0.22s concurrently after timeout starts
+            lock_holder_ready = threading.Event()
+            io_holder_ready = threading.Event()
+            teardown_started = threading.Event()
+
+            orig_ensure_cleanup = mgr_a._ensure_cleanup_deadline
+            captured_td_a: list[float] = []
+
+            def spy_ensure_cleanup(cleanup_box):
+                td = orig_ensure_cleanup(cleanup_box)
+                captured_td_a.append(td)
+                teardown_started.set()
+                return td
+
+            mgr_a._ensure_cleanup_deadline = spy_ensure_cleanup
+
+            def hold_lock_and_io():
+                assert handle_a is not None
+                handle_a.teardown_exec_lock.acquire()
+                with mgr_a._admission_lock:
+                    handle_a.active_io += 1
+                lock_holder_ready.set()
+                io_holder_ready.set()
+                teardown_started.wait(timeout=2.0)
+                time.sleep(0.10)
+                handle_a.teardown_exec_lock.release()
+                time.sleep(0.10)
+                with mgr_a._admission_lock:
+                    handle_a.active_io -= 1
+                    mgr_a._state_cond.notify_all()
+
+            contender_th = threading.Thread(target=hold_lock_and_io, daemon=True)
+            contender_th.start()
+            self.assertTrue(lock_holder_ready.wait(timeout=1.0))
+            self.assertTrue(io_holder_ready.wait(timeout=1.0))
+
+            mgr_a.response_deadline_s = 0.15
+            t0_a = time.monotonic()
+            res_a = mgr_a.execute("/api/v1/solve", {"request_id": 2, "delay_s": 1.0})
+            t_end_a = time.monotonic()
+            contender_th.join(timeout=1.0)
+
+            self.assertEqual(res_a.status_code, 504)
+            self.assertEqual(len(set(captured_td_a)), 1, "All teardown steps must share one exact deadline")
+            # Remaining budget after lock (0.10s) and active_io drain (+0.10s = 0.20s total) completed well before single 0.45s deadline
+            self.assertLessEqual(t_end_a, captured_td_a[0] + 0.08)
+            self.assertLess(t_end_a - t0_a, 0.70)
+            self.assertTrue(_is_pid_reaped(warm_a.payload["worker_pid"]))
+        finally:
+            mgr_a.shutdown()
+        self.assertEqual(_list_open_pipe_inodes(), baseline_pipes)
+
+        # (b) Real monotonic clock: near-8MiB response succeeds inside 5.0s, and real monotonic expiry at parser entry aborts mid-parse
+        big_real_worker = self._make_fault_worker_script(
+            "import argparse, json, os, struct, time\n"
+            "def read_exact(fd, n):\n"
+            "  b = bytearray()\n"
+            "  while len(b) < n:\n"
+            "    c = os.read(fd, n - len(b))\n"
+            "    if not c: raise EOFError()\n"
+            "    b.extend(c)\n"
+            "  return bytes(b)\n"
+            "p = argparse.ArgumentParser()\n"
+            "p.add_argument('--req-fd', type=int); p.add_argument('--resp-fd', type=int)\n"
+            "a, _ = p.parse_known_args()\n"
+            "ready = json.dumps({'type':'READY','pid':os.getpid(),'req_ino':os.fstat(a.req_fd).st_ino,'resp_ino':os.fstat(a.resp_fd).st_ino}).encode()\n"
+            "os.write(a.resp_fd, struct.pack('>I', len(ready)) + ready)\n"
+            "payload_str = 'y' * 7500000\n"
+            "nums_str = '[' + ','.join(['1']*60000) + ']'\n"
+            "while True:\n"
+            "  try: hdr = read_exact(a.req_fd, 4)\n"
+            "  except EOFError: break\n"
+            "  n = struct.unpack('>I', hdr)[0]\n"
+            "  req = json.loads(read_exact(a.req_fd, n).decode())\n"
+            "  if req['request'].get('mode') == 'expire_in_parse':\n"
+            "    out = ('{\"ipc_token\":' + str(req['ipc_token']) + ',\"arr\":' + nums_str + '}').encode()\n"
+            "  else:\n"
+            "    out = json.dumps({'ipc_token': req['ipc_token'], 'flags': [True, False]*5000, 'blob': payload_str}).encode()\n"
+            "  mv = memoryview(struct.pack('>I', len(out)) + out)\n"
+            "  sent = 0\n"
+            "  while sent < len(mv): sent += os.write(a.resp_fd, mv[sent:])\n"
+        )
+        # Note: NO mock clock passed here — uses real time.monotonic!
+        mgr_b = bridge.WorkerManager(
+            response_deadline_s=5.0,
+            worker_reap_timeout_s=0.5,
+            custom_worker_cmd=big_real_worker,
+        )
+        try:
+            t0_big = time.monotonic()
+            res_big = mgr_b.execute("/api/v1/solve", {"request_id": 10})
+            dt_big = time.monotonic() - t0_big
+            self.assertEqual(res_big.status_code, 200)
+            self.assertLess(dt_big, 5.0)
+            self.assertEqual(len(res_big.payload["blob"]), 7500000)
+
+            # Now test real monotonic expiry after full raw frame read at parser entry
+            mgr_b.response_deadline_s = 0.18
+            parse_entry_times: list[float] = []
+
+            def sleep_past_real_deadline_at_parse_entry():
+                parse_entry_times.append(time.monotonic())
+                time.sleep(0.20)
+
+            mgr_b._on_json_parse_entry = sleep_past_real_deadline_at_parse_entry
+            res_exp = mgr_b.execute("/api/v1/solve", {"request_id": 11, "mode": "expire_in_parse"})
+            self.assertEqual(len(parse_entry_times), 1)
+            self.assertEqual(res_exp.status_code, 504)
+            self.assertEqual(res_exp.payload["error"]["code"], "SOLVE_DEADLINE_EXCEEDED")
+            self.assertTrue(_is_pid_reaped(mgr_b.spawned_pids[0]))
+        finally:
+            mgr_b.shutdown()
+        self.assertEqual(_list_open_pipe_inodes(), baseline_pipes)
+
+        # (c) Expired slot-to-pending handoff shares ONE cleanup_box deadline across _abort_launch_slot and outer _IpcTimeoutError catch
+        handoff_cleanup_boxes: list[float] = []
+        abort_deadlines_seen: list[float] = []
+
+        mgr_c = bridge.WorkerManager(
+            response_deadline_s=0.12,
+            worker_reap_timeout_s=0.30,
+            on_before_slot_to_pending_handoff=lambda _s: time.sleep(0.16),
+        )
+        orig_ensure_c = mgr_c._ensure_cleanup_deadline
+        orig_abort_c = mgr_c._abort_launch_slot
+
+        def spy_ensure_c(box):
+            td = orig_ensure_c(box)
+            handoff_cleanup_boxes.append(td)
+            return td
+
+        def spy_abort_c(slot, *, deadline, reason, wait_for_runner):
+            abort_deadlines_seen.append(deadline)
+            return orig_abort_c(slot, deadline=deadline, reason=reason, wait_for_runner=wait_for_runner)
+
+        mgr_c._ensure_cleanup_deadline = spy_ensure_c
+        mgr_c._abort_launch_slot = spy_abort_c
+        try:
+            res_c = mgr_c.execute("/api/v1/solve", {"request_id": 30})
+            self.assertEqual(res_c.status_code, 504)
+            self.assertEqual(res_c.payload["error"]["code"], "SOLVE_DEADLINE_EXCEEDED")
+            # Both handoff cleanup and outer catch must reference the exact same single cleanup deadline!
+            self.assertGreaterEqual(len(handoff_cleanup_boxes), 2)
+            self.assertEqual(len(set(handoff_cleanup_boxes)), 1)
+            self.assertEqual(abort_deadlines_seen, [handoff_cleanup_boxes[0]])
+            self.assertTrue(_is_pid_reaped(mgr_c.spawned_pids[0]))
+        finally:
+            mgr_c.shutdown()
+        self.assertEqual(_list_open_pipe_inodes(), baseline_pipes)
+
+    def test_r4_m1_direct_execute_coercion_duplicate_keys_tuple_depth_and_raw_bytes_invariants(self):
+        """V1-A-R4-M1: direct execute rejects int/str key coercion collisions, non-string keys, tuple nesting/depth, and invalid/mismatched raw_request_bytes before admission without touching healthy worker."""
+        import v1_worker_bridge as bridge
+
+        baseline_pipes = _list_open_pipe_inodes()
+        mgr = bridge.WorkerManager(response_deadline_s=2.0, worker_reap_timeout_s=0.6)
+        try:
+            # Warm healthy worker first
+            warm = mgr.execute("/api/v1/solve", {"request_id": 1})
+            self.assertEqual(warm.status_code, 200)
+            healthy_pid = warm.payload["worker_pid"]
+            self.assertEqual(len(mgr.spawned_pids), 1)
+
+            # 1. Key-coercion duplicate collision: {1: 'a', '1': 'b'} -> 400 pre-admission
+            res_collision = mgr.execute("/api/v1/solve", {"request_id": 2, "x": {1: "a", "1": "b"}})
+            self.assertEqual(res_collision.status_code, 400)
+            self.assertIn(res_collision.payload["error"]["code"], ("INVALID_JSON", "DUPLICATE_KEY"))
+            self.assertEqual(res_collision.payload["request_id"], 2)
+
+            # 2. Non-string key even without collision: {1: 'a'} -> 400 INVALID_JSON pre-admission
+            res_non_str_key = mgr.execute("/api/v1/solve", {"request_id": 3, "x": {1: "a"}})
+            self.assertEqual(res_non_str_key.status_code, 400)
+            self.assertEqual(res_non_str_key.payload["error"]["code"], "INVALID_JSON")
+
+            # 3. Tuple container & deep tuple nesting (>64) -> 400 INVALID_JSON pre-admission
+            res_tuple = mgr.execute("/api/v1/solve", {"request_id": 4, "x": (1, 2, 3)})
+            self.assertEqual(res_tuple.status_code, 400)
+            self.assertEqual(res_tuple.payload["error"]["code"], "INVALID_JSON")
+
+            deep_tuple: Any = 0
+            for _ in range(70):
+                deep_tuple = (deep_tuple,)
+            res_deep_tuple = mgr.execute("/api/v1/solve", {"request_id": 5, "x": deep_tuple})
+            self.assertEqual(res_deep_tuple.status_code, 400)
+            self.assertEqual(res_deep_tuple.payload["error"]["code"], "INVALID_JSON")
+
+            # 4. Direct raw_request_bytes bypass attempts: duplicate keys, invalid JSON, depth 65, and payload mismatch -> 400
+            for req_id, payload, raw_b, exp_status, exp_code in (
+                (6, {"request_id": 6, "a": 1}, b'{"request_id":6,"a":1,"a":2}', 400, "DUPLICATE_KEY"),
+                (7, {"request_id": 7, "a": 1}, b'{"request_id":7,"a":NaN}', 400, "INVALID_JSON"),
+                (8, {"request_id": 8, "a": 1}, b'{"request_id":8,"a":' + b"[" * 63 + b"0" + b"]" * 63 + b"}", 400, "INVALID_JSON"),
+                (9, {"request_id": 9, "a": 1}, b'{"request_id":9,"a":2}', 400, "INVALID_JSON"),
+                (10, {"request_id": 10, "pad": "x" * 16300}, b'{"request_id":10,"pad":"' + b"x" * 16300 + b'"}', 413, "PAYLOAD_TOO_LARGE"),
+            ):
+                res_raw = mgr.execute("/api/v1/solve", payload, raw_request_bytes=raw_b)
+                self.assertEqual(res_raw.status_code, exp_status, f"Failed for req_id={req_id}")
+                self.assertEqual(res_raw.payload["error"]["code"], exp_code, f"Failed code for req_id={req_id}")
+
+            # 5. Boundary payload size where request_bytes + max metadata > 16384 -> 413 PAYLOAD_TOO_LARGE pre-admission
+            boundary_pad = "z" * (bridge.MAX_IPC_REQUEST_BYTES - 150)
+            res_bound = mgr.execute("/api/v1/solve", {"request_id": 11, "pad": boundary_pad})
+            self.assertEqual(res_bound.status_code, 413)
+            self.assertEqual(res_bound.payload["error"]["code"], "PAYLOAD_TOO_LARGE")
+
+            # Healthy worker MUST still have the exact same PID, zero respawns, zero teardowns
+            after = mgr.execute("/api/v1/solve", {"request_id": 12})
+            self.assertEqual(after.status_code, 200)
+            self.assertEqual(after.payload["worker_pid"], healthy_pid)
+            self.assertEqual(len(mgr.spawned_pids), 1)
+        finally:
+            mgr.shutdown()
+
+        self.assertTrue(_is_pid_reaped(healthy_pid))
+        self.assertEqual(_list_open_pipe_inodes(), baseline_pipes)
+
+    def test_r5_exact_json_representation_equality_and_pre_admission_isolation(self):
+        """V1-A R5: strict type-identical JSON representation equality rejects bool/int/float/signed-zero/order mismatches before worker admission without spawning cold workers or harming warmed workers."""
+        import v1_worker_bridge as bridge
+
+        baseline_pipes = _list_open_pipe_inodes()
+
+        rejected_cases: list[tuple[str, dict[str, Any], bytes, int, str]] = [
+            # Boolean vs integer in both directions
+            ("true_vs_1", {"request_id": 1, "flag": True}, b'{"request_id":1,"flag":1}', 400, "INVALID_JSON"),
+            ("1_vs_true", {"request_id": 2, "flag": 1}, b'{"request_id":2,"flag":true}', 400, "INVALID_JSON"),
+            ("false_vs_0", {"request_id": 3, "flag": False}, b'{"request_id":3,"flag":0}', 400, "INVALID_JSON"),
+            ("0_vs_false", {"request_id": 4, "flag": 0}, b'{"request_id":4,"flag":false}', 400, "INVALID_JSON"),
+            # Integer vs float in both directions
+            ("1_vs_1.0", {"request_id": 5, "v": 1}, b'{"request_id":5,"v":1.0}', 400, "INVALID_JSON"),
+            ("1.0_vs_1", {"request_id": 6, "v": 1.0}, b'{"request_id":6,"v":1}', 400, "INVALID_JSON"),
+            # Boolean vs float in both directions
+            ("true_vs_1.0", {"request_id": 7, "v": True}, b'{"request_id":7,"v":1.0}', 400, "INVALID_JSON"),
+            ("1.0_vs_true", {"request_id": 8, "v": 1.0}, b'{"request_id":8,"v":true}', 400, "INVALID_JSON"),
+            ("false_vs_0.0", {"request_id": 9, "v": False}, b'{"request_id":9,"v":0.0}', 400, "INVALID_JSON"),
+            ("0.0_vs_false", {"request_id": 10, "v": 0.0}, b'{"request_id":10,"v":false}', 400, "INVALID_JSON"),
+            # Boolean vs numeric request_id (including False vs 0 where extract_safe_request_id returns None for both)
+            ("reqid_true_vs_1", {"request_id": True}, b'{"request_id":1}', 400, "INVALID_JSON"),
+            ("reqid_1_vs_true", {"request_id": 1}, b'{"request_id":true}', 400, "INVALID_JSON"),
+            ("reqid_false_vs_0", {"request_id": False}, b'{"request_id":0}', 400, "INVALID_JSON"),
+            ("reqid_0_vs_false", {"request_id": 0}, b'{"request_id":false}', 400, "INVALID_JSON"),
+            # Nested dict/list type mismatches & list ordering mismatch
+            (
+                "nested_mismatch",
+                {"request_id": 11, "nested": {"items": [1, {"ok": False}]}},
+                b'{"request_id":11,"nested":{"items":[true,{"ok":0}]}}',
+                400,
+                "INVALID_JSON",
+            ),
+            ("list_order_mismatch", {"request_id": 12, "arr": [1, 2]}, b'{"request_id":12,"arr":[2,1]}', 400, "INVALID_JSON"),
+            ("dict_key_mismatch", {"request_id": 13, "a": 1}, b'{"request_id":13,"b":1}', 400, "INVALID_JSON"),
+            # Signed zero (+0.0 vs -0.0) in both directions under strict signed-zero representation contract
+            ("pos_zero_vs_neg_zero", {"request_id": 14, "z": 0.0}, b'{"request_id":14,"z":-0.0}', 400, "INVALID_JSON"),
+            ("neg_zero_vs_pos_zero", {"request_id": 15, "z": -0.0}, b'{"request_id":15,"z":0.0}', 400, "INVALID_JSON"),
+            # Duplicate keys, non-finite literals, excessive depth (>64), non-JSON types, oversized payload
+            ("dup_key", {"request_id": 16, "a": 1}, b'{"request_id":16,"a":1,"a":2}', 400, "DUPLICATE_KEY"),
+            ("non_finite", {"request_id": 17, "a": 1}, b'{"request_id":17,"a":Infinity}', 400, "INVALID_JSON"),
+            (
+                "excessive_depth",
+                {"request_id": 18, "a": 1},
+                b'{"request_id":18,"a":' + b"[" * 63 + b"0" + b"]" * 63 + b"}",
+                400,
+                "INVALID_JSON",
+            ),
+            (
+                "oversized",
+                {"request_id": 19, "pad": "x" * 16300},
+                b'{"request_id":19,"pad":"' + b"x" * 16300 + b'"}',
+                413,
+                "PAYLOAD_TOO_LARGE",
+            ),
+        ]
+
+        # 1. Cold manager: zero workers ever spawned for any rejected request (including tuple/non-str key direct calls)
+        cold_mgr = bridge.WorkerManager(response_deadline_s=2.0, worker_reap_timeout_s=0.6)
+        try:
+            for label, payload, raw_b, exp_status, exp_code in rejected_cases:
+                res = cold_mgr.execute("/api/v1/solve", payload, raw_request_bytes=raw_b)
+                self.assertEqual(res.status_code, exp_status, f"Cold status mismatch for {label}")
+                self.assertEqual(res.payload["error"]["code"], exp_code, f"Cold code mismatch for {label}")
+            for label, payload in (
+                ("tuple_val", {"request_id": 20, "x": (1, 2)}),
+                ("non_str_key", {"request_id": 21, "x": {1: "a"}}),
+                ("nan_float", {"request_id": 22, "x": float("nan")}),
+            ):
+                res = cold_mgr.execute("/api/v1/solve", payload)
+                self.assertEqual(res.status_code, 400, f"Cold direct status mismatch for {label}")
+                self.assertEqual(res.payload["error"]["code"], "INVALID_JSON", f"Cold direct code mismatch for {label}")
+            self.assertEqual(cold_mgr.spawned_pids, [])
+            self.assertIsNone(cold_mgr._active_worker)
+            self.assertEqual(cold_mgr._ipc_token_counter, 0)
+        finally:
+            cold_mgr.shutdown()
+
+        # 2. Warmed manager with IPC-logging worker: rejected requests never reach IPC and never disrupt healthy PID
+        with tempfile.TemporaryDirectory() as tmpdir:
+            ipc_log_path = Path(tmpdir) / "ipc_requests.jsonl"
+            spying_worker_cmd = self._make_fault_worker_script(
+                "import argparse, json, os, struct\n"
+                "def read_exact(fd, n):\n"
+                "  b = bytearray()\n"
+                "  while len(b) < n:\n"
+                "    c = os.read(fd, n - len(b))\n"
+                "    if not c: raise EOFError()\n"
+                "    b.extend(c)\n"
+                "  return bytes(b)\n"
+                "p = argparse.ArgumentParser()\n"
+                "p.add_argument('--req-fd', type=int); p.add_argument('--resp-fd', type=int)\n"
+                "a, _ = p.parse_known_args()\n"
+                "ready = json.dumps({'type':'READY','pid':os.getpid(),'req_ino':os.fstat(a.req_fd).st_ino,'resp_ino':os.fstat(a.resp_fd).st_ino}).encode()\n"
+                "os.write(a.resp_fd, struct.pack('>I', len(ready)) + ready)\n"
+                f"log_path = {str(ipc_log_path)!r}\n"
+                "while True:\n"
+                "  try: hdr = read_exact(a.req_fd, 4)\n"
+                "  except EOFError: break\n"
+                "  n = struct.unpack('>I', hdr)[0]\n"
+                "  raw = read_exact(a.req_fd, n)\n"
+                "  with open(log_path, 'ab') as fp:\n"
+                "    fp.write(raw + b'\\n')\n"
+                "  msg = json.loads(raw.decode('utf-8'))\n"
+                "  req = msg.get('request', {})\n"
+                "  rid = req.get('request_id')\n"
+                "  if type(rid) is not int or rid < 1: rid = None\n"
+                "  out = json.dumps({'ipc_token': msg['ipc_token'], 'worker_pid': os.getpid(), 'request_id': rid}).encode()\n"
+                "  os.write(a.resp_fd, struct.pack('>I', len(out)) + out)\n"
+            )
+            warm_mgr = bridge.WorkerManager(
+                response_deadline_s=2.0,
+                worker_reap_timeout_s=0.6,
+                custom_worker_cmd=spying_worker_cmd,
+            )
+            try:
+                warm = warm_mgr.execute("/api/v1/solve", {"request_id": 100})
+                self.assertEqual(warm.status_code, 200)
+                healthy_pid = warm.payload["worker_pid"]
+                self.assertEqual(warm_mgr.spawned_pids, [healthy_pid])
+
+                # Run all rejected cases against warmed worker
+                for label, payload, raw_b, exp_status, exp_code in rejected_cases:
+                    res = warm_mgr.execute("/api/v1/solve", payload, raw_request_bytes=raw_b)
+                    self.assertEqual(res.status_code, exp_status, f"Warm status mismatch for {label}")
+                    self.assertEqual(res.payload["error"]["code"], exp_code, f"Warm code mismatch for {label}")
+
+                # Equivalent JSON with different key order, whitespace, and same-sign float zeros MUST succeed
+                accepted_cases: list[tuple[str, dict[str, Any], bytes]] = [
+                    (
+                        "key_order",
+                        {"request_id": 101, "a": 1, "b": [True, 1.0, None]},
+                        b'{"b":[true,1.0,null],"a":1,"request_id":101}',
+                    ),
+                    (
+                        "whitespace",
+                        {"request_id": 102, "a": [1, False, 2.5]},
+                        b' { "request_id" : 102 , "a" : [ 1 , false , 2.5 ] } ',
+                    ),
+                    (
+                        "same_sign_zeros",
+                        {"request_id": 103, "pos": 0.0, "neg": -0.0},
+                        b'{"request_id":103,"pos":0.00,"neg":-0.00}',
+                    ),
+                ]
+                for label, payload, raw_b in accepted_cases:
+                    res_ok = warm_mgr.execute("/api/v1/solve", payload, raw_request_bytes=raw_b)
+                    self.assertEqual(res_ok.status_code, 200, f"Accepted case failed for {label}: {res_ok.payload}")
+                    self.assertEqual(res_ok.payload["worker_pid"], healthy_pid)
+
+                # Verify healthy worker was never terminated or respawned
+                self.assertFalse(_is_pid_reaped(healthy_pid))
+                self.assertEqual(warm_mgr.spawned_pids, [healthy_pid])
+                self.assertIsNotNone(warm_mgr._active_worker)
+                self.assertEqual(warm_mgr._active_worker.pid, healthy_pid)
+                self.assertEqual(warm_mgr._ipc_token_counter, 4)
+
+                # Verify only the 4 valid requests ever reached worker IPC
+                logged_lines = ipc_log_path.read_text(encoding="utf-8").splitlines()
+                self.assertEqual(len(logged_lines), 4)
+                logged_req_ids = [json.loads(line)["request"]["request_id"] for line in logged_lines]
+                self.assertEqual(logged_req_ids, [100, 101, 102, 103])
+            finally:
+                warm_mgr.shutdown()
+
+            self.assertTrue(_is_pid_reaped(healthy_pid))
 
         self.assertEqual(_list_open_pipe_inodes(), baseline_pipes)
 
