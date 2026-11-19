@@ -851,7 +851,13 @@ class WorkerManager:
         supervisor: _ProcKillReapSupervisor | None = None,
     ) -> _WorkerHandle:
         """Retain process and authoritative supervisor ownership in `_quarantined_handles` and poison manager."""
-        sup = supervisor or self._get_or_create_supervisor(proc)
+        sup: _ProcKillReapSupervisor | None = supervisor
+        if sup is None:
+            try:
+                sup = self._get_or_create_supervisor(proc)
+            except BaseException:  # noqa: BLE001
+                sup = None
+        target_handle: _WorkerHandle
         with self._admission_lock:
             self._worker_poisoned = True
             self._poison_reason = reason
@@ -861,33 +867,38 @@ class WorkerManager:
                     existing = h
                     break
             if existing is not None:
-                if existing.supervisor is None:
+                if existing.supervisor is None and sup is not None:
                     existing.supervisor = sup
                 if req_w is not None and existing.req_w is None:
                     existing.req_w = req_w
                 if resp_r is not None and existing.resp_r is None:
                     existing.resp_r = resp_r
-                sup.register_close_callback(existing.close_fds)
                 self._state_cond.notify_all()
-                return existing
-
-            qh = _WorkerHandle(
-                proc=proc,
-                req_w=req_w if req_w is not None else -1,
-                resp_r=resp_r if resp_r is not None else -1,
-                expected_req_ino=0,
-                expected_resp_ino=0,
-                parent_closed_unused_ends=True,
-                supervisor=sup,
-            )
-            if req_w is None:
-                qh.req_w = None
-            if resp_r is None:
-                qh.resp_r = None
-            sup.register_close_callback(qh.close_fds)
-            self._quarantined_handles.append(qh)
-            self._state_cond.notify_all()
-            return qh
+                target_handle = existing
+            else:
+                qh = _WorkerHandle(
+                    proc=proc,
+                    req_w=req_w if req_w is not None else -1,
+                    resp_r=resp_r if resp_r is not None else -1,
+                    expected_req_ino=0,
+                    expected_resp_ino=0,
+                    parent_closed_unused_ends=True,
+                    supervisor=sup,
+                )
+                if req_w is None:
+                    qh.req_w = None
+                if resp_r is None:
+                    qh.resp_r = None
+                self._quarantined_handles.append(qh)
+                self._state_cond.notify_all()
+                target_handle = qh
+        if sup is not None:
+            try:
+                sup.register_close_callback(target_handle.close_fds)
+            except BaseException:  # noqa: BLE001
+                # Durable quarantine ownership is already committed; teardown/drain closes FDs on verified drain.
+                pass
+        return target_handle
 
     def _terminal_error_result(
         self,
@@ -923,14 +934,16 @@ class WorkerManager:
         slot: _LaunchSlot,
     ) -> subprocess.Popen[bytes]:
         def register_pid(proc: subprocess.Popen[bytes]) -> None:
-            sup = self._get_or_create_supervisor(proc)
-            sup.register_close_callback(slot.close_parent_fds)
+            # Persist child PID ownership on slot & manager BEFORE fallible supervisor/callback setup.
             with slot.lock:
                 slot.proc = proc
-                slot.supervisor = sup
             with self._admission_lock:
                 if proc.pid not in self.spawned_pids:
                     self.spawned_pids.append(proc.pid)
+            sup = self._get_or_create_supervisor(proc)
+            with slot.lock:
+                slot.supervisor = sup
+            sup.register_close_callback(slot.close_parent_fds)
 
         if self._launch_fn is None:
             proc = subprocess.Popen(
@@ -1114,14 +1127,48 @@ class WorkerManager:
 
         early_kill_failed = False
         if early_proc is not None:
-            if early_sup is None:
-                early_sup = self._get_or_create_supervisor(early_proc)
-                with slot.lock:
-                    slot.supervisor = early_sup
-            early_sup.register_close_callback(slot.close_parent_fds)
-            if do_early_kill:
-                started_ok = early_sup.ensure_kill_started(request_retry_if_failed=True)
-                if not started_ok:
+            kill_attempt_completed = False
+            try:
+                if early_sup is None:
+                    early_sup = self._get_or_create_supervisor(early_proc)
+                    with slot.lock:
+                        slot.supervisor = early_sup
+                try:
+                    early_sup.register_close_callback(slot.close_parent_fds)
+                except BaseException:  # noqa: BLE001
+                    # Parent FD cleanup still derives from durable `slot.close_parent_fds` during abort/quarantine.
+                    pass
+                if do_early_kill:
+                    started_ok = early_sup.ensure_kill_started(request_retry_if_failed=True)
+                    if not started_ok:
+                        self._quarantine_orphan_proc(
+                            early_proc,
+                            None,
+                            None,
+                            reason,
+                            supervisor=early_sup,
+                        )
+                    with slot.lock:
+                        slot.kill_start_failed = not started_ok
+                        slot.kill_attempt_finished = True
+                        slot.done_cond.notify_all()
+                    kill_attempt_completed = True
+                    early_kill_failed = not started_ok
+                else:
+                    with slot.lock:
+                        while slot.kill_attempt_started and not slot.kill_attempt_finished:
+                            rem = eff_deadline - time.monotonic()
+                            if rem <= 0.0:
+                                break
+                            slot.done_cond.wait(timeout=rem)
+                        early_kill_failed = slot.kill_start_failed or not slot.kill_attempt_finished
+                    kill_attempt_completed = True
+            finally:
+                if do_early_kill and not kill_attempt_completed:
+                    with slot.lock:
+                        slot.kill_start_failed = True
+                        slot.kill_attempt_finished = True
+                        slot.done_cond.notify_all()
                     self._quarantine_orphan_proc(
                         early_proc,
                         None,
@@ -1129,19 +1176,7 @@ class WorkerManager:
                         reason,
                         supervisor=early_sup,
                     )
-                with slot.lock:
-                    slot.kill_start_failed = not started_ok
-                    slot.kill_attempt_finished = True
-                    slot.done_cond.notify_all()
-                early_kill_failed = not started_ok
-            else:
-                with slot.lock:
-                    while slot.kill_attempt_started and not slot.kill_attempt_finished:
-                        rem = eff_deadline - time.monotonic()
-                        if rem <= 0.0:
-                            break
-                        slot.done_cond.wait(timeout=rem)
-                    early_kill_failed = slot.kill_start_failed or not slot.kill_attempt_finished
+                    early_kill_failed = True
 
         if wait_for_runner and th is not None and th.is_alive():
             join_wait = max(0.0, eff_deadline - time.monotonic())
@@ -1173,10 +1208,6 @@ class WorkerManager:
                     sup_pending = sup_still
                 else:
                     slot.cleanup_started = True
-                    p0, p1 = slot.parent_fds
-                    slot.parent_fds = (None, None)
-                    c0, c1 = slot.child_fds
-                    slot.child_fds = (None, None)
                     claim_close = True
                     proc_pending = proc_still
                     sup_pending = sup_still
@@ -1190,10 +1221,10 @@ class WorkerManager:
             slot.close_parent_fds()
             if proc_pending is not None:
                 if sup_pending is None:
-                    sup_pending = self._get_or_create_supervisor(proc_pending)
-                sup_pending.register_close_callback(slot.close_parent_fds)
-                if not (early_kill_failed and early_proc is proc_pending):
-                    sup_pending.ensure_kill_started(request_retry_if_failed=True)
+                    try:
+                        sup_pending = self._get_or_create_supervisor(proc_pending)
+                    except BaseException:  # noqa: BLE001
+                        sup_pending = None
                 self._quarantine_orphan_proc(
                     proc_pending,
                     None,
@@ -1201,36 +1232,65 @@ class WorkerManager:
                     reason,
                     supervisor=sup_pending,
                 )
+                with slot.lock:
+                    runner_done = slot.runner_returned
+                if runner_done:
+                    with self._admission_lock:
+                        if self._active_launch is slot:
+                            self._active_launch = None
+                        self._state_cond.notify_all()
+                if sup_pending is not None and not (early_kill_failed and early_proc is proc_pending):
+                    sup_pending.ensure_kill_started(request_retry_if_failed=True)
             return False
 
-        _safe_close_fd(c0)
-        _safe_close_fd(c1)
+        slot.close_child_fds()
 
-        if proc_pending is not None:
-            if sup_pending is None:
-                sup_pending = self._get_or_create_supervisor(proc_pending)
-                with slot.lock:
-                    slot.supervisor = sup_pending
-            close_fn = lambda: (_safe_close_fd(p0), _safe_close_fd(p1), slot.close_parent_fds())
-            if early_kill_failed and early_proc is proc_pending:
-                sup_pending.register_close_callback(close_fn)
-                sup_pending._drain_close_callbacks()
-                verified = proc_pending.poll() is not None and proc_pending.returncode is not None
+        verified = False
+        try:
+            if proc_pending is not None:
+                if sup_pending is None:
+                    sup_pending = self._get_or_create_supervisor(proc_pending)
+                    with slot.lock:
+                        slot.supervisor = sup_pending
+                if early_kill_failed and early_proc is proc_pending:
+                    try:
+                        sup_pending.register_close_callback(slot.close_parent_fds)
+                    finally:
+                        sup_pending._drain_close_callbacks()
+                        slot.close_parent_fds()
+                    verified = proc_pending.poll() is not None and proc_pending.returncode is not None
+                else:
+                    verified = sup_pending.wait_reaped_before(
+                        eff_deadline,
+                        close_cb=slot.close_parent_fds,
+                        request_retry_if_failed=True,
+                    )
+                if verified:
+                    slot.close_parent_fds()
+                    with self._admission_lock:
+                        if self._active_worker is None and self._pending_handle is None:
+                            for qh in list(self._quarantined_handles):
+                                if qh.pid == proc_pending.pid:
+                                    qh.reaped = True
+                                    self._quarantined_handles.remove(qh)
+                        self._proc_supervisors.pop(proc_pending.pid, None)
+                else:
+                    slot.close_parent_fds()
+                    self._quarantine_orphan_proc(
+                        proc_pending,
+                        None,
+                        None,
+                        reason,
+                        supervisor=sup_pending,
+                    )
             else:
-                verified = sup_pending.wait_reaped_before(
-                    eff_deadline,
-                    close_cb=close_fn,
-                    request_retry_if_failed=True,
-                )
-            if verified:
-                with self._admission_lock:
-                    if self._active_worker is None and self._pending_handle is None:
-                        for qh in list(self._quarantined_handles):
-                            if qh.pid == proc_pending.pid:
-                                qh.reaped = True
-                                self._quarantined_handles.remove(qh)
-                    self._proc_supervisors.pop(proc_pending.pid, None)
-            else:
+                slot.close_parent_fds()
+                verified = True
+        except BaseException:  # noqa: BLE001
+            # Exceptional abort path (e.g., MemoryError on callback registration): poison & quarantine durably,
+            # bound kill under existing eff_deadline, close parent FDs, and never strand cleanup flags.
+            self._poison(reason)
+            if proc_pending is not None:
                 self._quarantine_orphan_proc(
                     proc_pending,
                     None,
@@ -1238,21 +1298,21 @@ class WorkerManager:
                     reason,
                     supervisor=sup_pending,
                 )
-        else:
-            _safe_close_fd(p0)
-            _safe_close_fd(p1)
-            verified = True
+                if sup_pending is not None and not (early_kill_failed and early_proc is proc_pending):
+                    sup_pending.wait_kill_before(eff_deadline, request_retry_if_failed=True)
+            slot.close_parent_fds()
+            verified = False
+        finally:
+            with slot.lock:
+                slot.cleanup_verified = verified
+                slot.cleanup_done = True
+                slot.cleanup_done_cond.notify_all()
 
-        with slot.lock:
-            slot.cleanup_verified = verified
-            slot.cleanup_done = True
-            slot.cleanup_done_cond.notify_all()
-
-        with self._admission_lock:
-            if self._active_launch is slot and (verified or proc_pending is not None):
-                # Retained in _quarantined_handles if unverified with PID; otherwise verified clean
-                self._active_launch = None
-            self._state_cond.notify_all()
+            with self._admission_lock:
+                if self._active_launch is slot and (verified or proc_pending is not None):
+                    # Retained in _quarantined_handles if unverified with PID; otherwise verified clean
+                    self._active_launch = None
+                self._state_cond.notify_all()
 
         return verified
 
@@ -1479,8 +1539,6 @@ class WorkerManager:
                 )
                 if can_transfer:
                     t_req_w, t_resp_r = slot.parent_fds
-                    slot.parent_fds = (None, None)
-                    slot.state = "TRANSFERRED"
                     # V1-A-R3-M2: closure evidence derived strictly from verified ownership close of original child endpoints
                     parent_closed_unused = (
                         slot.child_fds == (None, None)
@@ -1488,25 +1546,36 @@ class WorkerManager:
                         and slot.child_resp_fd_closed
                     )
                     assert slot.proc is not None and t_req_w is not None and t_resp_r is not None
-                    sup = slot.supervisor
-                    if sup is None:
-                        sup = self._proc_supervisors.get(slot.proc.pid)
-                        if sup is None or sup.proc is not slot.proc:
-                            sup = _ProcKillReapSupervisor(slot.proc, self._kill_fn)
-                            self._proc_supervisors[slot.proc.pid] = sup
-                    handle = _WorkerHandle(
-                        proc=slot.proc,
-                        req_w=t_req_w,
-                        resp_r=t_resp_r,
-                        expected_req_ino=expected_req_ino,
-                        expected_resp_ino=expected_resp_ino,
-                        parent_closed_unused_ends=parent_closed_unused,
-                        supervisor=sup,
-                    )
-                    sup.register_close_callback(handle.close_fds)
-                    if self._active_launch is slot:
-                        self._active_launch = None
-                    self._pending_handle = handle
+                    try:
+                        sup = slot.supervisor
+                        if sup is None:
+                            sup = self._proc_supervisors.get(slot.proc.pid)
+                            if sup is None or sup.proc is not slot.proc:
+                                sup = _ProcKillReapSupervisor(slot.proc, self._kill_fn)
+                                self._proc_supervisors[slot.proc.pid] = sup
+                            slot.supervisor = sup
+                        cand_handle = _WorkerHandle(
+                            proc=slot.proc,
+                            req_w=t_req_w,
+                            resp_r=t_resp_r,
+                            expected_req_ino=expected_req_ino,
+                            expected_resp_ino=expected_resp_ino,
+                            parent_closed_unused_ends=parent_closed_unused,
+                            supervisor=sup,
+                        )
+                        sup.register_close_callback(cand_handle.close_fds)
+                    except BaseException as exc:  # noqa: BLE001
+                        handoff_error = exc
+                        slot.error = exc
+                        slot.state = "ABORTED"
+                        slot.abandoned = True
+                    else:
+                        slot.parent_fds = (None, None)
+                        slot.state = "TRANSFERRED"
+                        handle = cand_handle
+                        if self._active_launch is slot:
+                            self._active_launch = None
+                        self._pending_handle = handle
 
         if handle is None:
             td = self._ensure_cleanup_deadline(cleanup_box)

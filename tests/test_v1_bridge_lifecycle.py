@@ -3548,6 +3548,353 @@ class V1WorkerLifecycleAndR5I1Tests(unittest.TestCase):
             self.assertTrue(_is_pid_reaped(warm_pid_b))
             self.assertEqual(_list_open_pipe_inodes(), baseline_pipes)
 
+    def test_r8_f1_transactional_callback_registration_ownership_and_quarantine(self):
+        """V1-A-R8-F1: one-shot register_close_callback failures at PID registration, slot->pending handoff, abort, and quarantine never lose PIDs/FDs or reopen unverified admission."""
+        import inspect
+        import v1_worker_bridge as bridge
+
+        baseline_pipes = _list_open_pipe_inodes()
+        orig_popen = subprocess.Popen
+        orig_register_cb = bridge._ProcKillReapSupervisor.register_close_callback
+
+        def called_from(fn_name: str) -> bool:
+            # Skip unittest.mock wrapper frames cleanly via short bounded stack walk.
+            return any(fi.function == fn_name for fi in inspect.stack(0)[:8])
+
+        def make_capturing_popen(captured: list[subprocess.Popen[bytes]]):
+            def _capturing_popen(*args, **kwargs):
+                p = orig_popen(*args, **kwargs)
+                captured.append(p)
+                return p
+
+            return _capturing_popen
+
+        # (a) Initial PID registration (register_pid, call #1) with normal child:
+        #     PID is durable BEFORE registration; child is verified reaped, parent FDs closed, structured 503 returned, no duplicate child on recovery.
+        captured_a: list[subprocess.Popen[bytes]] = []
+        fail_reg_a = [True]
+
+        def reg_fail_initial_pid(sup_self, cb):
+            if fail_reg_a[0] and called_from("register_pid"):
+                fail_reg_a[0] = False
+                raise MemoryError("simulated register_close_callback failure at initial PID registration")
+            return orig_register_cb(sup_self, cb)
+
+        with mock.patch("v1_worker_bridge.subprocess.Popen", side_effect=make_capturing_popen(captured_a)), mock.patch.object(
+            bridge._ProcKillReapSupervisor,
+            "register_close_callback",
+            autospec=True,
+            side_effect=reg_fail_initial_pid,
+        ):
+            mgr_a = bridge.WorkerManager(response_deadline_s=2.0, worker_reap_timeout_s=0.5)
+            try:
+                res_a = mgr_a.execute("/api/v1/solve", {"request_id": 1})
+                self.assertFalse(fail_reg_a[0])
+                self.assertEqual(res_a.status_code, 503)
+                self.assertEqual(res_a.payload["error"]["code"], "WORKER_STARTUP_FAILED")
+                self.assertEqual(len(captured_a), 1)
+                self.assertEqual(mgr_a.spawned_pids, [captured_a[0].pid])
+                self.assertTrue(_is_pid_reaped(captured_a[0].pid))
+                self.assertFalse(mgr_a._worker_poisoned)
+                self.assertEqual(mgr_a.quarantined_pids, [])
+                self.assertIsNone(mgr_a._active_launch)
+                self.assertIsNone(mgr_a._pending_handle)
+                self.assertIsNone(mgr_a._active_worker)
+                live_cancel_a = {mgr_a._cancel_r, mgr_a._cancel_w}
+                self.assertEqual(set(_list_open_pipe_inodes().keys()), set(baseline_pipes.keys()) | live_cancel_a)
+
+                # Subsequent cold admission cleanly spawns one new worker without any prior live child
+                res_a2 = mgr_a.execute("/api/v1/solve", {"request_id": 2})
+                self.assertEqual(res_a2.status_code, 200)
+                self.assertEqual(len(captured_a), 2)
+                self.assertEqual(len(mgr_a.spawned_pids), 2)
+            finally:
+                mgr_a.shutdown()
+
+            self.assertTrue(_is_pid_reaped(captured_a[0].pid))
+            self.assertTrue(_is_pid_reaped(captured_a[1].pid))
+            self.assertEqual(_list_open_pipe_inodes(), baseline_pipes)
+
+        # (b) Initial PID registration (register_pid, call #1) with stalled child (blocking kill_fn -> unverified reap):
+        #     Sticky poison + durable quarantine retain PID ownership, return bounded 503 POISONED, block duplicate admission, and reap cleanly once released.
+        captured_b: list[subprocess.Popen[bytes]] = []
+        kill_entered_b = threading.Event()
+        kill_release_b = threading.Event()
+        fail_reg_b = [True]
+
+        def blocking_kill_b(proc):
+            kill_entered_b.set()
+            kill_release_b.wait(timeout=4.0)
+            if proc.poll() is None:
+                proc.kill()
+
+        def reg_fail_initial_pid_b(sup_self, cb):
+            if fail_reg_b[0] and called_from("register_pid"):
+                fail_reg_b[0] = False
+                raise MemoryError("simulated register_close_callback failure b")
+            return orig_register_cb(sup_self, cb)
+
+        with mock.patch("v1_worker_bridge.subprocess.Popen", side_effect=make_capturing_popen(captured_b)), mock.patch.object(
+            bridge._ProcKillReapSupervisor,
+            "register_close_callback",
+            autospec=True,
+            side_effect=reg_fail_initial_pid_b,
+        ):
+            mgr_b = bridge.WorkerManager(
+                response_deadline_s=2.0,
+                worker_reap_timeout_s=0.15,
+                kill_fn=blocking_kill_b,
+            )
+            try:
+                t0_b = time.monotonic()
+                res_b = mgr_b.execute("/api/v1/solve", {"request_id": 10})
+                elapsed_b = time.monotonic() - t0_b
+                self.assertFalse(fail_reg_b[0])
+                self.assertLess(elapsed_b, 0.85)
+                self.assertTrue(kill_entered_b.is_set())
+                self.assertEqual(res_b.status_code, 503)
+                self.assertEqual(res_b.payload["error"]["code"], "WORKER_UNAVAILABLE_POISONED")
+                self.assertEqual(len(captured_b), 1)
+                self.assertIsNone(captured_b[0].poll())
+                self.assertTrue(mgr_b._worker_poisoned)
+                self.assertEqual(mgr_b.quarantined_pids, [captured_b[0].pid])
+                self.assertEqual(mgr_b.spawned_pids, [captured_b[0].pid])
+                self.assertIsNone(mgr_b._active_launch)
+                live_cancel_b = {mgr_b._cancel_r, mgr_b._cancel_w}
+                self.assertEqual(set(_list_open_pipe_inodes().keys()), set(baseline_pipes.keys()) | live_cancel_b)
+
+                # Subsequent admission stays closed and spawns ZERO duplicate workers
+                conc_b = mgr_b.execute("/api/v1/study", {"request_id": 11})
+                self.assertEqual(conc_b.status_code, 503)
+                self.assertEqual(conc_b.payload["error"]["code"], "WORKER_UNAVAILABLE_POISONED")
+                self.assertEqual(len(captured_b), 1)
+                self.assertEqual(mgr_b.spawned_pids, [captured_b[0].pid])
+            finally:
+                kill_release_b.set()
+                t0_shut_b = time.monotonic()
+                mgr_b.shutdown()
+                self.assertLess(time.monotonic() - t0_shut_b, 0.85)
+
+            self.assertEqual(mgr_b.quarantined_pids, [])
+            self.assertTrue(_is_pid_reaped(captured_b[0].pid))
+            self.assertEqual(_list_open_pipe_inodes(), baseline_pipes)
+
+        # (c1) Slot->pending handoff (second registration, _spawn_and_handshake) with normal child:
+        #      Allow #1 register_pid; inject one MemoryError at handoff handle.close_fds registration.
+        #      Slot keeps parent FDs, aborts/reaps cleanly, returns 503 WORKER_STARTUP_FAILED, 0 leaked FDs/PIDs.
+        captured_c1: list[subprocess.Popen[bytes]] = []
+        reg_count_c1 = [0]
+
+        def reg_fail_handoff_c1(sup_self, cb):
+            reg_count_c1[0] += 1
+            if reg_count_c1[0] == 2:
+                raise MemoryError("simulated register_close_callback failure at slot->pending handoff")
+            return orig_register_cb(sup_self, cb)
+
+        with mock.patch("v1_worker_bridge.subprocess.Popen", side_effect=make_capturing_popen(captured_c1)), mock.patch.object(
+            bridge._ProcKillReapSupervisor,
+            "register_close_callback",
+            autospec=True,
+            side_effect=reg_fail_handoff_c1,
+        ):
+            mgr_c1 = bridge.WorkerManager(response_deadline_s=2.0, worker_reap_timeout_s=0.5)
+            try:
+                res_c1 = mgr_c1.execute("/api/v1/solve", {"request_id": 20})
+                self.assertEqual(res_c1.status_code, 503)
+                self.assertEqual(res_c1.payload["error"]["code"], "WORKER_STARTUP_FAILED")
+                self.assertGreaterEqual(reg_count_c1[0], 2)
+                self.assertEqual(len(captured_c1), 1)
+                self.assertTrue(_is_pid_reaped(captured_c1[0].pid))
+                self.assertIsNone(mgr_c1._pending_handle)
+                self.assertIsNone(mgr_c1._active_launch)
+                self.assertIsNone(mgr_c1._active_worker)
+                self.assertFalse(mgr_c1._worker_poisoned)
+                live_cancel_c1 = {mgr_c1._cancel_r, mgr_c1._cancel_w}
+                self.assertEqual(set(_list_open_pipe_inodes().keys()), set(baseline_pipes.keys()) | live_cancel_c1)
+
+                res_c1_next = mgr_c1.execute("/api/v1/solve", {"request_id": 21})
+                self.assertEqual(res_c1_next.status_code, 200)
+                self.assertEqual(len(captured_c1), 2)
+            finally:
+                mgr_c1.shutdown()
+
+            self.assertTrue(_is_pid_reaped(captured_c1[0].pid))
+            self.assertTrue(_is_pid_reaped(captured_c1[1].pid))
+            self.assertEqual(_list_open_pipe_inodes(), baseline_pipes)
+
+        # (c2) Slot->pending handoff (second registration) with stalled child (blocking kill_fn -> unverified reap):
+        #      Poisons + quarantines child, closes parent FDs cleanly, blocks subsequent admission, and reaps on release.
+        captured_c2: list[subprocess.Popen[bytes]] = []
+        reg_count_c2 = [0]
+        kill_entered_c2 = threading.Event()
+        kill_release_c2 = threading.Event()
+
+        def blocking_kill_c2(proc):
+            kill_entered_c2.set()
+            kill_release_c2.wait(timeout=4.0)
+            if proc.poll() is None:
+                proc.kill()
+
+        def reg_fail_handoff_c2(sup_self, cb):
+            reg_count_c2[0] += 1
+            if reg_count_c2[0] == 2:
+                raise MemoryError("simulated register_close_callback failure at stalled handoff")
+            return orig_register_cb(sup_self, cb)
+
+        with mock.patch("v1_worker_bridge.subprocess.Popen", side_effect=make_capturing_popen(captured_c2)), mock.patch.object(
+            bridge._ProcKillReapSupervisor,
+            "register_close_callback",
+            autospec=True,
+            side_effect=reg_fail_handoff_c2,
+        ):
+            mgr_c2 = bridge.WorkerManager(
+                response_deadline_s=2.0,
+                worker_reap_timeout_s=0.15,
+                kill_fn=blocking_kill_c2,
+            )
+            try:
+                t0_c2 = time.monotonic()
+                res_c2 = mgr_c2.execute("/api/v1/solve", {"request_id": 22})
+                self.assertLess(time.monotonic() - t0_c2, 0.85)
+                self.assertTrue(kill_entered_c2.is_set())
+                self.assertEqual(res_c2.status_code, 503)
+                self.assertEqual(res_c2.payload["error"]["code"], "WORKER_UNAVAILABLE_POISONED")
+                self.assertEqual(len(captured_c2), 1)
+                self.assertTrue(mgr_c2._worker_poisoned)
+                self.assertEqual(mgr_c2.quarantined_pids, [captured_c2[0].pid])
+                self.assertIsNone(mgr_c2._pending_handle)
+                self.assertIsNone(mgr_c2._active_launch)
+                live_cancel_c2 = {mgr_c2._cancel_r, mgr_c2._cancel_w}
+                self.assertEqual(set(_list_open_pipe_inodes().keys()), set(baseline_pipes.keys()) | live_cancel_c2)
+
+                conc_c2 = mgr_c2.execute("/api/v1/study", {"request_id": 23})
+                self.assertEqual(conc_c2.status_code, 503)
+                self.assertEqual(conc_c2.payload["error"]["code"], "WORKER_UNAVAILABLE_POISONED")
+                self.assertEqual(len(captured_c2), 1)
+            finally:
+                kill_release_c2.set()
+                mgr_c2.shutdown()
+
+            self.assertEqual(mgr_c2.quarantined_pids, [])
+            self.assertTrue(_is_pid_reaped(captured_c2[0].pid))
+            self.assertEqual(_list_open_pipe_inodes(), baseline_pipes)
+
+        # (d1) Abort path registration failure (wait_reaped_before inside _abort_launch_slot):
+        #      Does not strand slot.cleanup_started, poisons/quarantines durably, closes parent FDs, and reaps cleanly on shutdown.
+        captured_d1: list[subprocess.Popen[bytes]] = []
+        aborted_slot_d1: list[Any] = []
+        arm_abort_d1 = [False]
+        fail_reg_abort_d1 = [True]
+
+        def abort_at_handoff_d1(slot):
+            aborted_slot_d1.append(slot)
+            arm_abort_d1[0] = True
+            with slot.lock:
+                slot.abandoned = True
+                slot.state = "ABORTED"
+
+        def reg_fail_abort_d1(sup_self, cb):
+            if arm_abort_d1[0] and fail_reg_abort_d1[0] and called_from("wait_reaped_before"):
+                fail_reg_abort_d1[0] = False
+                raise MemoryError("simulated register_close_callback failure during wait_reaped_before abort")
+            return orig_register_cb(sup_self, cb)
+
+        with mock.patch("v1_worker_bridge.subprocess.Popen", side_effect=make_capturing_popen(captured_d1)), mock.patch.object(
+            bridge._ProcKillReapSupervisor,
+            "register_close_callback",
+            autospec=True,
+            side_effect=reg_fail_abort_d1,
+        ):
+            mgr_d1 = bridge.WorkerManager(
+                response_deadline_s=2.0,
+                worker_reap_timeout_s=0.35,
+                on_before_slot_to_pending_handoff=abort_at_handoff_d1,
+            )
+            try:
+                t0_d1 = time.monotonic()
+                res_d1 = mgr_d1.execute("/api/v1/solve", {"request_id": 30})
+                self.assertLess(time.monotonic() - t0_d1, 0.90)
+                self.assertFalse(fail_reg_abort_d1[0])
+                self.assertEqual(res_d1.status_code, 503)
+                self.assertEqual(res_d1.payload["error"]["code"], "WORKER_UNAVAILABLE_POISONED")
+                self.assertEqual(len(captured_d1), 1)
+                self.assertTrue(aborted_slot_d1[0].cleanup_done)
+                self.assertIsNone(mgr_d1._active_launch)
+                self.assertTrue(mgr_d1._worker_poisoned)
+                self.assertEqual(mgr_d1.quarantined_pids, [captured_d1[0].pid])
+                live_cancel_d1 = {mgr_d1._cancel_r, mgr_d1._cancel_w}
+                self.assertEqual(set(_list_open_pipe_inodes().keys()), set(baseline_pipes.keys()) | live_cancel_d1)
+
+                conc_d1 = mgr_d1.execute("/api/v1/study", {"request_id": 31})
+                self.assertEqual(conc_d1.status_code, 503)
+                self.assertEqual(conc_d1.payload["error"]["code"], "WORKER_UNAVAILABLE_POISONED")
+                self.assertEqual(len(captured_d1), 1)
+            finally:
+                mgr_d1.shutdown()
+
+            self.assertEqual(mgr_d1.quarantined_pids, [])
+            self.assertTrue(_is_pid_reaped(captured_d1[0].pid))
+            self.assertEqual(_list_open_pipe_inodes(), baseline_pipes)
+
+        # (d2) Quarantine registration failure (_quarantine_orphan_proc with stalled child):
+        #      Handle is appended to _quarantined_handles BEFORE registration, so MemoryError cannot orphan PID or drop poison.
+        captured_d2: list[subprocess.Popen[bytes]] = []
+        kill_release_d2 = threading.Event()
+        fail_reg_quarantine_d2 = [True]
+
+        def blocking_kill_d2(proc):
+            kill_release_d2.wait(timeout=4.0)
+            if proc.poll() is None:
+                proc.kill()
+
+        def abort_at_handoff_d2(slot):
+            with slot.lock:
+                slot.abandoned = True
+                slot.state = "ABORTED"
+
+        def reg_fail_quarantine_d2(sup_self, cb):
+            if fail_reg_quarantine_d2[0] and called_from("_quarantine_orphan_proc"):
+                fail_reg_quarantine_d2[0] = False
+                raise MemoryError("simulated register_close_callback failure inside _quarantine_orphan_proc")
+            return orig_register_cb(sup_self, cb)
+
+        with mock.patch("v1_worker_bridge.subprocess.Popen", side_effect=make_capturing_popen(captured_d2)), mock.patch.object(
+            bridge._ProcKillReapSupervisor,
+            "register_close_callback",
+            autospec=True,
+            side_effect=reg_fail_quarantine_d2,
+        ):
+            mgr_d2 = bridge.WorkerManager(
+                response_deadline_s=2.0,
+                worker_reap_timeout_s=0.15,
+                kill_fn=blocking_kill_d2,
+                on_before_slot_to_pending_handoff=abort_at_handoff_d2,
+            )
+            try:
+                t0_d2 = time.monotonic()
+                res_d2 = mgr_d2.execute("/api/v1/solve", {"request_id": 40})
+                self.assertLess(time.monotonic() - t0_d2, 0.85)
+                self.assertFalse(fail_reg_quarantine_d2[0])
+                self.assertEqual(res_d2.status_code, 503)
+                self.assertEqual(res_d2.payload["error"]["code"], "WORKER_UNAVAILABLE_POISONED")
+                self.assertEqual(len(captured_d2), 1)
+                self.assertTrue(mgr_d2._worker_poisoned)
+                self.assertEqual(mgr_d2.quarantined_pids, [captured_d2[0].pid])
+                live_cancel_d2 = {mgr_d2._cancel_r, mgr_d2._cancel_w}
+                self.assertEqual(set(_list_open_pipe_inodes().keys()), set(baseline_pipes.keys()) | live_cancel_d2)
+
+                conc_d2 = mgr_d2.execute("/api/v1/study", {"request_id": 41})
+                self.assertEqual(conc_d2.status_code, 503)
+                self.assertEqual(conc_d2.payload["error"]["code"], "WORKER_UNAVAILABLE_POISONED")
+                self.assertEqual(len(captured_d2), 1)
+            finally:
+                kill_release_d2.set()
+                mgr_d2.shutdown()
+
+            self.assertEqual(mgr_d2.quarantined_pids, [])
+            self.assertTrue(_is_pid_reaped(captured_d2[0].pid))
+            self.assertEqual(_list_open_pipe_inodes(), baseline_pipes)
+
 
 if __name__ == "__main__":
     unittest.main()
