@@ -1163,6 +1163,44 @@ class WorkerManager:
                             slot.done_cond.wait(timeout=rem)
                         early_kill_failed = slot.kill_start_failed or not slot.kill_attempt_finished
                     kill_attempt_completed = True
+            except BaseException:  # noqa: BLE001
+                # V1-A-R9-F1: Catch early supervisor setup/kill-start failures fail-closed; preserve poison,
+                # quarantine & authoritative supervisor ownership, start bounded kill if recovered, and continue
+                # into the durable slot close/cleanup state machine rather than escaping execute()/shutdown().
+                self._poison(reason)
+                qh = self._quarantine_orphan_proc(
+                    early_proc,
+                    None,
+                    None,
+                    reason,
+                    supervisor=early_sup,
+                )
+                if early_sup is None and qh.supervisor is not None:
+                    early_sup = qh.supervisor
+                    with slot.lock:
+                        slot.supervisor = early_sup
+                if do_early_kill:
+                    started_ok = False
+                    if early_sup is not None:
+                        try:
+                            started_ok = early_sup.ensure_kill_started(request_retry_if_failed=True)
+                        except BaseException:  # noqa: BLE001
+                            started_ok = False
+                    with slot.lock:
+                        slot.kill_start_failed = not started_ok
+                        slot.kill_attempt_finished = True
+                        slot.done_cond.notify_all()
+                    kill_attempt_completed = True
+                    early_kill_failed = not started_ok
+                else:
+                    with slot.lock:
+                        while slot.kill_attempt_started and not slot.kill_attempt_finished:
+                            rem = eff_deadline - time.monotonic()
+                            if rem <= 0.0:
+                                break
+                            slot.done_cond.wait(timeout=rem)
+                        early_kill_failed = slot.kill_start_failed or not slot.kill_attempt_finished
+                    kill_attempt_completed = True
             finally:
                 if do_early_kill and not kill_attempt_completed:
                     with slot.lock:

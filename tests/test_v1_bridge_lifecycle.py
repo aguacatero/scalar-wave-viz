@@ -3895,6 +3895,184 @@ class V1WorkerLifecycleAndR5I1Tests(unittest.TestCase):
             self.assertTrue(_is_pid_reaped(captured_d2[0].pid))
             self.assertEqual(_list_open_pipe_inodes(), baseline_pipes)
 
+    def test_r9_f1_early_abort_supervisor_init_failure_during_stalled_launch(self):
+        """V1-A-R9-F1: one-shot _get_or_create_supervisor failure in _abort_launch_slot (with known PID & paused launcher) never escapes execute/shutdown, preserves single supervisor & poison/quarantine, closes parent FDs promptly, and reaps cleanly."""
+        import inspect
+        import v1_worker_bridge as bridge
+
+        baseline_pipes = _list_open_pipe_inodes()
+        orig_popen = subprocess.Popen
+        orig_get_sup = bridge.WorkerManager._get_or_create_supervisor
+
+        def called_from(fn_name: str) -> bool:
+            return any(fi.function == fn_name for fi in inspect.stack(0)[:8])
+
+        def make_capturing_popen(captured: list[subprocess.Popen[bytes]]):
+            def _capturing_popen(*args, **kwargs):
+                p = orig_popen(*args, **kwargs)
+                captured.append(p)
+                return p
+
+            return _capturing_popen
+
+        # (a) Request-side startup timeout while launcher is paused AFTER slot.proc publication
+        #     and BEFORE supervisor creation; inject single MemoryError on _abort_launch_slot's lookup.
+        captured_a: list[subprocess.Popen[bytes]] = []
+        launcher_paused_a = threading.Event()
+        release_launcher_a = threading.Event()
+        pause_armed_a = [True]
+        fail_abort_sup_a = [True]
+
+        def patched_get_sup_a(mgr_self, proc):
+            if called_from("register_pid") and pause_armed_a[0]:
+                pause_armed_a[0] = False
+                launcher_paused_a.set()
+                release_launcher_a.wait(timeout=5.0)
+            elif called_from("_abort_launch_slot") and fail_abort_sup_a[0]:
+                fail_abort_sup_a[0] = False
+                raise MemoryError("simulated supervisor allocation failure in early abort")
+            return orig_get_sup(mgr_self, proc)
+
+        mgr_a: bridge.WorkerManager | None = None
+        try:
+            with mock.patch("v1_worker_bridge.subprocess.Popen", side_effect=make_capturing_popen(captured_a)), mock.patch.object(
+                bridge.WorkerManager,
+                "_get_or_create_supervisor",
+                autospec=True,
+                side_effect=patched_get_sup_a,
+            ):
+                mgr_a = bridge.WorkerManager(response_deadline_s=0.18, worker_reap_timeout_s=0.18)
+                t0_a = time.monotonic()
+                res_a = mgr_a.execute("/api/v1/solve", {"request_id": 1})
+                elapsed_a = time.monotonic() - t0_a
+
+                self.assertTrue(launcher_paused_a.is_set())
+                self.assertFalse(fail_abort_sup_a[0])
+                self.assertLess(elapsed_a, 0.85)
+                self.assertEqual(res_a.status_code, 503)
+                self.assertEqual(res_a.payload["error"]["code"], "WORKER_UNAVAILABLE_POISONED")
+                self.assertTrue(mgr_a._worker_poisoned)
+                self.assertEqual(len(captured_a), 1)
+                self.assertEqual(mgr_a.spawned_pids, [captured_a[0].pid])
+                slot_a = mgr_a._active_launch
+                self.assertIsNotNone(slot_a)
+                assert slot_a is not None
+                self.assertEqual(slot_a.parent_fds, (None, None))
+                self.assertIsNotNone(slot_a.supervisor)
+                self.assertEqual(slot_a.supervisor, mgr_a._proc_supervisors.get(captured_a[0].pid))
+                # Parent ends closed promptly; only cancel pipe (2) + runner-owned child ends (2) remain while paused
+                self.assertEqual(len(_list_open_pipe_inodes()), len(baseline_pipes) + 4)
+
+                # Subsequent admission remains closed and spawns ZERO duplicate children
+                conc_a = mgr_a.execute("/api/v1/study", {"request_id": 2})
+                self.assertEqual(conc_a.status_code, 503)
+                self.assertEqual(conc_a.payload["error"]["code"], "WORKER_UNAVAILABLE_POISONED")
+                self.assertEqual(len(captured_a), 1)
+                self.assertEqual(mgr_a.spawned_pids, [captured_a[0].pid])
+
+                # Release launcher; runner reuses the SAME single authoritative supervisor and shutdown cleans everything
+                release_launcher_a.set()
+                assert slot_a.thread is not None
+                slot_a.thread.join(timeout=2.0)
+                mgr_a.shutdown()
+        finally:
+            release_launcher_a.set()
+            if mgr_a is not None:
+                mgr_a.shutdown()
+
+        self.assertEqual(mgr_a.quarantined_pids, [])
+        self.assertIsNone(mgr_a._active_launch)
+        self.assertTrue(_is_pid_reaped(captured_a[0].pid))
+        self.assertEqual(_list_open_pipe_inodes(), baseline_pipes)
+
+        # (b) Concurrent shutdown variant under the exact same paused-launcher / known-PID / no-supervisor schedule:
+        #     shutdown() MUST NOT escape with MemoryError or short-circuit cancel-pipe/quarantine cleanup.
+        captured_b: list[subprocess.Popen[bytes]] = []
+        launcher_paused_b = threading.Event()
+        release_launcher_b = threading.Event()
+        pause_armed_b = [True]
+        fail_abort_sup_b = [True]
+
+        def patched_get_sup_b(mgr_self, proc):
+            if called_from("register_pid") and pause_armed_b[0]:
+                pause_armed_b[0] = False
+                launcher_paused_b.set()
+                release_launcher_b.wait(timeout=5.0)
+            elif called_from("_abort_launch_slot") and fail_abort_sup_b[0]:
+                fail_abort_sup_b[0] = False
+                raise MemoryError("simulated supervisor allocation failure during shutdown abort")
+            return orig_get_sup(mgr_self, proc)
+
+        mgr_b: bridge.WorkerManager | None = None
+        req_box_b: list[Any] = []
+        th_b: threading.Thread | None = None
+        try:
+            with mock.patch("v1_worker_bridge.subprocess.Popen", side_effect=make_capturing_popen(captured_b)), mock.patch.object(
+                bridge.WorkerManager,
+                "_get_or_create_supervisor",
+                autospec=True,
+                side_effect=patched_get_sup_b,
+            ):
+                mgr_b = bridge.WorkerManager(response_deadline_s=5.0, worker_reap_timeout_s=0.18)
+                th_b = threading.Thread(
+                    target=lambda: req_box_b.append(mgr_b.execute("/api/v1/solve", {"request_id": 10}))
+                )
+                th_b.start()
+                self.assertTrue(launcher_paused_b.wait(timeout=2.0))
+
+                slot_b = mgr_b._active_launch
+                self.assertIsNotNone(slot_b)
+                assert slot_b is not None
+                self.assertIs(slot_b.proc, captured_b[0])
+                self.assertIsNone(slot_b.supervisor)
+                orig_pw_b, orig_pr_b = slot_b.parent_fds
+                self.assertIsNotNone(orig_pw_b)
+                self.assertIsNotNone(orig_pr_b)
+                assert orig_pw_b is not None and orig_pr_b is not None
+
+                # Shutdown while launcher stays paused past worker_reap_timeout_s MUST NOT raise MemoryError
+                t0_shut_b = time.monotonic()
+                mgr_b.shutdown()
+                shut_elapsed_b = time.monotonic() - t0_shut_b
+                self.assertLess(shut_elapsed_b, 0.85)
+                self.assertFalse(fail_abort_sup_b[0])
+
+                th_b.join(timeout=2.0)
+                self.assertFalse(th_b.is_alive())
+                self.assertEqual(len(req_box_b), 1)
+                self.assertEqual(req_box_b[0].status_code, 503)
+                self.assertIn(
+                    req_box_b[0].payload["error"]["code"],
+                    ("WORKER_UNAVAILABLE_POISONED", "SERVER_SHUTTING_DOWN"),
+                )
+                self.assertTrue(mgr_b._worker_poisoned)
+                self.assertTrue(mgr_b._cancel_closed)
+                self.assertEqual(len(captured_b), 1)
+                self.assertEqual(mgr_b.spawned_pids, [captured_b[0].pid])
+                self.assertEqual(slot_b.parent_fds, (None, None))
+                open_pipes_b = _list_open_pipe_inodes()
+                self.assertNotIn(orig_pw_b, open_pipes_b)
+                self.assertNotIn(orig_pr_b, open_pipes_b)
+                # Cancel pipe (2) & parent ends (2) closed; only runner-owned child ends (2) remain until runner unpauses
+                self.assertEqual(len(open_pipes_b), len(baseline_pipes) + 2)
+
+                # Release launcher; final shutdown completes cleanly and restores FD baseline
+                release_launcher_b.set()
+                assert slot_b.thread is not None
+                slot_b.thread.join(timeout=2.0)
+                mgr_b.shutdown()
+        finally:
+            release_launcher_b.set()
+            if th_b is not None:
+                th_b.join(timeout=2.0)
+            if mgr_b is not None:
+                mgr_b.shutdown()
+
+        self.assertEqual(mgr_b.quarantined_pids, [])
+        self.assertIsNone(mgr_b._active_launch)
+        self.assertTrue(_is_pid_reaped(captured_b[0].pid))
+        self.assertEqual(_list_open_pipe_inodes(), baseline_pipes)
+
 
 if __name__ == "__main__":
     unittest.main()
