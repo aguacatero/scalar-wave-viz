@@ -744,6 +744,16 @@ class WorkerManager:
                 self._proc_supervisors[proc.pid] = sup
             return sup
 
+    def _wait_handle_io_drained(self, handle: _WorkerHandle, abs_deadline: float) -> bool:
+        """Wait boundedly up to `abs_deadline` until `handle.active_io == 0`."""
+        with self._admission_lock:
+            while handle.active_io > 0:
+                rem = abs_deadline - time.monotonic()
+                if rem <= 0.0:
+                    break
+                self._state_cond.wait(timeout=rem)
+            return handle.active_io == 0
+
     def _terminate_and_verify_handle(self, handle: _WorkerHandle, *, deadline: float | None = None) -> bool:
         """Single-owner teardown bounded by ONE absolute deadline across lock, I/O drain, kill, and reap."""
         abs_deadline = deadline if deadline is not None else (time.monotonic() + self.worker_reap_timeout_s)
@@ -779,13 +789,7 @@ class WorkerManager:
                 sup.register_close_callback(handle.close_fds)
                 kill_start_failed = not sup.ensure_kill_started(request_retry_if_failed=True)
 
-            with self._admission_lock:
-                while handle.active_io > 0:
-                    rem = abs_deadline - time.monotonic()
-                    if rem <= 0.0:
-                        break
-                    self._state_cond.wait(timeout=rem)
-                io_drained = handle.active_io == 0
+            io_drained = self._wait_handle_io_drained(handle, abs_deadline)
 
             if not io_drained:
                 with self._admission_lock:
@@ -824,13 +828,15 @@ class WorkerManager:
                 self._state_cond.notify_all()
             return reaped
         except BaseException:
-            handle.close_fds()
+            # Preserve durable poison/quarantine ownership first; NEVER close FDs while active_io > 0.
             with self._admission_lock:
                 self._worker_poisoned = True
                 self._poison_reason = "WORKER_TEARDOWN_UNVERIFIED"
                 if not handle.reaped and handle not in self._quarantined_handles:
                     self._quarantined_handles.append(handle)
                 self._state_cond.notify_all()
+            if self._wait_handle_io_drained(handle, abs_deadline):
+                handle.close_fds()
             return False
         finally:
             handle.teardown_exec_lock.release()

@@ -3371,6 +3371,183 @@ class V1WorkerLifecycleAndR5I1Tests(unittest.TestCase):
                 mgr_c2.shutdown()
             self.assertEqual(_list_open_pipe_inodes(), baseline_pipes)
 
+    def test_r7_f1_exceptional_teardown_preserves_active_io_lease(self):
+        """V1-A-R7-F1: exceptional teardown (e.g. callback-registration MemoryError) poisons/quarantines first, preserves active_io lease drain within the same deadline, never closes FDs while active_io > 0, prevents sentinel FD hijack, and reaps cleanly after lease release."""
+        import v1_worker_bridge as bridge
+
+        baseline_pipes = _list_open_pipe_inodes()
+        orig_os_write = os.write
+        orig_register_cb = bridge._ProcKillReapSupervisor.register_close_callback
+
+        # (a) Paused leased writer held past shutdown deadline while register_close_callback fails
+        mgr = bridge.WorkerManager(response_deadline_s=2.0, worker_reap_timeout_s=0.18)
+        warm = mgr.execute("/api/v1/solve", {"request_id": 1})
+        self.assertEqual(warm.status_code, 200)
+        warm_pid = warm.payload["worker_pid"]
+        handle = mgr._active_worker
+        self.assertIsNotNone(handle)
+        assert handle is not None
+        orig_req_w = handle.req_w
+        orig_resp_r = handle.resp_r
+        self.assertIsNotNone(orig_req_w)
+        self.assertIsNotNone(orig_resp_r)
+        assert orig_req_w is not None and orig_resp_r is not None
+
+        writer_in_lease = threading.Event()
+        release_writer = threading.Event()
+        arm_writer_pause = [True]
+        fail_reg_cb = [0]
+
+        def paused_os_write(fd, data):
+            if arm_writer_pause[0] and fd == orig_req_w:
+                arm_writer_pause[0] = False
+                writer_in_lease.set()
+                release_writer.wait(timeout=3.0)
+            return orig_os_write(fd, data)
+
+        def failing_register_cb(sup_self, cb):
+            if fail_reg_cb[0] > 0:
+                fail_reg_cb[0] -= 1
+                raise MemoryError("simulated register_close_callback allocation failure")
+            return orig_register_cb(sup_self, cb)
+
+        req_box: list[Any] = []
+        with mock.patch("v1_worker_bridge.os.write", side_effect=paused_os_write), mock.patch.object(
+            bridge._ProcKillReapSupervisor,
+            "register_close_callback",
+            autospec=True,
+            side_effect=failing_register_cb,
+        ):
+            th_req = threading.Thread(
+                target=lambda: req_box.append(mgr.execute("/api/v1/solve", {"request_id": 2}))
+            )
+            th_req.start()
+            self.assertTrue(writer_in_lease.wait(timeout=2.0))
+            self.assertEqual(handle.active_io, 1)
+
+            fail_reg_cb[0] = 1
+            t0_shut = time.monotonic()
+            mgr.shutdown()
+            shut_elapsed = time.monotonic() - t0_shut
+
+            # Bounded by the single worker_reap_timeout_s deadline (~0.18s), no extra interval allocated
+            self.assertLess(shut_elapsed, 0.70)
+            self.assertTrue(mgr._worker_poisoned)
+            self.assertEqual(mgr.quarantined_pids, [warm_pid])
+            self.assertEqual(len(mgr.spawned_pids), 1)
+            self.assertIsNone(mgr._active_worker)
+
+            # Descriptors MUST NOT be closed while active_io > 0
+            self.assertEqual(handle.active_io, 1)
+            self.assertEqual(handle.req_w, orig_req_w)
+            self.assertEqual(handle.resp_r, orig_resp_r)
+            self.assertTrue(bridge._is_fd_open(orig_req_w))
+            self.assertTrue(bridge._is_fd_open(orig_resp_r))
+
+            # Forced numeric FD reuse attempt (sentinel pipe) cannot claim orig_req_w / orig_resp_r
+            sr, sw = os.pipe()
+            try:
+                os.write(sw, b"sentinel")
+                self.assertNotIn(sr, (orig_req_w, orig_resp_r))
+                self.assertNotIn(sw, (orig_req_w, orig_resp_r))
+
+                # Resume paused writer while sentinel pipe is live: writer writes strictly to original pipe, never sentinel
+                release_writer.set()
+                th_req.join(timeout=2.0)
+                self.assertFalse(th_req.is_alive())
+                self.assertEqual(os.read(sr, 8), b"sentinel")
+            finally:
+                os.close(sr)
+                os.close(sw)
+
+            self.assertEqual(len(req_box), 1)
+            self.assertEqual(req_box[0].status_code, 503)
+
+            # Subsequent admission sees sticky poison and spawns zero duplicate workers
+            conc = mgr.execute("/api/v1/study", {"request_id": 3})
+            self.assertEqual(conc.status_code, 503)
+            self.assertEqual(conc.payload["error"]["code"], "WORKER_UNAVAILABLE_POISONED")
+            self.assertEqual(mgr.spawned_pids, [warm_pid])
+
+            # After lease released (active_io == 0), subsequent shutdown kills, reaps, and restores FD baseline
+            self.assertEqual(handle.active_io, 0)
+            mgr.shutdown()
+            self.assertEqual(mgr.quarantined_pids, [])
+            self.assertTrue(_is_pid_reaped(warm_pid))
+            self.assertIsNone(handle.req_w)
+            self.assertIsNone(handle.resp_r)
+            self.assertEqual(_list_open_pipe_inodes(), baseline_pipes)
+
+        # (b) Exceptional teardown where active_io drains within the SAME deadline closes FDs safely after drain,
+        # retains PID & sticky poison, and next shutdown reaps cleanly
+        mgr_b = bridge.WorkerManager(response_deadline_s=2.0, worker_reap_timeout_s=0.40)
+        warm_b = mgr_b.execute("/api/v1/solve", {"request_id": 10})
+        self.assertEqual(warm_b.status_code, 200)
+        warm_pid_b = warm_b.payload["worker_pid"]
+        handle_b = mgr_b._active_worker
+        self.assertIsNotNone(handle_b)
+        assert handle_b is not None
+        orig_req_w_b = handle_b.req_w
+        assert orig_req_w_b is not None
+
+        writer_in_lease_b = threading.Event()
+        release_writer_b = threading.Event()
+        arm_pause_b = [True]
+        fail_reg_cb_b = [0]
+
+        def paused_os_write_b(fd, data):
+            if arm_pause_b[0] and fd == orig_req_w_b:
+                arm_pause_b[0] = False
+                writer_in_lease_b.set()
+                release_writer_b.wait(timeout=3.0)
+            return orig_os_write(fd, data)
+
+        def failing_register_cb_b(sup_self, cb):
+            if fail_reg_cb_b[0] > 0:
+                fail_reg_cb_b[0] -= 1
+                raise MemoryError("simulated register_close_callback allocation failure b")
+            return orig_register_cb(sup_self, cb)
+
+        req_box_b: list[Any] = []
+        with mock.patch("v1_worker_bridge.os.write", side_effect=paused_os_write_b), mock.patch.object(
+            bridge._ProcKillReapSupervisor,
+            "register_close_callback",
+            autospec=True,
+            side_effect=failing_register_cb_b,
+        ):
+            th_req_b = threading.Thread(
+                target=lambda: req_box_b.append(mgr_b.execute("/api/v1/solve", {"request_id": 11}))
+            )
+            th_req_b.start()
+            self.assertTrue(writer_in_lease_b.wait(timeout=2.0))
+
+            # Release the paused writer 0.08s after shutdown enters exceptional drain (well before 0.40s deadline)
+            def delayed_release_b():
+                time.sleep(0.08)
+                release_writer_b.set()
+
+            rel_th_b = threading.Thread(target=delayed_release_b, daemon=True)
+            rel_th_b.start()
+
+            fail_reg_cb_b[0] = 2
+            t0_shut_b = time.monotonic()
+            mgr_b.shutdown()
+            shut_elapsed_b = time.monotonic() - t0_shut_b
+            th_req_b.join(timeout=2.0)
+            rel_th_b.join(timeout=1.0)
+
+            self.assertLess(shut_elapsed_b, 0.70)
+            self.assertEqual(handle_b.active_io, 0)
+            self.assertTrue(mgr_b._worker_poisoned)
+            self.assertEqual(mgr_b.quarantined_pids, [warm_pid_b])
+            self.assertIsNone(handle_b.req_w)
+            self.assertIsNone(handle_b.resp_r)
+
+            mgr_b.shutdown()
+            self.assertEqual(mgr_b.quarantined_pids, [])
+            self.assertTrue(_is_pid_reaped(warm_pid_b))
+            self.assertEqual(_list_open_pipe_inodes(), baseline_pipes)
+
 
 if __name__ == "__main__":
     unittest.main()
