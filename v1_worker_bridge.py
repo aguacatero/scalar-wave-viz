@@ -56,6 +56,7 @@ DEFAULT_RESPONSE_DEADLINE_S = 5.0
 DEFAULT_WORKER_REAP_TIMEOUT_S = 2.0
 DEFAULT_MAX_ACTIVE_HTTP_WORKERS = 8
 DEFAULT_MAX_CONCURRENT_COMPUTES = 1
+ALLOWED_WORKER_HANDLER_MODULES: tuple[str, ...] = ("v1_solver_adapter",)
 
 MAX_SAFE_REQUEST_ID = 9007199254740991
 
@@ -612,6 +613,8 @@ class WorkerManager:
         response_deadline_s: float = DEFAULT_RESPONSE_DEADLINE_S,
         worker_reap_timeout_s: float = DEFAULT_WORKER_REAP_TIMEOUT_S,
         custom_worker_cmd: list[str] | None = None,
+        request_validator: Callable[[str, dict[str, Any]], BridgeResult | None] | None = None,
+        handler_module: str | None = None,
         launch_fn: Callable[..., subprocess.Popen[bytes]] | None = None,
         kill_fn: Callable[[subprocess.Popen[bytes]], None] | None = None,
         clock: Callable[[], float] | None = None,
@@ -630,10 +633,14 @@ class WorkerManager:
         ensure_supported_platform()
         if response_deadline_s <= 0 or worker_reap_timeout_s <= 0:
             raise ValueError("Worker deadlines must be strictly positive")
+        if handler_module is not None and handler_module not in ALLOWED_WORKER_HANDLER_MODULES:
+            raise ValueError(f"Unsupported worker handler module: {handler_module!r}")
 
         self.response_deadline_s = float(response_deadline_s)
         self.worker_reap_timeout_s = float(worker_reap_timeout_s)
         self.custom_worker_cmd = custom_worker_cmd
+        self._request_validator = request_validator
+        self.handler_module = handler_module
         self._launch_fn = launch_fn
         self._kill_fn = kill_fn
         self._clock: Callable[[], float] = clock or time.monotonic
@@ -967,7 +974,7 @@ class WorkerManager:
     def _build_worker_command(self, req_r: int, resp_w: int) -> list[str]:
         if self.custom_worker_cmd is not None:
             return [*self.custom_worker_cmd, "--req-fd", str(req_r), "--resp-fd", str(resp_w)]
-        return [
+        cmd = [
             sys.executable,
             str(WORKER_MODULE_PATH),
             "--worker",
@@ -976,6 +983,9 @@ class WorkerManager:
             "--resp-fd",
             str(resp_w),
         ]
+        if self.handler_module is not None:
+            cmd.extend(["--handler-module", self.handler_module])
+        return cmd
 
     def _drain_decode_threads(self, *, deadline: float) -> bool:
         """Signal all tracked decode tasks to cancel and join within `deadline`."""
@@ -1965,6 +1975,11 @@ class WorkerManager:
             return validated_or_err
         verified_req_bytes = validated_or_err
 
+        if self._request_validator is not None:
+            domain_err = self._request_validator(endpoint, request_payload)
+            if isinstance(domain_err, BridgeResult):
+                return domain_err
+
         with self._admission_lock:
             # Strict order: poison > shutdown > concurrency > admission
             if self._worker_poisoned:
@@ -2045,6 +2060,13 @@ class WorkerManager:
                     teardown_deadline=td,
                 )
             self._assert_before_deadline(deadline, "Deadline expired immediately prior to response return")
+            if (
+                self.handler_module is not None
+                and isinstance(resp_obj.get("_bridge_status_code"), int)
+                and not isinstance(resp_obj.get("_bridge_status_code"), bool)
+                and isinstance(resp_obj.get("_bridge_payload"), dict)
+            ):
+                return BridgeResult(resp_obj["_bridge_status_code"], resp_obj["_bridge_payload"])
             return BridgeResult(200, resp_obj)
 
         except _IpcTimeoutError:
@@ -2506,13 +2528,25 @@ def _worker_open_nonstd_pipe_inos(req_fd: int, resp_fd: int) -> list[int]:
     return sorted([os.fstat(req_fd).st_ino, os.fstat(resp_fd).st_ino])
 
 
-def _run_worker_loop(req_fd: int, resp_fd: int) -> int:
+def _run_worker_loop(req_fd: int, resp_fd: int, handler_module: str | None = None) -> int:
     """Child process IPC loop for V1-A transport and lifecycle execution."""
     ensure_supported_platform()
     req_stat = os.fstat(req_fd)
     resp_stat = os.fstat(resp_fd)
     if not stat.S_ISFIFO(req_stat.st_mode) or not stat.S_ISFIFO(resp_stat.st_mode):
         raise RuntimeError("Worker descriptors must reference POSIX pipe FIFOs")
+
+    handler_fn: Callable[[str | None, dict[str, Any], dict[str, Any]], tuple[int, dict[str, Any]]] | None = None
+    if handler_module is not None:
+        if handler_module not in ALLOWED_WORKER_HANDLER_MODULES:
+            raise ValueError(f"Unsupported worker handler module: {handler_module!r}")
+        import importlib
+
+        loaded_mod = importlib.import_module(handler_module)
+        startup_check = getattr(loaded_mod, "verify_worker_startup_invariants", None)
+        if startup_check is not None:
+            startup_check()
+        handler_fn = getattr(loaded_mod, "execute_ipc_request")
 
     ready_payload = strict_json_dumps(
         {
@@ -2544,20 +2578,39 @@ def _run_worker_loop(req_fd: int, resp_fd: int) -> int:
         ):
             time.sleep(float(delay_s))
 
-        response_obj = {
-            "ipc_token": msg["ipc_token"],
-            "status": "V1_A_TRANSPORT_ONLY",
-            "scientific_status": "NO_SOLVER_ADAPTER_IN_V1_A",
-            "endpoint": msg.get("endpoint"),
-            "request_id": extract_safe_request_id(req_body),
-            "worker_pid": os.getpid(),
-            "child_req_ino": req_stat.st_ino,
-            "child_resp_ino": resp_stat.st_ino,
-            "expected_req_ino": msg.get("expected_req_ino"),
-            "expected_resp_ino": msg.get("expected_resp_ino"),
-            "parent_closed_unused_ends": msg.get("parent_closed_unused_ends"),
-            "child_open_pipe_inos": _worker_open_nonstd_pipe_inos(req_fd, resp_fd),
-        }
+        if handler_fn is not None:
+            status_code, payload_body = handler_fn(
+                msg.get("endpoint") if isinstance(msg.get("endpoint"), str) else None,
+                req_body,
+                {
+                    "worker_pid": os.getpid(),
+                    "child_req_ino": req_stat.st_ino,
+                    "child_resp_ino": resp_stat.st_ino,
+                    "expected_req_ino": msg.get("expected_req_ino"),
+                    "expected_resp_ino": msg.get("expected_resp_ino"),
+                    "parent_closed_unused_ends": msg.get("parent_closed_unused_ends"),
+                },
+            )
+            response_obj = {
+                "ipc_token": msg["ipc_token"],
+                "_bridge_status_code": status_code,
+                "_bridge_payload": payload_body,
+            }
+        else:
+            response_obj = {
+                "ipc_token": msg["ipc_token"],
+                "status": "V1_A_TRANSPORT_ONLY",
+                "scientific_status": "NO_SOLVER_ADAPTER_IN_V1_A",
+                "endpoint": msg.get("endpoint"),
+                "request_id": extract_safe_request_id(req_body),
+                "worker_pid": os.getpid(),
+                "child_req_ino": req_stat.st_ino,
+                "child_resp_ino": resp_stat.st_ino,
+                "expected_req_ino": msg.get("expected_req_ino"),
+                "expected_resp_ino": msg.get("expected_resp_ino"),
+                "parent_closed_unused_ends": msg.get("parent_closed_unused_ends"),
+                "child_open_pipe_inos": _worker_open_nonstd_pipe_inos(req_fd, resp_fd),
+            }
         out_frame = _pack_frame(strict_json_dumps(response_obj), MAX_IPC_RESPONSE_BYTES)
         _worker_write_all(resp_fd, out_frame)
 
@@ -2567,8 +2620,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--worker", action="store_true", required=True)
     parser.add_argument("--req-fd", type=int, required=True)
     parser.add_argument("--resp-fd", type=int, required=True)
+    parser.add_argument("--handler-module", type=str, default=None)
     args = parser.parse_args(argv)
-    return _run_worker_loop(args.req_fd, args.resp_fd)
+    return _run_worker_loop(args.req_fd, args.resp_fd, handler_module=args.handler_module)
 
 
 if __name__ == "__main__":
