@@ -1100,21 +1100,9 @@ def _evaluate_2d_single(
     sol: FieldSolution,
     cfg: GroundedBoxConfig,
     probe_xy: list[float],
-    *,
-    params: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any] | None, str, str | None]:
     sol_payload = _serialize_field_solution(sol, cfg)
     probe_payload = _evaluate_dual_probe(sol, cfg, probe_xy)
-    if params is not None:
-        primary_ok, primary_reason = check_presolve_domain_eligibility(params, n_override=int(cfg.n))
-        if not primary_ok:
-            return (
-                sol_payload,
-                probe_payload,
-                None,
-                "WITHHELD_INELIGIBLE_PRIMARY_GRID",
-                primary_reason or f"Primary grid n={cfg.n} violates Section 3.1 pre-solve domain eligibility",
-            )
     topo_ok, topo_diag = validate_snapped_contour_topology(sol, cfg)
     if topo_ok:
         fb_payload = build_force_budget_payload(sol, cfg)
@@ -1347,19 +1335,27 @@ def _run_grounded_box_2d(norm_req: dict[str, Any], input_fp: str) -> dict[str, A
     probe_xy = norm_req["probe_xy_m"]
     ep = norm_req["endpoint"]
 
-    cfg = GroundedBoxConfig(
-        n=int(p["n"]),
-        box_width_m=float(p["box_width_m"]),
-        left_electrode=ElectrodeConfig(**p["left_electrode"]),
-        right_electrode=ElectrodeConfig(**p["right_electrode"]),
-    )
-    sol = electrode_pair_in_grounded_box(config=cfg)
-    sol_payload, probe_payload, fb_payload, fb_status, fb_diag = _evaluate_2d_single(
-        sol,
-        cfg,
-        probe_xy,
-        params=p,
-    )
+    # V1-B-R2-M1: Enforce primary-grid pre-solve eligibility BEFORE invoking electrode_pair_in_grounded_box.
+    primary_ok, primary_reason = check_presolve_domain_eligibility(p, n_override=int(p["n"]))
+    if primary_ok:
+        cfg = GroundedBoxConfig(
+            n=int(p["n"]),
+            box_width_m=float(p["box_width_m"]),
+            left_electrode=ElectrodeConfig(**p["left_electrode"]),
+            right_electrode=ElectrodeConfig(**p["right_electrode"]),
+        )
+        sol = electrode_pair_in_grounded_box(config=cfg)
+        sol_payload, probe_payload, fb_payload, fb_status, fb_diag = _evaluate_2d_single(
+            sol,
+            cfg,
+            probe_xy,
+        )
+    else:
+        sol_payload = None
+        probe_payload = None
+        fb_payload = None
+        fb_status = "WITHHELD_INELIGIBLE_PRIMARY_GRID"
+        fb_diag = primary_reason or f"Primary grid n={p['n']} violates Section 3.1 pre-solve domain eligibility"
 
     run_study = (ep == "study") or bool(norm_req.get("include_convergence_study", False))
     if run_study:
@@ -1436,14 +1432,14 @@ def execute_ipc_request(
         norm = validate_and_normalize_request(endpoint, request_payload)
     except SchemaValidationError as exc:
         return exc.status_code, exc.to_error_payload()
-    except Exception as exc:  # noqa: BLE001 - fail closed into structured HTTP 400 INVALID_SCHEMA
+    except Exception:  # noqa: BLE001 - V1-B-R2-M2: fail closed with sanitized 500 on unexpected internal validation fault
         req_id = _extract_valid_request_id(request_payload)
         return (
-            400,
+            500,
             {
                 "error": {
-                    "code": "INVALID_SCHEMA",
-                    "message": f"Request validation failed: {exc}",
+                    "code": "INTERNAL_VALIDATION_ERROR",
+                    "message": "Internal validation failure while processing solver request.",
                     "field": None,
                 },
                 "request_id": req_id,
@@ -1475,14 +1471,14 @@ def validate_v1_request_for_manager(endpoint: str, request_payload: dict[str, An
         return None
     except SchemaValidationError as exc:
         return BridgeResult(exc.status_code, exc.to_error_payload())
-    except Exception as exc:  # noqa: BLE001 - fail closed into structured HTTP 400 INVALID_SCHEMA
+    except Exception:  # noqa: BLE001 - V1-B-R2-M2: fail closed with sanitized 500 on unexpected internal validation fault
         req_id = _extract_valid_request_id(request_payload)
         return BridgeResult(
-            400,
+            500,
             {
                 "error": {
-                    "code": "INVALID_SCHEMA",
-                    "message": f"Request validation failed: {exc}",
+                    "code": "INTERNAL_VALIDATION_ERROR",
+                    "message": "Internal validation failure while processing solver request.",
                     "field": None,
                 },
                 "request_id": req_id,

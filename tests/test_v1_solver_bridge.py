@@ -562,6 +562,8 @@ class V1SolverAdapterTests(unittest.TestCase):
             },
         )
         self.assertEqual(st_study, 200)
+        self.assertIsNone(body_study["solution"])
+        self.assertIsNone(body_study["probe"])
         self.assertIsNone(body_study["force_budget"])
         self.assertEqual(body_study["force_budget_status"], "WITHHELD_INELIGIBLE_PRIMARY_GRID")
         self.assertTrue(body_study["force_budget_diagnostic"])
@@ -572,6 +574,34 @@ class V1SolverAdapterTests(unittest.TestCase):
         self.assertEqual(body_study["probe_study"]["status"], "WITHHELD_INELIGIBLE_MESH_LEVEL")
         self.assertEqual(body_study["probe_study"]["rows"], [])
         self.assertIsNone(body_study["probe_study"]["assessment"])
+
+        # V1-B-R2-M1 negative control: primary field solver must NEVER be invoked on ineligible primary /study
+        with mock.patch.object(
+            adapter,
+            "electrode_pair_in_grounded_box",
+            side_effect=AssertionError("Primary field solver must not run when primary grid fails pre-solve eligibility"),
+        ) as mocked_solver:
+            st_m1, body_m1 = adapter.execute_ipc_request(
+                "/api/v1/study",
+                {
+                    "request_id": 704,
+                    "mode": "grounded_box_2d",
+                    "parameters": ineligible_primary_params,
+                },
+            )
+            self.assertEqual(mocked_solver.call_count, 0)
+            self.assertEqual(st_m1, 200)
+            self.assertIsNone(body_m1["solution"])
+            self.assertIsNone(body_m1["probe"])
+            self.assertIsNone(body_m1["force_budget"])
+            self.assertEqual(body_m1["force_budget_status"], "WITHHELD_INELIGIBLE_PRIMARY_GRID")
+            self.assertIn("< 3h", body_m1["force_budget_diagnostic"] or "")
+            self.assertEqual(body_m1["force_study"]["status"], "WITHHELD_INELIGIBLE_MESH_LEVEL")
+            self.assertEqual(body_m1["force_study"]["rows"], [])
+            self.assertIsNone(body_m1["force_study"]["derived_sensitivity"])
+            self.assertEqual(body_m1["probe_study"]["status"], "WITHHELD_INELIGIBLE_MESH_LEVEL")
+            self.assertEqual(body_m1["probe_study"]["rows"], [])
+            self.assertIsNone(body_m1["probe_study"]["assessment"])
 
         # Same invalid primary grid on /api/v1/solve must still reject pre-solve with HTTP 400 INVALID_FORCE_DOMAIN
         st_solve, body_solve = adapter.execute_ipc_request(
@@ -585,7 +615,7 @@ class V1SolverAdapterTests(unittest.TestCase):
         self.assertEqual(st_solve, 400)
         self.assertEqual(body_solve["error"]["code"], "INVALID_FORCE_DOMAIN")
 
-        # Valid-primary (n=101, h=0.0008, 3h=0.0024 <= r=0.003) / invalid-coarse (n=41) preserves primary force_budget
+        # Valid-primary (n=101, h=0.0008, 3h=0.0024 <= r=0.003) / invalid-coarse (n=41) preserves primary solution, probe, and force_budget
         valid_primary_params = {**ineligible_primary_params, "n": 101}
         st_vp_study, body_vp_study = adapter.execute_ipc_request(
             "/api/v1/study",
@@ -596,6 +626,8 @@ class V1SolverAdapterTests(unittest.TestCase):
             },
         )
         self.assertEqual(st_vp_study, 200)
+        self.assertIsNotNone(body_vp_study["solution"])
+        self.assertIsNotNone(body_vp_study["probe"])
         self.assertEqual(body_vp_study["force_budget_status"], "COMPUTED")
         self.assertIsNotNone(body_vp_study["force_budget"])
         self.assertEqual(body_vp_study["force_study"]["status"], "WITHHELD_INELIGIBLE_MESH_LEVEL")
@@ -685,6 +717,48 @@ class V1SolverAdapterTests(unittest.TestCase):
                 self.assertEqual(res.payload["error"]["code"], "INVALID_SCHEMA")
                 self.assertEqual(res.payload["error"]["field"], expected_field)
                 self.assertEqual(res.payload["request_id"], req_id)
+
+    def test_v1_b_r2_m2_unexpected_internal_validation_fault_returns_sanitized_500(self):
+        import v1_solver_adapter as adapter
+
+        sample_payload = {
+            "request_id": 731,
+            "mode": "parallel_plate_1d",
+            "parameters": {"voltage_v": 1000.0, "gap_m": 0.01, "area_m2": 0.01},
+        }
+        with mock.patch.object(
+            adapter,
+            "validate_and_normalize_request",
+            side_effect=RuntimeError("internal-sentinel"),
+        ):
+            st_ipc, body_ipc = adapter.execute_ipc_request("/api/v1/solve", sample_payload)
+            self.assertEqual(st_ipc, 500)
+            self.assertNotEqual(body_ipc["error"]["code"], "INVALID_SCHEMA")
+            self.assertEqual(body_ipc["error"]["code"], "INTERNAL_VALIDATION_ERROR")
+            self.assertEqual(body_ipc["request_id"], 731)
+            self.assertNotIn("internal-sentinel", json.dumps(body_ipc))
+
+            res_mgr = adapter.validate_v1_request_for_manager("/api/v1/solve", sample_payload)
+            self.assertIsNotNone(res_mgr)
+            self.assertEqual(res_mgr.status_code, 500)
+            self.assertNotEqual(res_mgr.payload["error"]["code"], "INVALID_SCHEMA")
+            self.assertEqual(res_mgr.payload["error"]["code"], "INTERNAL_VALIDATION_ERROR")
+            self.assertEqual(res_mgr.payload["request_id"], 731)
+            self.assertNotIn("internal-sentinel", json.dumps(res_mgr.payload))
+
+        # Genuine schema errors and oversized integer rejection remain HTTP 400 INVALID_SCHEMA
+        st_bad, body_bad = adapter.execute_ipc_request(
+            "/api/v1/solve",
+            {
+                "request_id": 732,
+                "mode": "parallel_plate_1d",
+                "parameters": {"voltage_v": 10**350, "gap_m": 0.01, "area_m2": 0.01},
+            },
+        )
+        self.assertEqual(st_bad, 400)
+        self.assertEqual(body_bad["error"]["code"], "INVALID_SCHEMA")
+        self.assertEqual(body_bad["error"]["field"], "parameters.voltage_v")
+        self.assertEqual(body_bad["request_id"], 732)
 
     def test_multigrid_gating_order_suppression_provenance_and_strict_tolerance(self):
         import electrostatics_numerics as num
@@ -893,7 +967,7 @@ class V1SolverBridgeWorkerIntegrationTests(unittest.TestCase):
             self.assertEqual(p2["force_study"]["observed_order_status"], "NOT_COMPUTED_NONUNIFORM_H_RATIO")
             self.assertEqual(mgr.spawned_pids, [worker_pid])
 
-            # 3b. V1-B-R1-F1 over live HTTP worker: ineligible primary grid at n=41 withholds primary force_budget
+            # 3b. V1-B-R1-F1 + V1-B-R2-M1 over live HTTP worker: ineligible primary grid at n=41 withholds primary solution, probe, and force_budget
             st_f1, p_f1 = _post(
                 "/api/v1/study",
                 {
@@ -908,12 +982,17 @@ class V1SolverBridgeWorkerIntegrationTests(unittest.TestCase):
                 },
             )
             self.assertEqual(st_f1, 200)
+            self.assertIsNone(p_f1["solution"])
+            self.assertIsNone(p_f1["probe"])
             self.assertIsNone(p_f1["force_budget"])
             self.assertEqual(p_f1["force_budget_status"], "WITHHELD_INELIGIBLE_PRIMARY_GRID")
             self.assertIn("< 3h", p_f1["force_budget_diagnostic"] or "")
             self.assertEqual(p_f1["force_study"]["status"], "WITHHELD_INELIGIBLE_MESH_LEVEL")
             self.assertEqual(p_f1["force_study"]["rows"], [])
             self.assertIsNone(p_f1["force_study"]["derived_sensitivity"])
+            self.assertEqual(p_f1["probe_study"]["status"], "WITHHELD_INELIGIBLE_MESH_LEVEL")
+            self.assertEqual(p_f1["probe_study"]["rows"], [])
+            self.assertIsNone(p_f1["probe_study"]["assessment"])
             self.assertEqual(mgr.spawned_pids, [worker_pid])
 
             # 3c. V1-B-R1-F2 over live HTTP server: 300-400 digit integers in voltage, radius, and probe_xy_m return 400 INVALID_SCHEMA
