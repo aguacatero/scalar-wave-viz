@@ -496,15 +496,18 @@ class V1SolverAdapterTests(unittest.TestCase):
             "sys.path.insert(0, %r)\n"
             "import electrostatics_baseline as base\n"
             "import v1_solver_adapter as adapter\n"
+            "def _require(cond, msg):\n"
+            "    if not cond:\n"
+            "        raise RuntimeError(msg)\n"
             # Un-gated diagonal FieldSolution with overlapping x/y bounding boxes violates contour disjointness
             "cfg = base.GroundedBoxConfig(n=41, box_width_m=0.080, "
             "left_electrode=base.ElectrodeConfig(-0.004, -0.005, 0.006, 500.0), "
             "right_electrode=base.ElectrodeConfig(0.004, 0.005, 0.006, -500.0))\n"
             "sol = base.electrode_pair_in_grounded_box(config=cfg)\n"
             "fb, status, diag = adapter.evaluate_post_solve_force_budget_only(sol, cfg)\n"
-            "assert fb is None, fb\n"
-            "assert status == 'WITHHELD_INVALID_CONTOUR_TOPOLOGY', status\n"
-            "assert diag and any(tok in diag for tok in ('disjoint', 'intersects non-vacuum node', 'captures')), diag\n"
+            "_require(fb is None, f'Expected fb is None, got {fb!r}')\n"
+            "_require(status == 'WITHHELD_INVALID_CONTOUR_TOPOLOGY', f'Expected WITHHELD_INVALID_CONTOUR_TOPOLOGY, got {status!r}')\n"
+            "_require(bool(diag) and any(tok in diag for tok in ('disjoint', 'intersects non-vacuum node', 'captures')), f'Unexpected diag: {diag!r}')\n"
             # Corrupted wrong-enclosure mask must also withhold even under python -O
             "cfg_ok = base.GroundedBoxConfig(n=41, box_width_m=0.040)\n"
             "sol_ok = base.electrode_pair_in_grounded_box(config=cfg_ok)\n"
@@ -512,14 +515,176 @@ class V1SolverAdapterTests(unittest.TestCase):
             "bad_cond[20, 20] = True\n"
             "import dataclasses\n"
             "sol_bad = dataclasses.replace(sol_ok, conductor_mask=bad_cond)\n"
-            "fb2, st2, _ = adapter.evaluate_post_solve_force_budget_only(sol_bad, cfg_ok)\n"
-            "assert fb2 is None and st2 == 'WITHHELD_INVALID_CONTOUR_TOPOLOGY'\n"
+            "fb2, st2, diag2 = adapter.evaluate_post_solve_force_budget_only(sol_bad, cfg_ok)\n"
+            "_require(fb2 is None and st2 == 'WITHHELD_INVALID_CONTOUR_TOPOLOGY', f'Expected withheld on corrupted mask, got {fb2!r}, {st2!r}, {diag2!r}')\n"
         ) % str(REPO_ROOT)
 
-        # Verify under BOTH standard python and `python -O` (optimizations strip `assert` only)
+        # Verify positive withholding under BOTH standard python and `python -O`
         for flags in ([], ["-O"]):
             res = subprocess.run([sys.executable, *flags, "-c", script], capture_output=True, text=True)
             self.assertEqual(res.returncode, 0, msg=f"flags={flags} stderr={res.stderr}")
+
+        # V1-B-R1-F3 negative control: monkeypatch evaluate_post_solve_force_budget_only to return a non-null budget
+        # and prove the runtime check fails (returncode != 0) under BOTH standard python and `python -O`.
+        mutated_script = (
+            "import sys\n"
+            "sys.path.insert(0, %r)\n"
+            "import v1_solver_adapter as adapter\n"
+            "adapter.evaluate_post_solve_force_budget_only = lambda sol, cfg: ({'units': 'N/m'}, 'COMPUTED', None)\n"
+        ) % str(REPO_ROOT) + script
+        for flags in ([], ["-O"]):
+            res_mut = subprocess.run([sys.executable, *flags, "-c", mutated_script], capture_output=True, text=True)
+            self.assertNotEqual(res_mut.returncode, 0, msg=f"Mutation unexpectedly passed under flags={flags}")
+            self.assertIn("RuntimeError: Expected fb is None", res_mut.stderr)
+
+    def test_v1_b_r1_f1_study_withholds_primary_force_budget_when_primary_grid_ineligible(self):
+        import v1_solver_adapter as adapter
+
+        # Reproducer from V1-B-R1-F1: n=41, box_width_m=0.080 -> h=0.002 m; r=0.003 m < 3h=0.006 m.
+        # Snapped-contour topology passes at n=41, but pre-solve grid eligibility fails at primary n=41.
+        ineligible_primary_params = {
+            "n": 41,
+            "box_width_m": 0.080,
+            "left_electrode": {"center_x_m": -0.012, "center_y_m": 0.0, "radius_m": 0.003, "voltage_v": 500.0},
+            "right_electrode": {"center_x_m": 0.012, "center_y_m": 0.0, "radius_m": 0.003, "voltage_v": -500.0},
+        }
+        # Confirm pre-solve eligibility fails while snapped-contour topology passes on this exact grid
+        ok_pre, reason_pre = adapter.check_presolve_domain_eligibility(ineligible_primary_params)
+        self.assertFalse(ok_pre)
+        self.assertIn("< 3h", reason_pre or "")
+
+        st_study, body_study = adapter.execute_ipc_request(
+            "/api/v1/study",
+            {
+                "request_id": 701,
+                "mode": "grounded_box_2d",
+                "parameters": ineligible_primary_params,
+            },
+        )
+        self.assertEqual(st_study, 200)
+        self.assertIsNone(body_study["force_budget"])
+        self.assertEqual(body_study["force_budget_status"], "WITHHELD_INELIGIBLE_PRIMARY_GRID")
+        self.assertTrue(body_study["force_budget_diagnostic"])
+        self.assertIn("< 3h", body_study["force_budget_diagnostic"])
+        self.assertEqual(body_study["force_study"]["status"], "WITHHELD_INELIGIBLE_MESH_LEVEL")
+        self.assertEqual(body_study["force_study"]["rows"], [])
+        self.assertIsNone(body_study["force_study"]["derived_sensitivity"])
+        self.assertEqual(body_study["probe_study"]["status"], "WITHHELD_INELIGIBLE_MESH_LEVEL")
+        self.assertEqual(body_study["probe_study"]["rows"], [])
+        self.assertIsNone(body_study["probe_study"]["assessment"])
+
+        # Same invalid primary grid on /api/v1/solve must still reject pre-solve with HTTP 400 INVALID_FORCE_DOMAIN
+        st_solve, body_solve = adapter.execute_ipc_request(
+            "/api/v1/solve",
+            {
+                "request_id": 702,
+                "mode": "grounded_box_2d",
+                "parameters": ineligible_primary_params,
+            },
+        )
+        self.assertEqual(st_solve, 400)
+        self.assertEqual(body_solve["error"]["code"], "INVALID_FORCE_DOMAIN")
+
+        # Valid-primary (n=101, h=0.0008, 3h=0.0024 <= r=0.003) / invalid-coarse (n=41) preserves primary force_budget
+        valid_primary_params = {**ineligible_primary_params, "n": 101}
+        st_vp_study, body_vp_study = adapter.execute_ipc_request(
+            "/api/v1/study",
+            {
+                "request_id": 703,
+                "mode": "grounded_box_2d",
+                "parameters": valid_primary_params,
+            },
+        )
+        self.assertEqual(st_vp_study, 200)
+        self.assertEqual(body_vp_study["force_budget_status"], "COMPUTED")
+        self.assertIsNotNone(body_vp_study["force_budget"])
+        self.assertEqual(body_vp_study["force_study"]["status"], "WITHHELD_INELIGIBLE_MESH_LEVEL")
+        self.assertEqual(body_vp_study["force_study"]["rows"], [])
+        self.assertIsNone(body_vp_study["force_study"]["derived_sensitivity"])
+
+    def test_v1_b_r1_f2_oversized_json_integers_rejected_with_structured_400_invalid_schema(self):
+        import v1_solver_adapter as adapter
+
+        huge_pos = int("9" * 350)
+        huge_neg = -int("8" * 380)
+        huge_400 = 10**400
+
+        base_2d = {
+            "n": 41,
+            "box_width_m": 0.04,
+            "left_electrode": {"center_x_m": -0.008, "center_y_m": 0.0, "radius_m": 0.003, "voltage_v": 500.0},
+            "right_electrode": {"center_x_m": 0.008, "center_y_m": 0.0, "radius_m": 0.003, "voltage_v": -500.0},
+        }
+        cases = [
+            (
+                711,
+                "parameters.voltage_v",
+                {
+                    "request_id": 711,
+                    "mode": "parallel_plate_1d",
+                    "parameters": {"voltage_v": huge_400, "gap_m": 0.01, "area_m2": 0.01},
+                },
+            ),
+            (
+                712,
+                "parameters.left_electrode.voltage_v",
+                {
+                    "request_id": 712,
+                    "mode": "grounded_box_2d",
+                    "parameters": {
+                        **base_2d,
+                        "left_electrode": {**base_2d["left_electrode"], "voltage_v": huge_neg},
+                    },
+                },
+            ),
+            (
+                713,
+                "parameters.right_electrode.radius_m",
+                {
+                    "request_id": 713,
+                    "mode": "grounded_box_2d",
+                    "parameters": {
+                        **base_2d,
+                        "right_electrode": {**base_2d["right_electrode"], "radius_m": huge_pos},
+                    },
+                },
+            ),
+            (
+                714,
+                "probe_xy_m[0]",
+                {
+                    "request_id": 714,
+                    "mode": "grounded_box_2d",
+                    "parameters": base_2d,
+                    "probe_xy_m": [huge_pos, 0.0],
+                },
+            ),
+            (
+                715,
+                "probe_xy_m[1]",
+                {
+                    "request_id": 715,
+                    "mode": "grounded_box_2d",
+                    "parameters": base_2d,
+                    "probe_xy_m": [0.0, huge_neg],
+                },
+            ),
+        ]
+
+        for req_id, expected_field, payload in cases:
+            with self.subTest(req_id=req_id, field=expected_field):
+                st, err = adapter.execute_ipc_request("/api/v1/solve", payload)
+                self.assertEqual(st, 400)
+                self.assertEqual(err["error"]["code"], "INVALID_SCHEMA")
+                self.assertEqual(err["error"]["field"], expected_field)
+                self.assertEqual(err["request_id"], req_id)
+
+                res = adapter.validate_v1_request_for_manager("/api/v1/solve", payload)
+                self.assertIsNotNone(res)
+                self.assertEqual(res.status_code, 400)
+                self.assertEqual(res.payload["error"]["code"], "INVALID_SCHEMA")
+                self.assertEqual(res.payload["error"]["field"], expected_field)
+                self.assertEqual(res.payload["request_id"], req_id)
 
     def test_multigrid_gating_order_suppression_provenance_and_strict_tolerance(self):
         import electrostatics_numerics as num
@@ -727,6 +892,79 @@ class V1SolverBridgeWorkerIntegrationTests(unittest.TestCase):
             self.assertEqual(st2, 200)
             self.assertEqual(p2["force_study"]["observed_order_status"], "NOT_COMPUTED_NONUNIFORM_H_RATIO")
             self.assertEqual(mgr.spawned_pids, [worker_pid])
+
+            # 3b. V1-B-R1-F1 over live HTTP worker: ineligible primary grid at n=41 withholds primary force_budget
+            st_f1, p_f1 = _post(
+                "/api/v1/study",
+                {
+                    "request_id": 701,
+                    "mode": "grounded_box_2d",
+                    "parameters": {
+                        "n": 41,
+                        "box_width_m": 0.080,
+                        "left_electrode": {"center_x_m": -0.012, "center_y_m": 0.0, "radius_m": 0.003, "voltage_v": 500.0},
+                        "right_electrode": {"center_x_m": 0.012, "center_y_m": 0.0, "radius_m": 0.003, "voltage_v": -500.0},
+                    },
+                },
+            )
+            self.assertEqual(st_f1, 200)
+            self.assertIsNone(p_f1["force_budget"])
+            self.assertEqual(p_f1["force_budget_status"], "WITHHELD_INELIGIBLE_PRIMARY_GRID")
+            self.assertIn("< 3h", p_f1["force_budget_diagnostic"] or "")
+            self.assertEqual(p_f1["force_study"]["status"], "WITHHELD_INELIGIBLE_MESH_LEVEL")
+            self.assertEqual(p_f1["force_study"]["rows"], [])
+            self.assertIsNone(p_f1["force_study"]["derived_sensitivity"])
+            self.assertEqual(mgr.spawned_pids, [worker_pid])
+
+            # 3c. V1-B-R1-F2 over live HTTP server: 300-400 digit integers in voltage, radius, and probe_xy_m return 400 INVALID_SCHEMA
+            base_2d_http = {
+                "n": 41,
+                "box_width_m": 0.04,
+                "left_electrode": {"center_x_m": -0.008, "center_y_m": 0.0, "radius_m": 0.003, "voltage_v": 500.0},
+                "right_electrode": {"center_x_m": 0.008, "center_y_m": 0.0, "radius_m": 0.003, "voltage_v": -500.0},
+            }
+            for req_id_big, expected_field_big, big_payload in (
+                (
+                    721,
+                    "parameters.left_electrode.voltage_v",
+                    {
+                        "request_id": 721,
+                        "mode": "grounded_box_2d",
+                        "parameters": {
+                            **base_2d_http,
+                            "left_electrode": {**base_2d_http["left_electrode"], "voltage_v": 10**350},
+                        },
+                    },
+                ),
+                (
+                    722,
+                    "parameters.right_electrode.radius_m",
+                    {
+                        "request_id": 722,
+                        "mode": "grounded_box_2d",
+                        "parameters": {
+                            **base_2d_http,
+                            "right_electrode": {**base_2d_http["right_electrode"], "radius_m": 10**360},
+                        },
+                    },
+                ),
+                (
+                    723,
+                    "probe_xy_m[0]",
+                    {
+                        "request_id": 723,
+                        "mode": "grounded_box_2d",
+                        "parameters": base_2d_http,
+                        "probe_xy_m": [-(10**390), 0.0],
+                    },
+                ),
+            ):
+                st_big, p_big = _post("/api/v1/solve", big_payload)
+                self.assertEqual(st_big, 400)
+                self.assertEqual(p_big["error"]["code"], "INVALID_SCHEMA")
+                self.assertEqual(p_big["error"]["field"], expected_field_big)
+                self.assertEqual(p_big["request_id"], req_id_big)
+                self.assertEqual(mgr.spawned_pids, [worker_pid])
 
             # 4. Verify inherited V1-A HTTP framing checks (bad Origin -> 403, bad Content-Type -> 415)
             raw_probe = b'{"request_id": 5, "mode": "parallel_plate_1d", "parameters": {"voltage_v": 100.0, "gap_m": 0.01, "area_m2": 0.01}}'

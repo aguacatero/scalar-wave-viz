@@ -235,7 +235,16 @@ def _parse_json_float(
             field=field,
             request_id=request_id,
         )
-    fval = float(value)
+    try:
+        fval = float(value)
+    except (OverflowError, TypeError, ValueError) as exc:
+        raise SchemaValidationError(
+            400,
+            "INVALID_SCHEMA",
+            f"Field {field!r} exceeds IEEE-754 finite float64 range",
+            field=field,
+            request_id=request_id,
+        ) from exc
     if not math.isfinite(fval):
         raise SchemaValidationError(
             400,
@@ -1087,9 +1096,25 @@ def build_force_budget_payload(sol: FieldSolution, cfg: GroundedBoxConfig) -> di
     }
 
 
-def _evaluate_2d_single(sol: FieldSolution, cfg: GroundedBoxConfig, probe_xy: list[float]) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any] | None, str, str | None]:
+def _evaluate_2d_single(
+    sol: FieldSolution,
+    cfg: GroundedBoxConfig,
+    probe_xy: list[float],
+    *,
+    params: dict[str, Any] | None = None,
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any] | None, str, str | None]:
     sol_payload = _serialize_field_solution(sol, cfg)
     probe_payload = _evaluate_dual_probe(sol, cfg, probe_xy)
+    if params is not None:
+        primary_ok, primary_reason = check_presolve_domain_eligibility(params, n_override=int(cfg.n))
+        if not primary_ok:
+            return (
+                sol_payload,
+                probe_payload,
+                None,
+                "WITHHELD_INELIGIBLE_PRIMARY_GRID",
+                primary_reason or f"Primary grid n={cfg.n} violates Section 3.1 pre-solve domain eligibility",
+            )
     topo_ok, topo_diag = validate_snapped_contour_topology(sol, cfg)
     if topo_ok:
         fb_payload = build_force_budget_payload(sol, cfg)
@@ -1329,7 +1354,12 @@ def _run_grounded_box_2d(norm_req: dict[str, Any], input_fp: str) -> dict[str, A
         right_electrode=ElectrodeConfig(**p["right_electrode"]),
     )
     sol = electrode_pair_in_grounded_box(config=cfg)
-    sol_payload, probe_payload, fb_payload, fb_status, fb_diag = _evaluate_2d_single(sol, cfg, probe_xy)
+    sol_payload, probe_payload, fb_payload, fb_status, fb_diag = _evaluate_2d_single(
+        sol,
+        cfg,
+        probe_xy,
+        params=p,
+    )
 
     run_study = (ep == "study") or bool(norm_req.get("include_convergence_study", False))
     if run_study:
@@ -1406,6 +1436,19 @@ def execute_ipc_request(
         norm = validate_and_normalize_request(endpoint, request_payload)
     except SchemaValidationError as exc:
         return exc.status_code, exc.to_error_payload()
+    except Exception as exc:  # noqa: BLE001 - fail closed into structured HTTP 400 INVALID_SCHEMA
+        req_id = _extract_valid_request_id(request_payload)
+        return (
+            400,
+            {
+                "error": {
+                    "code": "INVALID_SCHEMA",
+                    "message": f"Request validation failed: {exc}",
+                    "field": None,
+                },
+                "request_id": req_id,
+            },
+        )
 
     try:
         return solve_normalized_request(norm)
@@ -1432,6 +1475,19 @@ def validate_v1_request_for_manager(endpoint: str, request_payload: dict[str, An
         return None
     except SchemaValidationError as exc:
         return BridgeResult(exc.status_code, exc.to_error_payload())
+    except Exception as exc:  # noqa: BLE001 - fail closed into structured HTTP 400 INVALID_SCHEMA
+        req_id = _extract_valid_request_id(request_payload)
+        return BridgeResult(
+            400,
+            {
+                "error": {
+                    "code": "INVALID_SCHEMA",
+                    "message": f"Request validation failed: {exc}",
+                    "field": None,
+                },
+                "request_id": req_id,
+            },
+        )
 
 
 def create_solver_worker_manager(**kwargs: Any) -> Any:
