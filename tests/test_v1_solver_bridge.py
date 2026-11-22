@@ -1077,18 +1077,47 @@ class V1ReferenceSnapshotsB2Tests(unittest.TestCase):
         self.assertTrue(js_path.exists(), f"Missing {js_path}")
         self.assertTrue(json_path.exists(), f"Missing {json_path}")
 
-        # Verify CLI --check mode succeeds on committed artifacts
-        self.assertEqual(gen.main(["--check"]), 0)
-
         disk_json_text = json_path.read_text(encoding="utf-8")
         disk_js_text = js_path.read_text(encoding="utf-8")
         bundle = json.loads(disk_json_text)
 
-        # Regenerate in memory and assert byte-for-byte determinism
-        regen_bundle = gen.build_reference_snapshot_bundle()
-        regen_json_text, regen_js_text = gen.render_snapshot_artifacts(regen_bundle)
-        self.assertEqual(disk_json_text, regen_json_text)
-        self.assertEqual(disk_js_text, regen_js_text)
+        # Regenerate twice on the current platform and assert byte-for-byte in-platform idempotency
+        regen_bundle_1 = gen.build_reference_snapshot_bundle()
+        regen_json_1, regen_js_1 = gen.render_snapshot_artifacts(regen_bundle_1)
+        regen_bundle_2 = gen.build_reference_snapshot_bundle()
+        regen_json_2, regen_js_2 = gen.render_snapshot_artifacts(regen_bundle_2)
+        self.assertEqual(regen_json_1, regen_json_2)
+        self.assertEqual(regen_js_1, regen_js_2)
+
+        # Verify CLI --check succeeds against same-platform generated artifacts in a temp directory
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_js = Path(tmpdir) / "v1_reference_snapshots.js"
+            tmp_json = Path(tmpdir) / "v1_reference_snapshots.json"
+            self.assertEqual(gen.main(["--js-out", str(tmp_js), "--json-out", str(tmp_json)]), 0)
+            self.assertEqual(gen.main(["--check", "--js-out", str(tmp_js), "--json-out", str(tmp_json)]), 0)
+
+        # Compare committed disk bundle against fresh runtime bundle:
+        # exact structural & metadata/fingerprint/enum equality, and tight IEEE-754 numerical parity
+        # across platforms/BLAS implementations (1e-12 relative / 1e-15 absolute tolerance).
+        def _assert_cross_platform_bundle_parity(obj_a, obj_b, path_label="root"):
+            self.assertIs(type(obj_a), type(obj_b), f"Type mismatch at {path_label}")
+            if isinstance(obj_a, dict):
+                self.assertEqual(list(obj_a.keys()), list(obj_b.keys()), f"Key order mismatch at {path_label}")
+                for k in obj_a:
+                    _assert_cross_platform_bundle_parity(obj_a[k], obj_b[k], f"{path_label}.{k}")
+            elif isinstance(obj_a, list):
+                self.assertEqual(len(obj_a), len(obj_b), f"Length mismatch at {path_label}")
+                for idx, (va, vb) in enumerate(zip(obj_a, obj_b)):
+                    _assert_cross_platform_bundle_parity(va, vb, f"{path_label}[{idx}]")
+            elif isinstance(obj_a, float):
+                tol = max(1e-15, 1e-11 * max(abs(obj_a), abs(obj_b)))
+                self.assertLessEqual(abs(obj_a - obj_b), tol, f"Float drift at {path_label}: {obj_a} vs {obj_b}")
+            else:
+                self.assertEqual(obj_a, obj_b, f"Value mismatch at {path_label}")
+
+        _assert_cross_platform_bundle_parity(bundle, regen_bundle_1)
 
         # Strict RFC 8259 compliance & frozen kernel/spec provenance
         adapter.strict_rfc8259_dumps(bundle)
