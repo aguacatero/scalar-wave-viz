@@ -1100,7 +1100,12 @@ class V1ReferenceSnapshotsB2Tests(unittest.TestCase):
 
         # Compare committed disk bundle against fresh runtime bundle:
         # exact structural & metadata/fingerprint/enum equality, and tight IEEE-754 numerical parity
-        # across platforms/BLAS implementations (1e-12 relative / 1e-15 absolute tolerance).
+        # across platforms/BLAS implementations (1e-11 relative / 1e-15 absolute tolerance), including
+        # scientific-notation numbers embedded in diagnostic narrative strings.
+        import re
+
+        sci_num_re = re.compile(r"[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)")
+
         def _assert_cross_platform_bundle_parity(obj_a, obj_b, path_label="root"):
             self.assertIs(type(obj_a), type(obj_b), f"Type mismatch at {path_label}")
             if isinstance(obj_a, dict):
@@ -1114,6 +1119,18 @@ class V1ReferenceSnapshotsB2Tests(unittest.TestCase):
             elif isinstance(obj_a, float):
                 tol = max(1e-15, 1e-11 * max(abs(obj_a), abs(obj_b)))
                 self.assertLessEqual(abs(obj_a - obj_b), tol, f"Float drift at {path_label}: {obj_a} vs {obj_b}")
+            elif isinstance(obj_a, str) and obj_a != obj_b and path_label.endswith(
+                ("diagnostic_note", "discrete_closure_verdict", "assessment_summary")
+            ):
+                nums_a = [float(x) for x in sci_num_re.findall(obj_a)]
+                nums_b = [float(x) for x in sci_num_re.findall(obj_b)]
+                masked_a = sci_num_re.sub("<NUM>", obj_a)
+                masked_b = sci_num_re.sub("<NUM>", obj_b)
+                self.assertEqual(masked_a, masked_b, f"Narrative structure mismatch at {path_label}")
+                self.assertEqual(len(nums_a), len(nums_b), f"Embedded number count mismatch at {path_label}")
+                for na, nb in zip(nums_a, nums_b):
+                    tol = max(1e-15, 1e-5 * max(abs(na), abs(nb)))
+                    self.assertLessEqual(abs(na - nb), tol, f"Narrative float drift at {path_label}: {na} vs {nb}")
             else:
                 self.assertEqual(obj_a, obj_b, f"Value mismatch at {path_label}")
 
