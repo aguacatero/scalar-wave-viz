@@ -1065,5 +1065,354 @@ class V1SolverBridgeWorkerIntegrationTests(unittest.TestCase):
         self.assertEqual(_list_open_pipe_inodes(), baseline_pipes)
 
 
+class V1ReferenceSnapshotsB2Tests(unittest.TestCase):
+    """V1-B Slice B2 tests: deterministic offline snapshots, Python/JS IEEE-754 parity, 1D closed-form parity, and file:// compatibility."""
+
+    def test_snapshot_artifacts_exist_deterministic_idempotent_and_strict_json(self):
+        from scripts import generate_v1_snapshots as gen
+        import v1_solver_adapter as adapter
+
+        js_path = REPO_ROOT / "explorer" / "v1_reference_snapshots.js"
+        json_path = REPO_ROOT / "explorer" / "v1_reference_snapshots.json"
+        self.assertTrue(js_path.exists(), f"Missing {js_path}")
+        self.assertTrue(json_path.exists(), f"Missing {json_path}")
+
+        # Verify CLI --check mode succeeds on committed artifacts
+        self.assertEqual(gen.main(["--check"]), 0)
+
+        disk_json_text = json_path.read_text(encoding="utf-8")
+        disk_js_text = js_path.read_text(encoding="utf-8")
+        bundle = json.loads(disk_json_text)
+
+        # Regenerate in memory and assert byte-for-byte determinism
+        regen_bundle = gen.build_reference_snapshot_bundle()
+        regen_json_text, regen_js_text = gen.render_snapshot_artifacts(regen_bundle)
+        self.assertEqual(disk_json_text, regen_json_text)
+        self.assertEqual(disk_js_text, regen_js_text)
+
+        # Strict RFC 8259 compliance & frozen kernel/spec provenance
+        adapter.strict_rfc8259_dumps(bundle)
+        meta = bundle["metadata"]
+        self.assertEqual(meta["epistemic_label"], "ESTABLISHED MODEL")
+        self.assertEqual(meta["whole_body_thrust_status"], "NOT MEASURED / NOT ESTABLISHED")
+        self.assertEqual(meta["offline_banner"], "SOLVER BRIDGE OFFLINE")
+        self.assertEqual(meta["source_head_sha"], gen.FROZEN_B1_ACCEPTED_SOURCE_SHA)
+        self.assertEqual(meta["v1_spec_blob_sha1"], "3ccf8ae0e8caa4d367d93eddd173dda98a13f00a")
+        self.assertEqual(
+            meta["kernel_blob_sha1"],
+            {
+                "electrostatics_baseline": "97f65dfa25db7730323edd5e52c98b17371fdeaa",
+                "electrostatics_numerics": "a29f1f3a55946f33760179677dd3dbeb6a2ebde2",
+            },
+        )
+
+        # Zero P2 or Exodus 3D leakage in generator or snapshot artifacts
+        gen_src = (REPO_ROOT / "scripts" / "generate_v1_snapshots.py").read_text(encoding="utf-8")
+        for forbidden in ("import scipy", "from scipy", "p2_", "Eq. (11)", "FIG. 21"):
+            self.assertNotIn(forbidden, gen_src)
+
+    def test_snapshot_presets_gate_enforcement_unbalanced_n41_and_provenance(self):
+        json_path = REPO_ROOT / "explorer" / "v1_reference_snapshots.json"
+        bundle = json.loads(json_path.read_text(encoding="utf-8"))
+        presets = bundle["presets_2d"]
+        self.assertEqual(
+            set(presets.keys()),
+            {"p0_p1_canonical_40mm", "asymmetric_hv_80mm_bench", "bipolar_hv_80mm_bench"},
+        )
+
+        for preset_id, preset_data in presets.items():
+            conv = preset_data["convergence_study"]
+            for st_obj in (conv["force_study"],):
+                self.assertEqual(len(st_obj["rows"]), 3)
+                self.assertEqual(st_obj["observed_order_status"], "NOT_COMPUTED_NONUNIFORM_H_RATIO")
+                self.assertIsNone(st_obj["observed_order_left_electrode"])
+                self.assertIsNone(st_obj["observed_order_right_electrode"])
+                self.assertIsNone(st_obj["observed_order_enclosure"])
+                self.assertIsNone(st_obj["observed_orders_by_component"])
+                for ca in st_obj["component_assessments"].values():
+                    self.assertIsNone(ca["observed_order"])
+
+            for n_str in ("41", "81", "101"):
+                solve_fp = preset_data["solve_fingerprints_by_n"][n_str]
+                study_fp = preset_data["study_fingerprints_by_n"][n_str]
+                solve_st_fp = preset_data["solve_with_study_fingerprints_by_n"][n_str]
+
+                self.assertIn(solve_fp, bundle["by_fingerprint"])
+                self.assertIn(study_fp, bundle["by_fingerprint"])
+                self.assertIn(solve_st_fp, bundle["by_fingerprint"])
+
+                solve_snap = bundle["by_fingerprint"][solve_fp]
+                self.assertEqual(solve_snap["model_id"], "grounded_box_2d")
+                self.assertEqual(solve_snap["epistemic_label"], "ESTABLISHED MODEL")
+                self.assertEqual(solve_snap["provenance"]["whole_body_thrust_status"], "NOT MEASURED / NOT ESTABLISHED")
+                self.assertEqual(
+                    solve_snap["provenance"]["kernel_blob_sha1"]["electrostatics_baseline"],
+                    "97f65dfa25db7730323edd5e52c98b17371fdeaa",
+                )
+                self.assertEqual(
+                    solve_snap["provenance"]["kernel_blob_sha1"]["electrostatics_numerics"],
+                    "a29f1f3a55946f33760179677dd3dbeb6a2ebde2",
+                )
+                self.assertEqual(solve_snap["force_budget_status"], "COMPUTED")
+                self.assertIsNotNone(solve_snap["force_budget"])
+                self.assertEqual(solve_snap["force_budget"]["units"], "N/m")
+                self.assertEqual(solve_snap["force_mesh_sensitivity_status"], "NOT_ASSESSED")
+                self.assertEqual(solve_snap["probe_stability_status"], "NOT_ASSESSED")
+                self.assertIsNone(solve_snap["force_study"])
+
+        # Spec Section 3.2: asymmetric_hv_80mm_bench is BALANCED_WITHIN_TOLERANCE at n=101, 81
+        # and honestly UNBALANCED_EXCEEDS_TOLERANCE at coarse n=41
+        asym_fps = presets["asymmetric_hv_80mm_bench"]["solve_fingerprints_by_n"]
+        asym_101 = bundle["by_fingerprint"][asym_fps["101"]]
+        asym_81 = bundle["by_fingerprint"][asym_fps["81"]]
+        asym_41 = bundle["by_fingerprint"][asym_fps["41"]]
+        self.assertEqual(asym_101["force_budget"]["force_closure_status"], "BALANCED_WITHIN_TOLERANCE")
+        self.assertTrue(asym_101["force_budget"]["is_force_balanced_to_tolerance"])
+        self.assertEqual(asym_81["force_budget"]["force_closure_status"], "BALANCED_WITHIN_TOLERANCE")
+        self.assertTrue(asym_81["force_budget"]["is_force_balanced_to_tolerance"])
+        self.assertEqual(asym_41["force_budget"]["force_closure_status"], "UNBALANCED_EXCEEDS_TOLERANCE")
+        self.assertFalse(asym_41["force_budget"]["is_force_balanced_to_tolerance"])
+        self.assertGreaterEqual(asym_41["force_budget"]["net_electrostatic_force_norm_n_per_m"], 1e-4)
+        self.assertIn("V^2", asym_41["force_budget"]["discrete_closure_verdict"])
+
+        # Generator fail-closed gate check: if a preset fails pre-solve domain eligibility, generation raises RuntimeError
+        from scripts import generate_v1_snapshots as gen
+
+        with mock.patch("v1_solver_adapter.check_presolve_domain_eligibility", return_value=(False, "synthetic 3h failure")):
+            with self.assertRaises(RuntimeError) as ctx:
+                gen.build_reference_snapshot_bundle()
+            self.assertIn("failed Section 3.1 pre-solve domain eligibility", str(ctx.exception))
+
+    def test_javascript_python_canonical_fingerprint_and_1d_closed_form_parity(self):
+        import shutil
+        import v1_solver_adapter as adapter
+
+        node_bin = shutil.which("node")
+        if not node_bin:
+            for cand in (
+                os.path.expanduser("~/.local/bin/node"),
+                "/usr/local/bin/node",
+                "/opt/homebrew/bin/node",
+                "/usr/bin/node",
+            ):
+                if os.path.exists(cand):
+                    node_bin = cand
+                    break
+
+        js_path = REPO_ROOT / "explorer" / "v1_reference_snapshots.js"
+        node_body = r"""
+  const h = snap.helpers;
+
+  function assertEq(actual, expected, label) {
+    if (actual !== expected) {
+      throw new Error(label + ": expected " + expected + ", got " + actual);
+    }
+  }
+
+  // 1. All 4 normative golden vectors + -0.0 / integer coercion equivalence
+  const v1Ascii = h.buildCanonicalFingerprintAscii("/api/v1/solve", {
+    mode: "parallel_plate_1d",
+    parameters: { voltage_v: 1000, gap_m: 0.01, area_m2: 0.01 }
+  });
+  const v1Sha = h.computeInputFingerprint("/api/v1/solve", {
+    mode: "parallel_plate_1d",
+    parameters: { voltage_v: 1000, gap_m: 0.01, area_m2: 0.01 }
+  });
+  assertEq(v1Sha, "0d200ce79da9b282f5f5b50bce58522416472cf51b9b7ce90c791f6a03b5a940", "Vector 1 SHA");
+
+  const base2dOmitted = {
+    mode: "grounded_box_2d",
+    parameters: {
+      n: 101,
+      box_width_m: 0.04,
+      left_electrode: { center_x_m: -0.008, center_y_m: 0.0, radius_m: 0.003, voltage_v: 500 },
+      right_electrode: { center_x_m: 0.008, center_y_m: 0.0, radius_m: 0.003, voltage_v: -500 }
+    }
+  };
+  const base2dNegZero = {
+    mode: "grounded_box_2d",
+    parameters: {
+      n: 101.0,
+      box_width_m: 0.04,
+      left_electrode: { center_x_m: -0.008, center_y_m: -0.0, radius_m: 0.003, voltage_v: 500.0 },
+      right_electrode: { center_x_m: 0.008, center_y_m: -0.0, radius_m: 0.003, voltage_v: -500.0 }
+    },
+    probe_xy_m: [-0.0, -0.0],
+    include_convergence_study: false
+  };
+  const v2ShaOmitted = h.computeInputFingerprint("/api/v1/solve", base2dOmitted);
+  const v2ShaNegZero = h.computeInputFingerprint("/api/v1/solve", base2dNegZero);
+  assertEq(v2ShaOmitted, "aeee31480630d8b59a38764137e6543be6280d1b9c08cf4dee9bf9aeec87f610", "Vector 2 omitted SHA");
+  assertEq(v2ShaNegZero, "aeee31480630d8b59a38764137e6543be6280d1b9c08cf4dee9bf9aeec87f610", "Vector 2 negzero SHA");
+
+  const v3Sha = h.computeInputFingerprint("/api/v1/solve", Object.assign({}, base2dOmitted, { include_convergence_study: true }));
+  assertEq(v3Sha, "6e410a24260b147966be7eaf1736af1055c0bd92315e8c19a64a38bb331651b5", "Vector 3 SHA");
+
+  const v4Sha = h.computeInputFingerprint("/api/v1/study", base2dOmitted);
+  assertEq(v4Sha, "55c589b7628ab14016df2aefbd969f055b56a77947ee86df576f1e4423b9890b", "Vector 4 SHA");
+
+  // 2. Verify every snapshot in by_fingerprint hydrates cleanly and matches JS recomputed fingerprint
+  for (const fp of Object.keys(snap.by_fingerprint)) {
+    const lookedUp = h.lookupOfflineSnapshotByFingerprint(fp);
+    if (!lookedUp) {
+      throw new Error("Failed to hydrate snapshot for fingerprint " + fp);
+    }
+    assertEq(lookedUp.input_fingerprint, fp, "lookupOfflineSnapshotByFingerprint");
+    if (lookedUp.model_id === "parallel_plate_1d") {
+      const jsFp = h.computeInputFingerprint("/api/v1/solve", {
+        mode: "parallel_plate_1d",
+        parameters: lookedUp.parameters
+      });
+      assertEq(jsFp, fp, "1D snapshot fingerprint match");
+    } else {
+      if (!lookedUp.solution || !lookedUp.force_budget) {
+        throw new Error("Hydrated 2D snapshot missing solution or force_budget for " + fp);
+      }
+    }
+  }
+
+  // 3. Evaluate 1D test cases and return JSON for Python comparison
+  const testCases1D = [
+    { voltage_v: 0.0, gap_m: 0.01, area_m2: 0.01 },
+    { voltage_v: -0.0, gap_m: 0.016, area_m2: 0.005 },
+    { voltage_v: 1000.0, gap_m: 0.01, area_m2: 0.01 },
+    { voltage_v: 20000.0, gap_m: 0.016, area_m2: 0.01 },
+    { voltage_v: 50000.0, gap_m: 0.005, area_m2: 0.05 },
+    { voltage_v: 1234.5, gap_m: 0.05, area_m2: 0.0004 }
+  ];
+  const results1D = testCases1D.map((p, idx) => h.evaluateParallelPlate1D(p, idx + 1));
+  return { v1Ascii, results1D };
+"""
+        if node_bin:
+            node_script = f"const snap = require({str(js_path)!r});\nconst out = (function() {{{node_body}}})();\nconsole.log(JSON.stringify(out));"
+            proc = subprocess.run([node_bin, "-e", node_script], capture_output=True, text=True)
+            self.assertEqual(proc.returncode, 0, msg=f"Node parity script failed: {proc.stderr}")
+            js_out = json.loads(proc.stdout.strip())
+        else:
+            from playwright.sync_api import sync_playwright
+            from test_v0_browser_smoke import find_browser_executable
+
+            with sync_playwright() as pw:
+                browser_exe = find_browser_executable()
+                launch_kwargs = {"headless": True, "args": ["--no-sandbox", "--disable-setuid-sandbox"]}
+                if browser_exe:
+                    launch_kwargs["executable_path"] = browser_exe
+                browser = pw.chromium.launch(**launch_kwargs)
+                try:
+                    page = browser.new_page()
+                    page.add_script_tag(path=str(js_path))
+                    js_out = page.evaluate(f"() => {{ const snap = window.V1_REFERENCE_SNAPSHOTS; {node_body} }}")
+                finally:
+                    browser.close()
+
+        for js_res in js_out["results1D"]:
+            params = js_res["parameters"]
+            st, py_res = adapter.execute_ipc_request(
+                "/api/v1/solve",
+                {
+                    "request_id": js_res["request_id"],
+                    "mode": "parallel_plate_1d",
+                    "parameters": params,
+                },
+            )
+            self.assertEqual(st, 200)
+            self.assertEqual(js_res["input_fingerprint"], py_res["input_fingerprint"])
+            self.assertEqual(js_res["fringing_warning"], py_res["fringing_warning"])
+            self.assertEqual(js_res["constants"]["epsilon_0_f_per_m"], 8.8541878188e-12)
+
+            scalar_keys = (
+                "electric_field_v_per_m",
+                "pressure_pa",
+                "force_on_positive_plate_n",
+                "force_on_negative_plate_n",
+                "net_pair_force_n",
+                "stored_energy_j",
+                "fringing_aspect_ratio",
+            )
+            for k in scalar_keys:
+                jv = float(js_res[k])
+                pv = float(py_res[k])
+                if params["voltage_v"] == 0.0 and k != "fringing_aspect_ratio":
+                    self.assertEqual(jv, 0.0, msg=f"Expected exact 0.0 at 0 V for {k}")
+                    self.assertEqual(pv, 0.0)
+                else:
+                    tol = max(1e-15, 1e-12 * max(abs(jv), abs(pv)))
+                    self.assertLessEqual(abs(jv - pv), tol, msg=f"1D parity mismatch on {k}: js={jv} py={pv}")
+
+            for vk, pv_vw in py_res["virtual_work"].items():
+                jv_vw = float(js_res["virtual_work"][vk])
+                pv_vw_f = float(pv_vw)
+                if params["voltage_v"] == 0.0:
+                    self.assertEqual(jv_vw, 0.0, msg=f"Expected exact 0.0 at 0 V for virtual_work.{vk}")
+                else:
+                    tol = max(1e-15, 1e-12 * max(abs(jv_vw), abs(pv_vw_f)))
+                    self.assertLessEqual(abs(jv_vw - pv_vw_f), tol, msg=f"1D virtual_work mismatch on {vk}")
+
+    def test_file_protocol_browser_loads_v1_reference_snapshots_offline(self):
+        try:
+            from playwright.sync_api import sync_playwright
+        except ImportError:
+            self.skipTest("Playwright not installed")
+
+        from test_v0_browser_smoke import find_browser_executable
+
+        js_path = (REPO_ROOT / "explorer" / "v1_reference_snapshots.js").resolve()
+        html = f"""<!DOCTYPE html>
+<html><head><meta charset="utf-8"><script src="{js_path.as_uri()}"></script></head>
+<body><script>
+window.__b2_check = (function() {{
+  const s = window.V1_REFERENCE_SNAPSHOTS;
+  if (!s || !s.helpers) return {{ ok: false, reason: "missing V1_REFERENCE_SNAPSHOTS" }};
+  const fp = s.helpers.computeInputFingerprint("/api/v1/solve", {{
+    mode: "grounded_box_2d",
+    parameters: {{
+      n: 101,
+      box_width_m: 0.04,
+      left_electrode: {{ center_x_m: -0.008, center_y_m: 0.0, radius_m: 0.003, voltage_v: 500 }},
+      right_electrode: {{ center_x_m: 0.008, center_y_m: 0.0, radius_m: 0.003, voltage_v: -500 }}
+    }}
+  }});
+  const snap = s.helpers.lookupOfflineSnapshotByFingerprint(fp);
+  const zero1d = s.helpers.evaluateParallelPlate1D({{ voltage_v: 0, gap_m: 0.01, area_m2: 0.01 }}, 1);
+  return {{
+    ok: Boolean(snap && snap.force_budget && zero1d.pressure_pa === 0.0),
+    fp: fp,
+    thrust_status: snap ? snap.provenance.whole_body_thrust_status : null,
+    unbalanced_41: s.helpers.getPresetSnapshot("asymmetric_hv_80mm_bench", 41, "solve").force_budget.force_closure_status
+  }};
+}})();
+</script></body></html>"""
+
+        import tempfile
+
+        with tempfile.NamedTemporaryFile("w", suffix=".html", dir=str(REPO_ROOT / "explorer"), delete=False, encoding="utf-8") as tf:
+            tf.write(html)
+            temp_html_path = Path(tf.name)
+
+        try:
+            with sync_playwright() as pw:
+                browser_exe = find_browser_executable()
+                args = ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage", "--allow-file-access-from-files"]
+                launch_kwargs = {"headless": True, "args": args}
+                if browser_exe:
+                    launch_kwargs["executable_path"] = browser_exe
+                browser = pw.chromium.launch(**launch_kwargs)
+                try:
+                    page = browser.new_page()
+                    page.goto(temp_html_path.resolve().as_uri())
+                    res = page.evaluate("() => window.__b2_check")
+                    self.assertTrue(res["ok"], msg=f"file:// check failed: {res}")
+                    self.assertEqual(
+                        res["fp"],
+                        "aeee31480630d8b59a38764137e6543be6280d1b9c08cf4dee9bf9aeec87f610",
+                    )
+                    self.assertEqual(res["thrust_status"], "NOT MEASURED / NOT ESTABLISHED")
+                    self.assertEqual(res["unbalanced_41"], "UNBALANCED_EXCEEDS_TOLERANCE")
+                finally:
+                    browser.close()
+        finally:
+            temp_html_path.unlink(missing_ok=True)
+
+
 if __name__ == "__main__":
     unittest.main()
