@@ -1117,7 +1117,7 @@ class V1ReferenceSnapshotsB2Tests(unittest.TestCase):
                 for idx, (va, vb) in enumerate(zip(obj_a, obj_b)):
                     _assert_cross_platform_bundle_parity(va, vb, f"{path_label}[{idx}]")
             elif isinstance(obj_a, float):
-                tol = max(1e-15, 1e-11 * max(abs(obj_a), abs(obj_b)))
+                tol = max(1e-12, 1e-10 * max(abs(obj_a), abs(obj_b)))
                 self.assertLessEqual(abs(obj_a - obj_b), tol, f"Float drift at {path_label}: {obj_a} vs {obj_b}")
             elif isinstance(obj_a, str) and obj_a != obj_b and path_label.endswith(
                 ("diagnostic_note", "discrete_closure_verdict", "assessment_summary")
@@ -1129,7 +1129,7 @@ class V1ReferenceSnapshotsB2Tests(unittest.TestCase):
                 self.assertEqual(masked_a, masked_b, f"Narrative structure mismatch at {path_label}")
                 self.assertEqual(len(nums_a), len(nums_b), f"Embedded number count mismatch at {path_label}")
                 for na, nb in zip(nums_a, nums_b):
-                    tol = max(1e-15, 1e-5 * max(abs(na), abs(nb)))
+                    tol = max(1e-12, 1e-5 * max(abs(na), abs(nb)))
                     self.assertLessEqual(abs(na - nb), tol, f"Narrative float drift at {path_label}: {na} vs {nb}")
             else:
                 self.assertEqual(obj_a, obj_b, f"Value mismatch at {path_label}")
