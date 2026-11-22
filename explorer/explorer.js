@@ -382,6 +382,9 @@
 
   function shouldShowForces() {
     if (isScalarWaveContrastActive) return false;
+    if (window.__v1SolverUI && typeof window.__v1SolverUI.isComputed2DActive === 'function' && window.__v1SolverUI.isComputed2DActive()) {
+      return false;
+    }
     if (currentVoltageKV <= 0.0) return false;
     const tForces = document.getElementById('toggle-forces');
     return tForces ? tForces.checked : false;
@@ -605,6 +608,8 @@
       getComponentScreenCoords: getComponentScreenCoords,
       selectComponent: selectComponent,
       setViewPreset: setViewPreset,
+      switchTab: switchTab,
+      switchMobileTab: switchMobileTab,
       updateForceVectors: updateForceVectors,
       updateFieldLines: updateFieldLines,
       componentMeshes: componentMeshes,
@@ -1175,6 +1180,9 @@
     // - Restore all scene groups according to authoritative predicates (checkboxes, active chapter, voltage)
     syncAllLayerVisibilities();
     syncWaveContrastUI();
+    if (window.__v1SolverUI && typeof window.__v1SolverUI.onScalarWaveToggle === 'function') {
+      window.__v1SolverUI.onScalarWaveToggle(isScalarWaveContrastActive);
+    }
   }
 
   function cleanMathHtml(str) {
@@ -1802,6 +1810,9 @@
     }
     // V0.2-R6 / R5-M1: Synchronize recreated Chapter 5 wave-toggle button & badge with active state
     syncWaveContrastUI();
+    if (window.__v1SolverUI && typeof window.__v1SolverUI.onChapterChange === 'function') {
+      window.__v1SolverUI.onChapterChange(chapter.chapter);
+    }
   }
 
   function nextChapter() {
@@ -1859,6 +1870,9 @@
     } else {
       if (freeBtn) freeBtn.textContent = "🔍 Explore Freely";
       renderChapter(currentChapterIndex);
+    }
+    if (window.__v1SolverUI && typeof window.__v1SolverUI.onExploreFreelyToggle === 'function') {
+      window.__v1SolverUI.onExploreFreelyToggle(isExploringFreely);
     }
   }
 
