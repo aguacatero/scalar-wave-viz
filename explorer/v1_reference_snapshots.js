@@ -292,26 +292,50 @@
     return sha256HexAscii(ascii);
   }
 
+  function parseStrictJsonFloat(value, fieldName, minVal, maxVal) {
+    if (typeof value !== "number" || !Number.isFinite(value)) {
+      throw new Error("Field '" + fieldName + "' must be a finite JSON number");
+    }
+    var norm = value === 0 ? 0.0 : value;
+    if (norm < minVal || norm > maxVal) {
+      throw new Error(
+        "Field '" + fieldName + "' (" + String(norm) + ") out of valid [" + String(minVal) + ", " + String(maxVal) + "] range"
+      );
+    }
+    return norm;
+  }
+
   function evaluateParallelPlate1D(params, requestId) {
-    if (!params || typeof params !== "object") {
+    if (!params || typeof params !== "object" || Array.isArray(params)) {
       throw new Error("parameters object required for parallel_plate_1d");
     }
-    var v = Number(params.voltage_v);
-    var d = Number(params.gap_m);
-    var area = Number(params.area_m2);
-    if (!isFiniteNumber(v) || v < 0.0 || v > 50000.0) {
-      throw new Error("voltage_v out of valid [0, 50000] V range");
+    var allowedKeys = { voltage_v: true, gap_m: true, area_m2: true };
+    var keys = Object.keys(params);
+    for (var ki = 0; ki < keys.length; ki++) {
+      if (!Object.prototype.hasOwnProperty.call(allowedKeys, keys[ki])) {
+        throw new Error("Unknown field '" + keys[ki] + "' in parameters");
+      }
     }
-    if (!isFiniteNumber(d) || d < 0.005 || d > 0.200) {
-      throw new Error("gap_m out of valid [0.005, 0.200] m range");
+    if (!Object.prototype.hasOwnProperty.call(params, "voltage_v")) {
+      throw new Error("Missing required field parameters.voltage_v");
     }
-    if (!isFiniteNumber(area) || area < 1e-4 || area > 0.05) {
-      throw new Error("area_m2 out of valid [1e-4, 0.05] m^2 range");
+    if (!Object.prototype.hasOwnProperty.call(params, "gap_m")) {
+      throw new Error("Missing required field parameters.gap_m");
     }
+    if (!Object.prototype.hasOwnProperty.call(params, "area_m2")) {
+      throw new Error("Missing required field parameters.area_m2");
+    }
+    var normV = parseStrictJsonFloat(params.voltage_v, "parameters.voltage_v", 0.0, 50000.0);
+    var normD = parseStrictJsonFloat(params.gap_m, "parameters.gap_m", 0.005, 0.200);
+    var normA = parseStrictJsonFloat(params.area_m2, "parameters.area_m2", 1e-4, 0.05);
 
-    var normV = v === 0 ? 0.0 : v;
-    var normD = d;
-    var normA = area;
+    var resolvedRequestId = 1;
+    if (requestId !== undefined) {
+      if (!isFiniteInteger(requestId) || requestId < 1 || requestId > Number.MAX_SAFE_INTEGER) {
+        throw new Error("request_id must be a positive safe integer");
+      }
+      resolvedRequestId = requestId;
+    }
 
     var eField = normV === 0.0 ? 0.0 : normV / normD;
     var pressure = normV === 0.0 ? 0.0 : 0.5 * EPSILON_0_F_PER_M * (eField * eField);
@@ -354,7 +378,7 @@
     });
 
     return {
-      request_id: isFiniteInteger(requestId) ? requestId : 1,
+      request_id: resolvedRequestId,
       input_fingerprint: fp,
       model_id: "parallel_plate_1d",
       epistemic_label: "ESTABLISHED MODEL",

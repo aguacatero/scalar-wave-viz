@@ -1077,19 +1077,36 @@ class V1ReferenceSnapshotsB2Tests(unittest.TestCase):
         self.assertTrue(js_path.exists(), f"Missing {js_path}")
         self.assertTrue(json_path.exists(), f"Missing {json_path}")
 
-        disk_json_text = json_path.read_text(encoding="utf-8")
-        disk_js_text = js_path.read_text(encoding="utf-8")
+        disk_json_bytes = json_path.read_bytes()
+        disk_js_bytes = js_path.read_bytes()
+        self.assertNotIn(b"\r", disk_json_bytes)
+        self.assertNotIn(b"\r", disk_js_bytes)
+        disk_json_text = disk_json_bytes.decode("utf-8")
         bundle = json.loads(disk_json_text)
 
         # Regenerate twice on the current platform and assert byte-for-byte in-platform idempotency
         regen_bundle_1 = gen.build_reference_snapshot_bundle()
-        regen_json_1, regen_js_1 = gen.render_snapshot_artifacts(regen_bundle_1)
+        regen_json_1, regen_js_1 = gen.render_snapshot_artifact_bytes(regen_bundle_1)
         regen_bundle_2 = gen.build_reference_snapshot_bundle()
-        regen_json_2, regen_js_2 = gen.render_snapshot_artifacts(regen_bundle_2)
+        regen_json_2, regen_js_2 = gen.render_snapshot_artifact_bytes(regen_bundle_2)
         self.assertEqual(regen_json_1, regen_json_2)
         self.assertEqual(regen_js_1, regen_js_2)
 
-        # Verify CLI --check succeeds against same-platform generated artifacts in a temp directory
+        # Enforce exact byte-for-byte parity between committed JS and (generator template + committed JSON payload)
+        expected_disk_js_bytes = gen.render_js_from_json_payload(disk_json_text[:-1]).encode("utf-8")
+        self.assertEqual(disk_js_bytes, expected_disk_js_bytes)
+
+        # Run the full committed-artifact fidelity gate (exact invariants + allowlisted cross-platform 2D spsolve parity)
+        gen.verify_committed_snapshot_artifacts(
+            js_path=js_path,
+            json_path=json_path,
+            fresh_bundle=regen_bundle_1,
+        )
+
+        # Verify CLI --check & --check-committed on generated temp artifacts, plus negative mutation coverage:
+        #   1) CRLF mutation in JSON and JS fails both --check and --check-committed (V1-B2-R1-L1)
+        #   2) JS-only divergence from JSON/template fails --check-committed (V1-B2-R1-M1)
+        #   3) Invariant constant mutation (epsilon_0_f_per_m -> 0.0) fails --check-committed (V1-B2-R1-M1)
         import tempfile
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1097,48 +1114,48 @@ class V1ReferenceSnapshotsB2Tests(unittest.TestCase):
             tmp_json = Path(tmpdir) / "v1_reference_snapshots.json"
             self.assertEqual(gen.main(["--js-out", str(tmp_js), "--json-out", str(tmp_json)]), 0)
             self.assertEqual(gen.main(["--check", "--js-out", str(tmp_js), "--json-out", str(tmp_json)]), 0)
+            self.assertEqual(gen.main(["--check-committed", "--js-out", str(tmp_js), "--json-out", str(tmp_json)]), 0)
 
-        # Compare committed disk bundle against fresh runtime bundle:
-        # exact structural & metadata/fingerprint/enum equality, and tight IEEE-754 numerical parity
-        # across platforms/BLAS implementations (1e-11 relative / 1e-15 absolute tolerance), including
-        # scientific-notation numbers embedded in diagnostic narrative strings.
-        import re
+            orig_js_bytes = tmp_js.read_bytes()
+            orig_json_bytes = tmp_json.read_bytes()
 
-        sci_num_re = re.compile(r"[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)")
+            # Negative 1a: CRLF mutation in JS must fail raw-byte --check and --check-committed
+            tmp_js.write_bytes(orig_js_bytes.replace(b"\n", b"\r\n"))
+            self.assertEqual(gen.main(["--check", "--js-out", str(tmp_js), "--json-out", str(tmp_json)]), 1)
+            with self.assertRaisesRegex(ValueError, "CR bytes"):
+                gen.verify_committed_snapshot_artifacts(
+                    js_path=tmp_js, json_path=tmp_json, fresh_bundle=regen_bundle_1
+                )
+            tmp_js.write_bytes(orig_js_bytes)
 
-        def _assert_cross_platform_bundle_parity(obj_a, obj_b, path_label="root"):
-            self.assertIs(type(obj_a), type(obj_b), f"Type mismatch at {path_label}")
-            if isinstance(obj_a, dict):
-                self.assertEqual(list(obj_a.keys()), list(obj_b.keys()), f"Key order mismatch at {path_label}")
-                for k in obj_a:
-                    _assert_cross_platform_bundle_parity(obj_a[k], obj_b[k], f"{path_label}.{k}")
-            elif isinstance(obj_a, list):
-                self.assertEqual(len(obj_a), len(obj_b), f"Length mismatch at {path_label}")
-                for idx, (va, vb) in enumerate(zip(obj_a, obj_b)):
-                    _assert_cross_platform_bundle_parity(va, vb, f"{path_label}[{idx}]")
-            elif isinstance(obj_a, float):
-                # Cross-platform SuperLU/UMFPACK sparse solve on 2D grids has ~1e-10 V potential roundoff
-                # and ~1e-10 / h (~1e-7 V/m) E-field finite-difference roundoff on symmetry-zero components,
-                # while physical force components (N/m) and potentials agree to < 1e-8 relative / 1e-9 absolute.
-                abs_floor = 1e-6 if ("ex_v_per_m" in path_label or "ey_v_per_m" in path_label) else 1e-9
-                tol = max(abs_floor, 1e-8 * max(abs(obj_a), abs(obj_b)))
-                self.assertLessEqual(abs(obj_a - obj_b), tol, f"Float drift at {path_label}: {obj_a} vs {obj_b}")
-            elif isinstance(obj_a, str) and obj_a != obj_b and path_label.endswith(
-                ("diagnostic_note", "discrete_closure_verdict", "assessment_summary")
-            ):
-                nums_a = [float(x) for x in sci_num_re.findall(obj_a)]
-                nums_b = [float(x) for x in sci_num_re.findall(obj_b)]
-                masked_a = sci_num_re.sub("<NUM>", obj_a)
-                masked_b = sci_num_re.sub("<NUM>", obj_b)
-                self.assertEqual(masked_a, masked_b, f"Narrative structure mismatch at {path_label}")
-                self.assertEqual(len(nums_a), len(nums_b), f"Embedded number count mismatch at {path_label}")
-                for na, nb in zip(nums_a, nums_b):
-                    tol = max(1e-9, 1e-5 * max(abs(na), abs(nb)))
-                    self.assertLessEqual(abs(na - nb), tol, f"Narrative float drift at {path_label}: {na} vs {nb}")
-            else:
-                self.assertEqual(obj_a, obj_b, f"Value mismatch at {path_label}")
+            # Negative 1b: CRLF mutation in JSON must fail raw-byte --check and --check-committed
+            tmp_json.write_bytes(orig_json_bytes.replace(b"\n", b"\r\n"))
+            self.assertEqual(gen.main(["--check", "--js-out", str(tmp_js), "--json-out", str(tmp_json)]), 1)
+            with self.assertRaisesRegex(ValueError, "CR bytes"):
+                gen.verify_committed_snapshot_artifacts(
+                    js_path=tmp_js, json_path=tmp_json, fresh_bundle=regen_bundle_1
+                )
+            tmp_json.write_bytes(orig_json_bytes)
 
-        _assert_cross_platform_bundle_parity(bundle, regen_bundle_1)
+            # Negative 2: JS divergence from JSON/template must fail --check-committed
+            tmp_js.write_bytes(orig_js_bytes + b"\n// unauthorized drift\n")
+            with self.assertRaisesRegex(ValueError, "diverges from generator template"):
+                gen.verify_committed_snapshot_artifacts(
+                    js_path=tmp_js, json_path=tmp_json, fresh_bundle=regen_bundle_1
+                )
+            tmp_js.write_bytes(orig_js_bytes)
+
+            # Negative 3: Mutating invariant constant epsilon_0_f_per_m to 0.0 (even with matching JS) must fail exact check
+            mutated_bundle = json.loads(orig_json_bytes.decode("utf-8"))
+            mutated_bundle["reference_1d"]["canonical_1kv_10mm_100cm2"]["constants"]["epsilon_0_f_per_m"] = 0.0
+            mut_json_bytes, mut_js_bytes = gen.render_snapshot_artifact_bytes(mutated_bundle)
+            tmp_json.write_bytes(mut_json_bytes)
+            tmp_js.write_bytes(mut_js_bytes)
+            self.assertEqual(gen.main(["--check-committed", "--js-out", str(tmp_js), "--json-out", str(tmp_json)]), 1)
+            with self.assertRaisesRegex(ValueError, "Invariant float mismatch.*epsilon_0_f_per_m"):
+                gen.verify_committed_snapshot_artifacts(
+                    js_path=tmp_js, json_path=tmp_json, fresh_bundle=regen_bundle_1
+                )
 
         # Strict RFC 8259 compliance & frozen kernel/spec provenance
         adapter.strict_rfc8259_dumps(bundle)
@@ -1331,6 +1348,58 @@ class V1ReferenceSnapshotsB2Tests(unittest.TestCase):
     { voltage_v: 1234.5, gap_m: 0.05, area_m2: 0.0004 }
   ];
   const results1D = testCases1D.map((p, idx) => h.evaluateParallelPlate1D(p, idx + 1));
+
+  // 4. Negative schema parity cases (V1-B2-R1-M2): reject strings, null, bool, missing, extra, non-finite, out-of-range
+  const invalid1DCases = [
+    { label: "string_voltage", params: { voltage_v: "1000", gap_m: 0.01, area_m2: 0.01 } },
+    { label: "string_gap", params: { voltage_v: 1000, gap_m: "0.01", area_m2: 0.01 } },
+    { label: "string_area", params: { voltage_v: 1000, gap_m: 0.01, area_m2: "0.01" } },
+    { label: "null_voltage", params: { voltage_v: null, gap_m: 0.01, area_m2: 0.01 } },
+    { label: "null_gap", params: { voltage_v: 1000, gap_m: null, area_m2: 0.01 } },
+    { label: "null_area", params: { voltage_v: 1000, gap_m: 0.01, area_m2: null } },
+    { label: "bool_true_voltage", params: { voltage_v: true, gap_m: 0.01, area_m2: 0.01 } },
+    { label: "bool_false_voltage", params: { voltage_v: false, gap_m: 0.01, area_m2: 0.01 } },
+    { label: "bool_true_gap", params: { voltage_v: 1000, gap_m: true, area_m2: 0.01 } },
+    { label: "bool_false_area", params: { voltage_v: 1000, gap_m: 0.01, area_m2: false } },
+    { label: "missing_voltage", params: { gap_m: 0.01, area_m2: 0.01 } },
+    { label: "missing_gap", params: { voltage_v: 1000, area_m2: 0.01 } },
+    { label: "missing_area", params: { voltage_v: 1000, gap_m: 0.01 } },
+    { label: "extra_key", params: { voltage_v: 1000, gap_m: 0.01, area_m2: 0.01, epsilon_r: 2.0 } },
+    { label: "proto_prop_extra_key", params: { voltage_v: 1000, gap_m: 0.01, area_m2: 0.01, toString: 1 } },
+    { label: "array_params", params: [1000, 0.01, 0.01] },
+    { label: "null_params", params: null },
+    { label: "nan_voltage", params: { voltage_v: NaN, gap_m: 0.01, area_m2: 0.01 } },
+    { label: "inf_voltage", params: { voltage_v: Infinity, gap_m: 0.01, area_m2: 0.01 } },
+    { label: "neg_voltage", params: { voltage_v: -1.0, gap_m: 0.01, area_m2: 0.01 } },
+    { label: "over_voltage", params: { voltage_v: 50001.0, gap_m: 0.01, area_m2: 0.01 } },
+    { label: "under_gap", params: { voltage_v: 1000, gap_m: 0.004, area_m2: 0.01 } },
+    { label: "over_gap", params: { voltage_v: 1000, gap_m: 0.201, area_m2: 0.01 } },
+    { label: "under_area", params: { voltage_v: 1000, gap_m: 0.01, area_m2: 9e-5 } },
+    { label: "over_area", params: { voltage_v: 1000, gap_m: 0.01, area_m2: 0.06 } }
+  ];
+  for (const tc of invalid1DCases) {
+    let threw = false;
+    try {
+      h.evaluateParallelPlate1D(tc.params, 1);
+    } catch (_err) {
+      threw = true;
+    }
+    if (!threw) {
+      throw new Error("Expected evaluateParallelPlate1D to reject invalid case: " + tc.label);
+    }
+  }
+  for (const badReqId of ["1", null, true, false, 0, -1, 1.5, NaN, Infinity]) {
+    let threwReq = false;
+    try {
+      h.evaluateParallelPlate1D({ voltage_v: 1000, gap_m: 0.01, area_m2: 0.01 }, badReqId);
+    } catch (_err) {
+      threwReq = true;
+    }
+    if (!threwReq) {
+      throw new Error("Expected evaluateParallelPlate1D to reject invalid requestId: " + String(badReqId));
+    }
+  }
+
   return { v1Ascii, results1D };
 """
         if node_bin:
@@ -1397,6 +1466,24 @@ class V1ReferenceSnapshotsB2Tests(unittest.TestCase):
                 else:
                     tol = max(1e-15, 1e-12 * max(abs(jv_vw), abs(pv_vw_f)))
                     self.assertLessEqual(abs(jv_vw - pv_vw_f), tol, msg=f"1D virtual_work mismatch on {vk}")
+
+        # Verify Python B1 schema adapter also rejects the same invalid 1D input types (online/offline contract parity)
+        for bad_params in (
+            {"voltage_v": "1000", "gap_m": 0.01, "area_m2": 0.01},
+            {"voltage_v": None, "gap_m": 0.01, "area_m2": 0.01},
+            {"voltage_v": True, "gap_m": 0.01, "area_m2": 0.01},
+            {"voltage_v": False, "gap_m": 0.01, "area_m2": 0.01},
+            {"gap_m": 0.01, "area_m2": 0.01},
+            {"voltage_v": 1000.0, "gap_m": 0.01, "area_m2": 0.01, "epsilon_r": 2.0},
+            [1000.0, 0.01, 0.01],
+            None,
+        ):
+            st_bad, err_bad = adapter.execute_ipc_request(
+                "/api/v1/solve",
+                {"request_id": 99, "mode": "parallel_plate_1d", "parameters": bad_params},
+            )
+            self.assertEqual(st_bad, 400, msg=f"Expected 400 for {bad_params!r}")
+            self.assertEqual(err_bad["error"]["code"], "INVALID_SCHEMA")
 
     def test_file_protocol_browser_loads_v1_reference_snapshots_offline(self):
         try:
