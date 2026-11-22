@@ -855,8 +855,10 @@ _PLATFORM_DEPENDENT_2D_FLOAT_LEAVES: dict[str, frozenset[str]] = {
     ),
     "derived_sensitivity": frozenset(
         {
-            "max_last_step_abs_diff_n_per_m",
-            "max_last_step_relative_change",
+            "finest_net_residual_magnitude_n_per_m",
+            "max_component_last_step_diff_n_per_m",
+            "max_component_relative_change",
+            "max_vector_last_step_diff_n_per_m",
         }
     ),
     "per_component_last_step_diff_n_per_m": frozenset(
