@@ -726,7 +726,7 @@
           handleCurrentError(
             captured,
             "OFFLINE_SNAPSHOT_UNAVAILABLE",
-            "No precomputed offline snapshot matches this 2D parameter combination. Launch `python run_explorer.py` for live arbitrary 2D solves."
+            "No precomputed offline snapshot matches this 2D parameter combination. Launch `python run_v1_solver.py` for live arbitrary 2D solves."
           );
           return;
         }
@@ -1260,21 +1260,17 @@
     }
   }
 
-  function onChapterChange(chapterNum) {
-    if (activeModelMode === "schematic_3d") return;
-    // Invalidate any in-flight request on chapter transition (Section 4.2)
-    if (solveState === "pending") {
-      var viewCtx = activeModelMode === "grounded_box_2d" ? "v1_2d" : "v1_1d";
-      invalidatePending(activeModelMode, viewCtx, null, "idle");
-    }
+  function onChapterChange(_chapterNum) {
+    // B3-R1-F2 & B3-R1-F3: unconditionally execute Section 4.2 synchronous invalidation barrier
+    // on EVERY chapter navigation (regardless of solveState: ready, pending, error, or idle)
+    // and transition destination view cleanly to 3D schematic so the Iceberg chapter is unobstructed.
+    invalidatePending("schematic_3d", "3d_schematic", null, "idle");
   }
 
   function onExploreFreelyToggle(_isFree) {
-    if (activeModelMode === "schematic_3d") return;
-    if (solveState === "pending") {
-      var viewCtx = activeModelMode === "grounded_box_2d" ? "v1_2d" : "v1_1d";
-      invalidatePending(activeModelMode, viewCtx, null, "idle");
-    }
+    // B3-R1-F2 & B3-R1-F3: unconditionally execute Section 4.2 synchronous invalidation barrier
+    // on Explore Freely transitions (regardless of solveState) and return cleanly to 3D schematic.
+    invalidatePending("schematic_3d", "3d_schematic", null, "idle");
   }
 
   // --- Event Binding ---

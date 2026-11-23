@@ -22,8 +22,12 @@ from __future__ import annotations
 
 import http.server
 import os
+import socket
+import subprocess
 import sys
+import tempfile
 import threading
+import time
 import unittest
 from pathlib import Path
 
@@ -575,6 +579,241 @@ class V1ExplorerBrowserIntegrationTests(unittest.TestCase):
                 self.assertEqual(errors, [], f"Mobile errors at {vp}: {errors}")
             finally:
                 ctx.close()
+
+    def test_b3_r1_f1_documented_run_v1_solver_subprocess_live_arbitrary_2d(self):
+        """B3-R1-F1 regression: subprocess launch of documented `python run_v1_solver.py` exposes live editable 2D solver."""
+        launcher = REPO_ROOT / "run_v1_solver.py"
+        self.assertTrue(launcher.exists(), "Missing documented live V1-B launcher run_v1_solver.py")
+
+        # Verify launcher preserves zero direct physics/P2 imports
+        launcher_src = launcher.read_text(encoding="utf-8")
+        for forbidden in ("electrostatics_baseline", "electrostatics_numerics", "scipy", "p2_"):
+            self.assertNotIn(forbidden, launcher_src)
+
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.bind(("127.0.0.1", 0))
+            port = s.getsockname()[1]
+
+        env = {k: v for k, v in os.environ.items() if k != "PYTHONPATH"}
+        env["PYTHONPATH"] = ""
+
+        with tempfile.TemporaryDirectory() as tmp_cwd:
+            proc = subprocess.Popen(
+                [sys.executable, str(launcher), "--host", "127.0.0.1", "--port", str(port), "--no-browser"],
+                cwd=tmp_cwd,
+                env=env,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            try:
+                # Wait for HTTP server socket to accept connections
+                deadline = time.monotonic() + 8.0
+                ready = False
+                while time.monotonic() < deadline:
+                    if proc.poll() is not None:
+                        out_err = (proc.stderr.read() if proc.stderr else b"").decode("utf-8", errors="replace")
+                        self.fail(f"run_v1_solver.py exited prematurely with {proc.returncode}: {out_err}")
+                    try:
+                        with socket.create_connection(("127.0.0.1", port), timeout=0.25):
+                            ready = True
+                            break
+                    except OSError:
+                        time.sleep(0.05)
+                self.assertTrue(ready, "run_v1_solver.py did not bind within 8 seconds")
+
+                url = f"http://127.0.0.1:{port}/index.html"
+                ctx, page, errors = self._open_page(url)
+                try:
+                    page.click("#tab-btn-solver")
+                    page.click("#v1-mode-2d")
+                    self._wait_solve_state(page, "ready")
+
+                    state = page.evaluate("() => window.__v1SolverUI.getState()")
+                    self.assertEqual(state["transportMode"], "live")
+                    self.assertTrue(page.locator("#v1-offline-banner").is_hidden())
+                    for editable_id in ("#v1-2d-vleft", "#v1-2d-vright", "#v1-2d-gap", "#v1-2d-cy", "#v1-2d-probe-x", "#v1-2d-probe-y"):
+                        self.assertTrue(page.locator(editable_id).is_enabled(), f"{editable_id} must be editable under run_v1_solver.py")
+
+                    # Apply non-preset arbitrary 2D voltage (12500 V) and confirm live solve succeeds
+                    page.fill("#v1-2d-vleft", "12500")
+                    page.dispatch_event("#v1-2d-vleft", "input")
+                    self._wait_solve_state(page, "ready")
+                    rendered_txt = page.locator("#v1-2d-rendered-params-text").inner_text()
+                    self.assertIn("VL=12500 V", rendered_txt)
+                    self.assertIn("[LIVE SOLVE]", rendered_txt)
+                    self.assertEqual(errors, [], f"Unexpected page errors under run_v1_solver.py: {errors}")
+                finally:
+                    ctx.close()
+            finally:
+                proc.terminate()
+                try:
+                    proc.wait(timeout=5.0)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    proc.wait(timeout=5.0)
+                if proc.stdout:
+                    proc.stdout.close()
+                if proc.stderr:
+                    proc.stderr.close()
+
+    def test_b3_r1_f2_ready_state_chapter_and_explore_freely_invalidation_and_reentry(self):
+        """B3-R1-F2 regression: ready-state 2D -> chapter navigation and Explore Freely always invalidate, hide 2D overlay, and allow clean re-entry."""
+        url = f"http://127.0.0.1:{self.live_port}/index.html"
+        ctx, page, errors = self._open_page(url)
+        try:
+            # 1. Reach READY state in 2D mode
+            page.click("#tab-btn-solver")
+            page.click("#v1-mode-2d")
+            self._wait_solve_state(page, "ready")
+            gen_before_ch = page.evaluate("() => window.__v1SolverUI.getState().clientStateGeneration")
+            self.assertTrue(page.locator("#v1-2d-viewport").is_visible())
+
+            # 2. Navigate to Chapter 3 while in READY state -> must increment generation, clear readouts, hide 2D viewport, restore 3D forces
+            page.click("button.chapter-step-btn[data-chapter='2']")
+            page.wait_for_timeout(80)
+            st_after_ch = page.evaluate("() => window.__v1SolverUI.getState()")
+            self.assertGreater(st_after_ch["clientStateGeneration"], gen_before_ch)
+            self.assertEqual(st_after_ch["activeModelMode"], "schematic_3d")
+            self.assertEqual(st_after_ch["activeViewContext"], "3d_schematic")
+            self.assertEqual(st_after_ch["solveState"], "idle")
+            self.assertIsNone(st_after_ch["lastRenderedResponse"])
+            self.assertTrue(page.locator("#v1-2d-viewport").is_hidden())
+            self.assertEqual(page.locator("#v1-2d-fx-left").inner_text(), "—")
+            self.assertTrue(page.evaluate("() => window.__explorer.forceGroup.visible"))
+
+            # 3. Clean re-entry into 2D mode -> READY
+            page.click("#tab-btn-solver")
+            page.click("#v1-mode-2d")
+            self._wait_solve_state(page, "ready")
+            gen_before_free = page.evaluate("() => window.__v1SolverUI.getState().clientStateGeneration")
+            self.assertTrue(page.locator("#v1-2d-viewport").is_visible())
+            self.assertFalse(page.evaluate("() => window.__explorer.forceGroup.visible"))
+
+            # 4. Enter Explore Freely while in READY state -> must increment generation, clear readouts, hide 2D viewport
+            page.click("#guide-btn-free")
+            page.wait_for_timeout(80)
+            st_after_free = page.evaluate("() => window.__v1SolverUI.getState()")
+            self.assertGreater(st_after_free["clientStateGeneration"], gen_before_free)
+            self.assertEqual(st_after_free["activeModelMode"], "schematic_3d")
+            self.assertEqual(st_after_free["activeViewContext"], "3d_schematic")
+            self.assertEqual(st_after_free["solveState"], "idle")
+            self.assertIsNone(st_after_free["lastRenderedResponse"])
+            self.assertTrue(page.locator("#v1-2d-viewport").is_hidden())
+            self.assertEqual(page.locator("#v1-2d-fx-left").inner_text(), "—")
+
+            # 5. Clean re-entry into 1D mode from Explore Freely -> READY
+            page.click("#tab-btn-solver")
+            page.click("#v1-mode-1d")
+            self._wait_solve_state(page, "ready")
+            self.assertEqual(page.evaluate("() => window.__v1SolverUI.getState().activeModelMode"), "parallel_plate_1d")
+            self.assertNotEqual(page.locator("#v1-1d-e-field").inner_text(), "—")
+
+            self.assertEqual(errors, [], f"Unexpected page errors: {errors}")
+        finally:
+            ctx.close()
+
+    def test_b3_r1_f3_chapter5_wave_exit_direct_chapter_and_explore_freely_no_idle_hang(self):
+        """B3-R1-F3 regression: exiting Chapter 5 wave mode via direct toggle, chapter switch, or Explore Freely never self-cancels into permanent idle."""
+        url = f"http://127.0.0.1:{self.live_port}/index.html"
+        ctx, page, errors = self._open_page(url)
+        try:
+            # Instrument fetch counter to detect any stray/self-cancelled /api/v1/solve calls
+            page.evaluate("""() => {
+              window.__origFetchF3 = window.fetch.bind(window);
+              window.__solveFetchCount = 0;
+              window.__heldF3 = [];
+              window.__holdNextF3 = false;
+              window.fetch = function(input, init) {
+                const urlStr = typeof input === 'string' ? input : input.url;
+                if (urlStr.includes('/api/v1/solve')) {
+                  window.__solveFetchCount += 1;
+                  if (window.__holdNextF3) {
+                    window.__holdNextF3 = false;
+                    return new Promise((resolve, reject) => {
+                      window.__heldF3.push({ resolve, reject });
+                    });
+                  }
+                }
+                return window.__origFetchF3(input, init);
+              };
+            }""")
+
+            # Scenario A: On Chapter 5, hold an in-flight 2D solve, toggle wave ON (cancels old solve), then toggle wave OFF directly -> single recovery solve reaches READY
+            page.click("button.chapter-step-btn[data-chapter='4']")
+            page.click("#tab-btn-solver")
+            page.evaluate("() => { window.__holdNextF3 = true; }")
+            page.click("#v1-mode-2d")
+            page.wait_for_function("() => window.__heldF3.length === 1")
+
+            page.click("#btn-toggle-wave-contrast")
+            page.wait_for_timeout(50)
+            self.assertTrue(page.locator("#scalar-wave-badge").is_visible())
+            self.assertTrue(page.locator("#v1-2d-viewport").is_hidden())
+
+            # Release stale held solve as error -> must be ignored
+            page.evaluate("""() => {
+              const h = window.__heldF3.shift();
+              h.resolve(new Response(JSON.stringify({ error: { code: 'STALE_WAVE', message: 'stale' } }), {
+                status: 500, headers: { 'Content-Type': 'application/json' }
+              }));
+            }""")
+
+            # Toggle wave OFF directly on Chapter 5 -> must dispatch exactly 1 fresh recovery solve and reach READY
+            page.evaluate("() => { window.__solveFetchCount = 0; }")
+            page.click("#btn-toggle-wave-contrast")
+            self._wait_solve_state(page, "ready")
+            self.assertEqual(page.evaluate("() => window.__solveFetchCount"), 1)
+            self.assertTrue(page.locator("#scalar-wave-badge").is_hidden())
+            self.assertTrue(page.locator("#v1-2d-viewport").is_visible())
+            self.assertNotEqual(page.locator("#v1-2d-fx-left").inner_text(), "—")
+
+            # Scenario B: Chapter 5 wave ON (from active 2D) -> navigate to Chapter 3 -> ZERO stray cancelled solves, clean 3D view, clean 2D re-entry
+            page.click("#btn-toggle-wave-contrast")
+            page.wait_for_timeout(40)
+            self.assertTrue(page.locator("#scalar-wave-badge").is_visible())
+
+            page.evaluate("() => { window.__solveFetchCount = 0; }")
+            page.click("button.chapter-step-btn[data-chapter='2']")
+            page.wait_for_timeout(80)
+            self.assertEqual(page.evaluate("() => window.__solveFetchCount"), 0, "Wave->Chapter must not dispatch a self-cancelled solve")
+            self.assertTrue(page.locator("#scalar-wave-badge").is_hidden())
+            self.assertTrue(page.locator("#v1-2d-viewport").is_hidden())
+            self.assertTrue(page.evaluate("() => window.__explorer.forceGroup.visible"))
+            self.assertEqual(page.evaluate("() => window.__v1SolverUI.getState().activeModelMode"), "schematic_3d")
+
+            # Re-enter 2D cleanly after Wave->Chapter
+            page.click("#tab-btn-solver")
+            page.click("#v1-mode-2d")
+            self._wait_solve_state(page, "ready")
+            self.assertTrue(page.locator("#v1-2d-viewport").is_visible())
+
+            # Scenario C: Chapter 5 wave ON (from active 2D) -> Explore Freely -> ZERO stray cancelled solves, clean 3D sandbox, clean 2D re-entry
+            page.click("button.chapter-step-btn[data-chapter='4']")
+            page.click("#tab-btn-solver")
+            page.click("#v1-mode-2d")
+            self._wait_solve_state(page, "ready")
+            page.click("#btn-toggle-wave-contrast")
+            page.wait_for_timeout(40)
+            self.assertTrue(page.locator("#scalar-wave-badge").is_visible())
+
+            page.evaluate("() => { window.__solveFetchCount = 0; }")
+            page.click("#guide-btn-free")
+            page.wait_for_timeout(80)
+            self.assertEqual(page.evaluate("() => window.__solveFetchCount"), 0, "Wave->Explore Freely must not dispatch a self-cancelled solve")
+            self.assertTrue(page.locator("#scalar-wave-badge").is_hidden())
+            self.assertTrue(page.locator("#v1-2d-viewport").is_hidden())
+            self.assertEqual(page.evaluate("() => window.__v1SolverUI.getState().activeModelMode"), "schematic_3d")
+
+            # Re-enter 2D cleanly after Wave->Explore Freely
+            page.click("#tab-btn-solver")
+            page.click("#v1-mode-2d")
+            self._wait_solve_state(page, "ready")
+            self.assertTrue(page.locator("#v1-2d-viewport").is_visible())
+            self.assertNotEqual(page.locator("#v1-2d-fx-left").inner_text(), "—")
+
+            self.assertEqual(errors, [], f"Unexpected page errors: {errors}")
+        finally:
+            ctx.close()
 
 
 if __name__ == "__main__":
