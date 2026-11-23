@@ -12,8 +12,8 @@
   <!-- Header / Navigation Bar -->
   <header class="app-header" role="banner">
     <div class="header-left">
-      <h1 class="app-title">Propulsion Explorer <span class="badge-version">V0.2</span></h1>
-      <p class="app-subtitle">Scalar Wave Viz — Learn Physics Backwards (3D Laboratory)</p>
+      <h1 class="app-title">Propulsion Explorer <span class="badge-version">V1</span></h1>
+      <p class="app-subtitle">Scalar Wave Viz — Interactive 3D Lab &amp; Validated P0/P1 Solver</p>
     </div>
     <div class="header-center">
       <span class="provenance-pill pill-provisional" id="global-provenance-badge" title="This scene is an illustrative educational 3D model. Unverified whole-body thrust is not established.">
@@ -175,6 +175,34 @@
         <span class="badge-sub">Toy Equation: &nabla;<sup>2</sup>&psi; &minus; (1/c<sup>2</sup>)&part;<sub>t</sub><sup>2</sup>&psi; = 0 (Vector streamlines hidden)</span>
         <span class="badge-disclaimer">Physical capacitor model hidden &bull; Abstract reference space &bull; NOT emitted by or coupled to capacitor apparatus &bull; No thrust</span>
       </div>
+
+      <!-- Dedicated Validated 2D Grounded-Box Cross-Section Viewport (V1-B Slice B3) -->
+      <section id="v1-2d-viewport" class="v1-2d-viewport hidden" role="region" aria-label="Validated 2D Grounded-Box Cross-Section Benchmark Viewport">
+        <div class="v1-2d-viewport-header">
+          <div class="v1-2d-title-group">
+            <span class="provenance-pill pill-established">ESTABLISHED MODEL</span>
+            <strong class="v1-2d-title">2D Grounded-Box Benchmark Cross-Section (N/m)</strong>
+          </div>
+          <span class="v1-2d-separation-note">Separate from 3D Exodus schematic &bull; 3D force arrows hidden &bull; Whole-body thrust: NOT MEASURED / NOT ESTABLISHED</span>
+        </div>
+        <div class="v1-2d-canvas-stage">
+          <div class="v1-2d-canvas-wrap">
+            <canvas id="v1-2d-canvas" width="520" height="520" aria-label="2D electrostatic potential heatmap, vacuum electric field vectors, and N/m force budget cross-section"></canvas>
+            <div id="v1-2d-canvas-status" class="v1-2d-canvas-status hidden" role="status" aria-live="polite">Computing 2D field...</div>
+          </div>
+          <div class="v1-2d-colorbar-row">
+            <span class="v1-2d-cb-label" id="v1-2d-cb-min">-500 V</span>
+            <div class="v1-2d-colorbar" aria-hidden="true"></div>
+            <span class="v1-2d-cb-label" id="v1-2d-cb-max">+500 V</span>
+          </div>
+          <div class="v1-2d-canvas-legend" id="v1-2d-canvas-legend">
+            <span><i class="v1-dot v1-dot-left"></i> Left Electrode (F<sub>L</sub>, N/m)</span>
+            <span><i class="v1-dot v1-dot-right"></i> Right Electrode (F<sub>R</sub>, N/m)</span>
+            <span><i class="v1-dot v1-dot-box"></i> Enclosure Reaction (F<sub>enc</sub>, N/m)</span>
+            <span><i class="v1-dot v1-dot-probe"></i> Probe [x, y] (click canvas when live)</span>
+          </div>
+        </div>
+      </section>
     </div>
 
     <!-- RIGHT PANEL: Interactive Controls, Science Ledger, and Inspector -->
@@ -185,6 +213,7 @@
         <button class="tab-btn" data-tab="tab-ledger" role="tab" aria-selected="false" id="tab-btn-ledger">Force Ledger</button>
         <button class="tab-btn" data-tab="tab-sandbox" role="tab" aria-selected="false" id="tab-btn-sandbox">What-If Sandbox</button>
         <button class="tab-btn" data-tab="tab-inspector" role="tab" aria-selected="false" id="tab-btn-inspector">Inspector</button>
+        <button class="tab-btn" data-tab="tab-solver" role="tab" aria-selected="false" id="tab-btn-solver">V1 Solver</button>
       </nav>
 
       <!-- Tab 1: Layers & Display Toggles -->
@@ -405,6 +434,274 @@
         </div>
       </section>
 
+      <!-- Tab 5: Validated P0/P1 Interactive Solver (V1-B Slice B3) -->
+      <section class="tab-panel" id="tab-solver" role="tabpanel" aria-labelledby="tab-btn-solver">
+        <div class="panel-card v1-card">
+          <div class="card-header-with-badge">
+            <h2 class="card-title">Validated P0/P1 Solver (V1)</h2>
+            <span class="provenance-pill pill-provisional" id="v1-mode-epistemic-badge">PROVISIONAL ILLUSTRATIVE SCENE</span>
+          </div>
+          <p class="card-desc">Switch between the illustrative 3D Exodus scene and validated conventional P0/P1 vacuum electrostatic solvers.</p>
+
+          <!-- Mode Selector -->
+          <div class="v1-mode-switcher" role="radiogroup" aria-label="Explorer Physics Model Mode">
+            <button type="button" class="v1-mode-btn active" id="v1-mode-schematic" data-v1-mode="schematic_3d" role="radio" aria-checked="true">3D Schematic</button>
+            <button type="button" class="v1-mode-btn" id="v1-mode-1d" data-v1-mode="parallel_plate_1d" role="radio" aria-checked="false">1D Parallel Plate</button>
+            <button type="button" class="v1-mode-btn" id="v1-mode-2d" data-v1-mode="grounded_box_2d" role="radio" aria-checked="false">2D Grounded Box</button>
+          </div>
+
+          <!-- Transport & Lifecycle Status Row -->
+          <div class="v1-status-row">
+            <span class="v1-pill v1-pill-transport" id="v1-transport-badge">LIVE BRIDGE READY</span>
+            <span class="v1-pill v1-pill-state" id="v1-solve-state" data-solve-state="idle">IDLE</span>
+          </div>
+
+          <!-- Offline Fallback Banner -->
+          <div id="v1-offline-banner" class="v1-banner v1-banner-offline hidden" role="status" aria-live="polite">
+            <div class="v1-banner-head">
+              <strong>SOLVER BRIDGE OFFLINE</strong>
+              <button type="button" id="v1-btn-retry-live" class="btn btn-sm btn-secondary">Retry Live</button>
+            </div>
+            <p class="v1-banner-text">Using accepted B2 offline reference snapshots for 2D presets (arbitrary 2D parameter changes locked) and closed-form IEEE-754 evaluation for 1D parallel plates. Run <code>python run_v1_solver.py</code> for live arbitrary 2D solves.</p>
+          </div>
+
+          <!-- Current Request Error Banner -->
+          <div id="v1-error-banner" class="v1-banner v1-banner-error hidden" role="alert" aria-live="assertive">
+            <strong id="v1-error-title">Solver Request Error</strong>
+            <p id="v1-error-message" class="v1-banner-text"></p>
+          </div>
+
+          <!-- Dielectric Proxy Notice -->
+          <div class="v1-proxy-notice" id="v1-eps-proxy-notice">
+            <span class="v1-proxy-badge" id="v1-eps-proxy-badge">VISUAL PROXY ONLY</span>
+            <span>The sandbox dielectric &epsilon;<sub>r</sub> slider adjusts 3D visual opacity only; P0/P1 solvers model vacuum (&epsilon;<sub>r</sub> = 1.0, &epsilon;<sub>0</sub> = 8.8541878188&times;10<sup>&minus;12</sup> F/m).</span>
+          </div>
+        </div>
+
+        <!-- Mode Hint for Schematic 3D -->
+        <div class="panel-card v1-card" id="v1-panel-schematic">
+          <p class="card-desc">Currently viewing the <strong>provisional 3D Exodus schematic</strong>. Select <strong>1D Parallel Plate</strong> or <strong>2D Grounded Box</strong> above to inspect validated P0/P1 electrostatic calculations.</p>
+        </div>
+
+        <!-- 1D Analytic Parallel-Plate Panel -->
+        <div class="panel-card v1-card hidden" id="v1-panel-1d">
+          <div class="card-header-with-badge">
+            <h3 class="inner-title">1D Ideal Parallel-Plate Benchmark</h3>
+            <span class="provenance-pill pill-established">ESTABLISHED MODEL</span>
+          </div>
+          <p class="card-desc">Vacuum planar plates neglecting edge fringing (<i>E</i> = <i>V</i>/<i>d</i>, <i>P</i> = &frac12;&epsilon;<sub>0</sub><i>E</i><sup>2</sup>, net pair force = 0.0 N).</p>
+
+          <div class="slider-control">
+            <div class="slider-header">
+              <label for="v1-1d-voltage" class="slider-label">Applied Voltage (&Delta;<i>V</i>):</label>
+              <span class="slider-value" id="v1-1d-voltage-val">1000 V</span>
+            </div>
+            <input type="range" id="v1-1d-voltage" min="0" max="50000" step="100" value="1000" class="input-range">
+          </div>
+
+          <div class="slider-control">
+            <div class="slider-header">
+              <label for="v1-1d-gap" class="slider-label">Plate Gap (<i>d</i>):</label>
+              <span class="slider-value" id="v1-1d-gap-val">10.0 mm (0.0100 m)</span>
+            </div>
+            <input type="range" id="v1-1d-gap" min="5" max="200" step="1" value="10" class="input-range">
+          </div>
+
+          <div class="slider-control">
+            <div class="slider-header">
+              <label for="v1-1d-area" class="slider-label">Plate Area (<i>A</i>):</label>
+              <span class="slider-value" id="v1-1d-area-val">100 cm&sup2; (0.0100 m&sup2;)</span>
+            </div>
+            <input type="range" id="v1-1d-area" min="1" max="500" step="1" value="100" class="input-range">
+          </div>
+
+          <div id="v1-1d-fringing-warning" class="v1-banner v1-banner-warn hidden" role="status">
+            <strong>Fringing Warning:</strong> <span id="v1-1d-fringing-text"></span>
+          </div>
+
+          <div id="v1-1d-results" class="v1-results-box">
+            <dl class="v1-kv-grid">
+              <dt>Electric Field (<i>E</i>)</dt><dd id="v1-1d-e-field">—</dd>
+              <dt>Electrostatic Pressure (<i>P</i>)</dt><dd id="v1-1d-pressure">—</dd>
+              <dt>Force on + Plate</dt><dd id="v1-1d-force-pos">—</dd>
+              <dt>Force on &minus; Plate</dt><dd id="v1-1d-force-neg">—</dd>
+              <dt>Net Pair Force (Newton 3rd)</dt><dd id="v1-1d-net-force">—</dd>
+              <dt>Stored Field Energy (<i>U</i>)</dt><dd id="v1-1d-energy">—</dd>
+              <dt>Virtual Work |<i>F</i>| (Fixed <i>V</i>)</dt><dd id="v1-1d-vw-fixed-v">—</dd>
+              <dt>Virtual Work |<i>F</i>| (Fixed <i>Q</i>)</dt><dd id="v1-1d-vw-fixed-q">—</dd>
+              <dt>Aspect Ratio (&radic;<i>A</i>/<i>d</i>)</dt><dd id="v1-1d-aspect-ratio">—</dd>
+              <dt>Vacuum Permittivity (&epsilon;<sub>0</sub>)</dt><dd id="v1-1d-epsilon0">—</dd>
+            </dl>
+          </div>
+        </div>
+
+        <!-- 2D Grounded-Box Numerical Benchmark Panel -->
+        <div class="panel-card v1-card hidden" id="v1-panel-2d">
+          <div class="card-header-with-badge">
+            <h3 class="inner-title">2D Grounded-Box Solver (N/m)</h3>
+            <span class="provenance-pill pill-established">ESTABLISHED MODEL</span>
+          </div>
+          <p class="card-desc">Two circular conductors inside a grounded 0 V square box (2D per-unit-depth forces in N/m; NOT 3D Exodus geometry).</p>
+
+          <div class="v1-field-group">
+            <label for="v1-2d-preset" class="slider-label">Validated Benchmark Preset:</label>
+            <select id="v1-2d-preset" class="v1-select">
+              <option value="p0_p1_canonical_40mm">P0/P1 Canonical 40 mm (+500 V / -500 V)</option>
+              <option value="asymmetric_hv_80mm_bench">Asymmetric HV 80 mm (-20 kV / 0 V)</option>
+              <option value="bipolar_hv_80mm_bench">Bipolar HV 80 mm (-10 kV / +10 kV)</option>
+            </select>
+          </div>
+
+          <div class="v1-field-group">
+            <label for="v1-2d-grid-n" class="slider-label" id="v1-2d-grid-n-label">Grid Resolution (<i>n</i> &times; <i>n</i>):</label>
+            <select id="v1-2d-grid-n" class="v1-select">
+              <option value="41">41 &times; 41 (Coarse)</option>
+              <option value="81">81 &times; 81 (Medium)</option>
+              <option value="101" selected>101 &times; 101 (Fine Default)</option>
+            </select>
+          </div>
+
+          <div id="v1-2d-offline-lock-note" class="v1-banner v1-banner-warn hidden" role="status">
+            <strong>Offline Snapshot Lock:</strong> Arbitrary 2D voltage, gap, off-axis, and probe controls are disabled offline. Showing exact precomputed B2 snapshot parameters below.
+          </div>
+
+          <div class="slider-control">
+            <div class="slider-header">
+              <label for="v1-2d-vleft" class="slider-label">Left Electrode (<i>V</i><sub>L</sub>):</label>
+              <span class="slider-value" id="v1-2d-vleft-val">+500 V</span>
+            </div>
+            <input type="range" id="v1-2d-vleft" min="-50000" max="50000" step="500" value="500" class="input-range">
+          </div>
+
+          <div class="slider-control">
+            <div class="slider-header">
+              <label for="v1-2d-vright" class="slider-label">Right Electrode (<i>V</i><sub>R</sub>):</label>
+              <span class="slider-value" id="v1-2d-vright-val">-500 V</span>
+            </div>
+            <input type="range" id="v1-2d-vright" min="-50000" max="50000" step="500" value="-500" class="input-range">
+          </div>
+
+          <div class="slider-control">
+            <div class="slider-header">
+              <label for="v1-2d-gap" class="slider-label">Surface Gap (<i>d</i>):</label>
+              <span class="slider-value" id="v1-2d-gap-val">10.0 mm</span>
+            </div>
+            <input type="range" id="v1-2d-gap" min="6" max="16" step="0.5" value="10" class="input-range">
+          </div>
+
+          <div class="slider-control">
+            <div class="slider-header">
+              <label for="v1-2d-cy" class="slider-label">Off-Axis Vertical Offset (<i>c</i><sub>y</sub>):</label>
+              <span class="slider-value" id="v1-2d-cy-val">0.0 mm</span>
+            </div>
+            <input type="range" id="v1-2d-cy" min="-5" max="5" step="0.5" value="0" class="input-range">
+          </div>
+
+          <div class="v1-probe-inputs">
+            <div class="v1-field-group">
+              <label for="v1-2d-probe-x" class="slider-label">Probe <i>x</i> (mm):</label>
+              <input type="number" id="v1-2d-probe-x" class="v1-number-input" step="0.5" value="0">
+            </div>
+            <div class="v1-field-group">
+              <label for="v1-2d-probe-y" class="slider-label">Probe <i>y</i> (mm):</label>
+              <input type="number" id="v1-2d-probe-y" class="v1-number-input" step="0.5" value="0">
+            </div>
+          </div>
+
+          <button type="button" id="v1-2d-btn-study" class="btn btn-primary btn-block" style="margin-top:0.5rem;">
+            Run (41, 81, 101) Convergence Study
+          </button>
+
+          <!-- Echoed Frozen/Solved Parameters (Prevents Stale-Control Impersonation) -->
+          <div class="v1-rendered-params" id="v1-2d-rendered-params">
+            <strong>Rendered Solution Parameters:</strong> <span id="v1-2d-rendered-params-text">—</span>
+          </div>
+
+          <!-- Force Closure Verdict Banner -->
+          <div id="v1-2d-closure-banner" class="v1-banner hidden" role="status" aria-live="polite">
+            <div class="v1-banner-head">
+              <strong id="v1-2d-closure-status-label">—</strong>
+            </div>
+            <p id="v1-2d-closure-verdict" class="v1-banner-text"></p>
+            <p id="v1-2d-continuum-note" class="v1-banner-subtext"></p>
+          </div>
+
+          <!-- 6-Component Force Budget Table (N/m) -->
+          <div id="v1-2d-results" class="v1-results-box">
+            <h4 class="v1-subhead">6-Component Force Budget (N/m)</h4>
+            <div class="ledger-table-wrapper">
+              <table class="ledger-table v1-table" id="v1-2d-force-table" aria-label="2D 6-Component Electrostatic Force Budget in N/m">
+                <thead>
+                  <tr>
+                    <th scope="col">Component</th>
+                    <th scope="col">F<sub>x</sub> (N/m)</th>
+                    <th scope="col">F<sub>y</sub> (N/m)</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr><th scope="row">Left Electrode</th><td id="v1-2d-fx-left">—</td><td id="v1-2d-fy-left">—</td></tr>
+                  <tr><th scope="row">Right Electrode</th><td id="v1-2d-fx-right">—</td><td id="v1-2d-fy-right">—</td></tr>
+                  <tr><th scope="row">Enclosure Reaction</th><td id="v1-2d-fx-box">—</td><td id="v1-2d-fy-box">—</td></tr>
+                  <tr class="subtotal-row"><th scope="row">Net Residual (F<sub>net</sub>)</th><td id="v1-2d-fx-net">—</td><td id="v1-2d-fy-net">—</td></tr>
+                </tbody>
+              </table>
+            </div>
+            <dl class="v1-kv-grid" style="margin-top:0.5rem;">
+              <dt>|F<sub>net</sub>| Closure Norm</dt><dd id="v1-2d-fnorm-net">—</dd>
+              <dt>Relative Closure Residual</dt><dd id="v1-2d-rel-residual">—</dd>
+              <dt>Single-Solve Threshold (&lt;)</dt><dd id="v1-2d-tol">1.000e-4 N/m</dd>
+            </dl>
+
+            <h4 class="v1-subhead" style="margin-top:0.75rem;">Probe &amp; Numerical Diagnostics</h4>
+            <dl class="v1-kv-grid" id="v1-2d-probe-card">
+              <dt>Laplace Stencil Defect (V)</dt><dd id="v1-2d-stencil-defect">—</dd>
+              <dt>Probe Status</dt><dd id="v1-2d-probe-status">—</dd>
+              <dt>Requested / Sampled Probe</dt><dd id="v1-2d-probe-coords">—</dd>
+              <dt>Sampled Node Potential (&Phi;)</dt><dd id="v1-2d-probe-phi">—</dd>
+              <dt>Probe E<sub>x</sub> (V/m)</dt><dd id="v1-2d-probe-ex">—</dd>
+              <dt>Probe E<sub>y</sub> (V/m)</dt><dd id="v1-2d-probe-ey">—</dd>
+              <dt>Force Mesh Sensitivity</dt><dd id="v1-2d-mesh-sens-status">NOT_ASSESSED</dd>
+              <dt>Probe Stability</dt><dd id="v1-2d-probe-stab-status">NOT_ASSESSED</dd>
+            </dl>
+          </div>
+
+          <!-- Multi-Grid Convergence Study Card -->
+          <div id="v1-2d-study-card" class="v1-results-box hidden" style="margin-top:0.75rem;">
+            <h4 class="v1-subhead">Multi-Grid Convergence Study (41, 81, 101)</h4>
+            <p class="v1-banner-subtext" id="v1-2d-study-order-status">Observed Order Status: NOT_COMPUTED_NONUNIFORM_H_RATIO</p>
+            <div class="ledger-table-wrapper">
+              <table class="ledger-table v1-table" aria-label="Multi-Grid Convergence Study Rows">
+                <thead>
+                  <tr>
+                    <th scope="col">n</th>
+                    <th scope="col">h (mm)</th>
+                    <th scope="col">F<sub>Lx</sub> (N/m)</th>
+                    <th scope="col">|F<sub>net</sub>| (N/m)</th>
+                  </tr>
+                </thead>
+                <tbody id="v1-2d-study-rows"></tbody>
+              </table>
+            </div>
+            <p class="v1-banner-subtext" id="v1-2d-study-diffs" style="margin-top:0.4rem;"></p>
+            <p class="v1-banner-subtext" id="v1-2d-study-thresholds"></p>
+          </div>
+        </div>
+
+        <!-- Shared Canonical Provenance & Uncertainty Card -->
+        <div class="panel-card v1-card hidden" id="v1-provenance-card">
+          <h4 class="v1-subhead">Canonical Provenance &amp; Model Limits</h4>
+          <dl class="v1-kv-grid">
+            <dt>Model ID</dt><dd id="v1-prov-model">—</dd>
+            <dt>Epistemic Label</dt><dd id="v1-prov-epistemic">—</dd>
+            <dt>Input Fingerprint</dt><dd id="v1-prov-fingerprint" class="v1-mono-wrap">—</dd>
+            <dt>Source HEAD SHA</dt><dd id="v1-prov-source-sha" class="v1-mono-wrap">—</dd>
+            <dt>Frozen Kernel SHA-1</dt><dd id="v1-prov-kernels" class="v1-mono-wrap">—</dd>
+            <dt>Whole-Body Thrust</dt><dd id="v1-prov-thrust">NOT MEASURED / NOT ESTABLISHED</dd>
+          </dl>
+          <div id="v1-prov-limits" class="v1-limits-list"></div>
+        </div>
+      </section>
+
       <!-- Epistemic Status Card -->
       <div class="thrust-status-card" role="note" aria-label="Whole-Body Thrust Measurement Status">
         <div class="status-header">
@@ -471,7 +768,11 @@
   <!-- Vendored Three.js and OrbitControls (100% Offline Capability) -->
   <script src="vendor/three.min.js"></script>
   <script src="vendor/OrbitControls.js"></script>
+  <!-- Accepted B2 Offline Reference Snapshots & Cross-Language Parity Runtime -->
+  <script src="v1_reference_snapshots.js"></script>
   <!-- Application Core Script -->
   <script src="explorer.js"></script>
+  <!-- V1 Interactive Solver UI Integration (Slice B3) -->
+  <script src="v1_solver_ui.js"></script>
 </body>
 </html>

@@ -382,6 +382,9 @@
 
   function shouldShowForces() {
     if (isScalarWaveContrastActive) return false;
+    if (window.__v1SolverUI && typeof window.__v1SolverUI.isComputed2DActive === 'function' && window.__v1SolverUI.isComputed2DActive()) {
+      return false;
+    }
     if (currentVoltageKV <= 0.0) return false;
     const tForces = document.getElementById('toggle-forces');
     return tForces ? tForces.checked : false;
@@ -605,6 +608,8 @@
       getComponentScreenCoords: getComponentScreenCoords,
       selectComponent: selectComponent,
       setViewPreset: setViewPreset,
+      switchTab: switchTab,
+      switchMobileTab: switchMobileTab,
       updateForceVectors: updateForceVectors,
       updateFieldLines: updateFieldLines,
       componentMeshes: componentMeshes,
@@ -1150,7 +1155,7 @@
     }
   }
 
-  function toggleScalarWaveContrast(forceState) {
+  function toggleScalarWaveContrast(forceState, opts) {
     if (typeof forceState === 'boolean') {
       isScalarWaveContrastActive = forceState;
     } else {
@@ -1175,6 +1180,10 @@
     // - Restore all scene groups according to authoritative predicates (checkboxes, active chapter, voltage)
     syncAllLayerVisibilities();
     syncWaveContrastUI();
+    const silentV1Notify = Boolean(opts && opts.silentV1Notify);
+    if (!silentV1Notify && window.__v1SolverUI && typeof window.__v1SolverUI.onScalarWaveToggle === 'function') {
+      window.__v1SolverUI.onScalarWaveToggle(isScalarWaveContrastActive);
+    }
   }
 
   function cleanMathHtml(str) {
@@ -1724,9 +1733,14 @@
     if (freeBtn) freeBtn.textContent = "🔍 Explore Freely";
 
     // Scene Synchronization:
-    // Auto-reset wave contrast if user leaves chapter 5 (V0.2-R4 / R3-F1)
+    // Auto-reset wave contrast if user leaves chapter 5 (V0.2-R4 / R3-F1).
+    // B3-R1-F3: suppress intermediate wave-exit V1 callback so onChapterChange executes one authoritative barrier.
     if (chapter.chapter !== 5 && isScalarWaveContrastActive) {
-      toggleScalarWaveContrast(false);
+      toggleScalarWaveContrast(false, { silentV1Notify: true });
+    }
+    // B3-R1-F2 / B3-R1-F3: run single authoritative synchronous V1 transition barrier BEFORE restoring chapter 3D layers.
+    if (window.__v1SolverUI && typeof window.__v1SolverUI.onChapterChange === 'function') {
+      window.__v1SolverUI.onChapterChange(chapter.chapter);
     }
 
     // A. Camera Smooth Animation
@@ -1833,8 +1847,12 @@
     if (isExploringFreely) {
       // V0.2-R6 / R5-M1: Exit abstract scalar wave view on entering Free Exploration
       // so physical geometry and sandbox layer/parameter controls are immediately usable.
+      // B3-R1-F3: suppress intermediate wave-exit V1 callback so onExploreFreelyToggle executes one authoritative barrier.
       if (isScalarWaveContrastActive) {
-        toggleScalarWaveContrast(false);
+        toggleScalarWaveContrast(false, { silentV1Notify: true });
+      }
+      if (window.__v1SolverUI && typeof window.__v1SolverUI.onExploreFreelyToggle === 'function') {
+        window.__v1SolverUI.onExploreFreelyToggle(true);
       }
       if (guideBody) {
         guideBody.innerHTML = `
