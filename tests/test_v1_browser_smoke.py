@@ -815,6 +815,146 @@ class V1ExplorerBrowserIntegrationTests(unittest.TestCase):
         finally:
             ctx.close()
 
+    def test_b3_r2_l1_schematic_mode_exits_chapter5_scalar_wave_desktop_and_mobile(self):
+        """B3-R2-L1 regression: selecting 3D Schematic exits Chapter 5 scalar-wave contrast cleanly on desktop and mobile, preserving re-entry and repeated transitions."""
+        url = f"http://127.0.0.1:{self.live_port}/index.html"
+
+        # --- Part 1: Desktop (1280x860) ---
+        ctx, page, errors = self._open_page(url, viewport={"width": 1280, "height": 860})
+        try:
+            page.evaluate("""() => {
+              window.__origFetchL1 = window.fetch.bind(window);
+              window.__solveFetchCountL1 = 0;
+              window.fetch = function(input, init) {
+                const urlStr = typeof input === 'string' ? input : input.url;
+                if (urlStr.includes('/api/v1/solve')) {
+                  window.__solveFetchCountL1 += 1;
+                }
+                return window.__origFetchL1(input, init);
+              };
+            }""")
+
+            # 1. Navigate to Chapter 5 and open V1 Solver tab
+            page.click("button.chapter-step-btn[data-chapter='4']")
+            page.click("#tab-btn-solver")
+            page.wait_for_timeout(50)
+
+            # 2. Activate Chapter 5 scalar-wave contrast toy
+            page.click("#btn-toggle-wave-contrast")
+            page.wait_for_timeout(50)
+            self.assertTrue(page.evaluate("() => window.__explorer.isScalarWaveContrastActive()"))
+            self.assertTrue(page.evaluate("() => window.__explorer.scalarWaveGroup.visible"))
+            self.assertFalse(page.evaluate("() => window.__explorer.geometryGroup.visible"))
+            self.assertTrue(page.locator("#scalar-wave-badge").is_visible())
+            self.assertEqual(page.locator("#btn-toggle-wave-contrast").get_attribute("aria-pressed"), "true")
+            self.assertEqual(page.evaluate("() => window.__v1SolverUI.getState().activeViewContext"), "scalar_wave_contrast")
+            # UI indicators must not falsely claim 3D Exodus schematic is active during wave toy view
+            self.assertEqual(page.locator("#v1-mode-schematic").get_attribute("aria-checked"), "false")
+            self.assertIn("MATHEMATICAL TOY", page.locator("#v1-mode-epistemic-badge").inner_text())
+            self.assertIn("scalar-wave contrast toy", page.locator("#v1-panel-schematic").inner_text())
+
+            # 3. Explicitly select 3D Schematic -> must cleanly exit wave toy, restore Exodus geometry, hide wave badge/group, sync indicators, zero stray solves
+            page.evaluate("() => { window.__solveFetchCountL1 = 0; }")
+            page.click("#v1-mode-schematic")
+            page.wait_for_timeout(60)
+            self.assertEqual(page.evaluate("() => window.__solveFetchCountL1"), 0)
+            self.assertFalse(page.evaluate("() => window.__explorer.isScalarWaveContrastActive()"))
+            self.assertFalse(page.evaluate("() => window.__explorer.scalarWaveGroup.visible"))
+            self.assertTrue(page.evaluate("() => window.__explorer.geometryGroup.visible"))
+            self.assertTrue(page.locator("#scalar-wave-badge").is_hidden())
+            self.assertEqual(page.locator("#btn-toggle-wave-contrast").get_attribute("aria-pressed"), "false")
+            st = page.evaluate("() => window.__v1SolverUI.getState()")
+            self.assertEqual(st["activeModelMode"], "schematic_3d")
+            self.assertEqual(st["activeViewContext"], "3d_schematic")
+            self.assertEqual(st["solveState"], "idle")
+            self.assertEqual(page.locator("#v1-mode-schematic").get_attribute("aria-checked"), "true")
+            self.assertIn("PROVISIONAL ILLUSTRATIVE SCENE", page.locator("#v1-mode-epistemic-badge").inner_text())
+            self.assertIn("provisional 3D Exodus schematic", page.locator("#v1-panel-schematic").inner_text())
+            self.assertTrue(page.locator("#v1-panel-schematic").is_visible())
+
+            # 4. Re-enter Chapter 5 scalar-wave view -> still fully functional, then toggle wave OFF directly -> returns cleanly to 3d_schematic
+            page.click("#btn-toggle-wave-contrast")
+            page.wait_for_timeout(50)
+            self.assertTrue(page.evaluate("() => window.__explorer.isScalarWaveContrastActive()"))
+            self.assertTrue(page.evaluate("() => window.__explorer.scalarWaveGroup.visible"))
+            self.assertFalse(page.evaluate("() => window.__explorer.geometryGroup.visible"))
+            self.assertTrue(page.locator("#scalar-wave-badge").is_visible())
+
+            page.click("#btn-toggle-wave-contrast")
+            page.wait_for_timeout(50)
+            self.assertFalse(page.evaluate("() => window.__explorer.isScalarWaveContrastActive()"))
+            self.assertFalse(page.evaluate("() => window.__explorer.scalarWaveGroup.visible"))
+            self.assertTrue(page.evaluate("() => window.__explorer.geometryGroup.visible"))
+            self.assertTrue(page.locator("#scalar-wave-badge").is_hidden())
+            self.assertEqual(page.evaluate("() => window.__v1SolverUI.getState().activeViewContext"), "3d_schematic")
+            self.assertEqual(page.locator("#v1-mode-schematic").get_attribute("aria-checked"), "true")
+            self.assertIn("provisional 3D Exodus schematic", page.locator("#v1-panel-schematic").inner_text())
+
+            # 5. Repeated transitions across 2D -> Wave -> 3D Schematic -> Wave -> 3D Schematic remain consistent with zero stray solves on schematic exit
+            for _ in range(2):
+                page.click("#v1-mode-2d")
+                self._wait_solve_state(page, "ready")
+                self.assertTrue(page.locator("#v1-2d-viewport").is_visible())
+
+                page.click("#btn-toggle-wave-contrast")
+                page.wait_for_timeout(40)
+                self.assertTrue(page.evaluate("() => window.__explorer.isScalarWaveContrastActive()"))
+                self.assertTrue(page.locator("#scalar-wave-badge").is_visible())
+                self.assertTrue(page.locator("#v1-2d-viewport").is_hidden())
+
+                page.evaluate("() => { window.__solveFetchCountL1 = 0; }")
+                page.click("#v1-mode-schematic")
+                page.wait_for_timeout(60)
+                self.assertEqual(page.evaluate("() => window.__solveFetchCountL1"), 0)
+                self.assertFalse(page.evaluate("() => window.__explorer.isScalarWaveContrastActive()"))
+                self.assertFalse(page.evaluate("() => window.__explorer.scalarWaveGroup.visible"))
+                self.assertTrue(page.evaluate("() => window.__explorer.geometryGroup.visible"))
+                self.assertTrue(page.locator("#scalar-wave-badge").is_hidden())
+                self.assertTrue(page.locator("#v1-2d-viewport").is_hidden())
+                self.assertEqual(page.evaluate("() => window.__v1SolverUI.getState().activeModelMode"), "schematic_3d")
+                self.assertEqual(page.evaluate("() => window.__v1SolverUI.getState().activeViewContext"), "3d_schematic")
+                self.assertEqual(page.locator("#v1-mode-schematic").get_attribute("aria-checked"), "true")
+
+            self.assertEqual(errors, [], f"Unexpected desktop page errors: {errors}")
+        finally:
+            ctx.close()
+
+        # --- Part 2: Mobile (390x844) ---
+        m_ctx, m_page, m_errors = self._open_page(url, viewport={"width": 390, "height": 844})
+        try:
+            # Enter Chapter 5 in mobile guide tab and activate wave contrast
+            m_page.click("button.chapter-step-btn[data-chapter='4']")
+            m_page.wait_for_timeout(50)
+            m_page.click("#btn-toggle-wave-contrast")
+            m_page.wait_for_timeout(50)
+            self.assertTrue(m_page.evaluate("() => window.__explorer.isScalarWaveContrastActive()"))
+            self.assertTrue(m_page.locator("#scalar-wave-badge").is_visible())
+
+            # Switch to mobile Controls tab -> V1 Solver -> click 3D Schematic
+            m_page.click("#mobile-tab-controls")
+            m_page.click("#tab-btn-solver")
+            m_page.click("#v1-mode-schematic")
+            m_page.wait_for_timeout(60)
+            self.assertFalse(m_page.evaluate("() => window.__explorer.isScalarWaveContrastActive()"))
+            self.assertFalse(m_page.evaluate("() => window.__explorer.scalarWaveGroup.visible"))
+            self.assertTrue(m_page.evaluate("() => window.__explorer.geometryGroup.visible"))
+            self.assertTrue(m_page.locator("#scalar-wave-badge").is_hidden())
+            self.assertEqual(m_page.evaluate("() => window.__v1SolverUI.getState().activeViewContext"), "3d_schematic")
+            self.assertEqual(m_page.locator("#v1-mode-schematic").get_attribute("aria-checked"), "true")
+            overflow = m_page.evaluate("() => document.documentElement.scrollWidth - window.innerWidth")
+            self.assertLessEqual(overflow, 1, f"Mobile 390px horizontal overflow after B3-R2-L1 transition: {overflow}px")
+
+            # Switch back to mobile Guide tab -> Chapter 5 wave toggle still functional
+            m_page.click("#mobile-tab-guide")
+            self.assertEqual(m_page.locator("#btn-toggle-wave-contrast").get_attribute("aria-pressed"), "false")
+            m_page.click("#btn-toggle-wave-contrast")
+            m_page.wait_for_timeout(50)
+            self.assertTrue(m_page.evaluate("() => window.__explorer.isScalarWaveContrastActive()"))
+            self.assertTrue(m_page.locator("#scalar-wave-badge").is_visible())
+            self.assertEqual(m_errors, [], f"Unexpected mobile page errors: {m_errors}")
+        finally:
+            m_ctx.close()
+
 
 if __name__ == "__main__":
     unittest.main()

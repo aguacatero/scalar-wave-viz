@@ -459,9 +459,10 @@
   }
 
   function syncModePanelsAndViewport() {
+    var isWaveContrast = (activeViewContext === "scalar_wave_contrast");
     var modeBtns = document.querySelectorAll(".v1-mode-btn");
     modeBtns.forEach(function (btn) {
-      var isAct = btn.dataset.v1Mode === activeModelMode;
+      var isAct = !isWaveContrast && (btn.dataset.v1Mode === activeModelMode);
       btn.classList.toggle("active", isAct);
       btn.setAttribute("aria-checked", isAct ? "true" : "false");
     });
@@ -470,14 +471,29 @@
     var p1d = el("v1-panel-1d");
     var p2d = el("v1-panel-2d");
     var provCard = el("v1-provenance-card");
-    if (pSch) pSch.classList.toggle("hidden", activeModelMode !== "schematic_3d");
+    if (pSch) {
+      pSch.classList.toggle("hidden", activeModelMode !== "schematic_3d");
+      var pSchDesc = pSch.querySelector(".card-desc");
+      if (pSchDesc) {
+        if (isWaveContrast) {
+          pSchDesc.innerHTML =
+            "Currently viewing the isolated <strong>Chapter 5 mathematical scalar-wave contrast toy</strong> (physical Exodus schematic hidden). Select <strong>3D Schematic</strong> above to return to the 3D Exodus scene, or choose <strong>1D Parallel Plate</strong> / <strong>2D Grounded Box</strong> for validated P0/P1 calculations.";
+        } else {
+          pSchDesc.innerHTML =
+            "Currently viewing the <strong>provisional 3D Exodus schematic</strong>. Select <strong>1D Parallel Plate</strong> or <strong>2D Grounded Box</strong> above to inspect validated P0/P1 electrostatic calculations.";
+        }
+      }
+    }
     if (p1d) p1d.classList.toggle("hidden", activeModelMode !== "parallel_plate_1d");
     if (p2d) p2d.classList.toggle("hidden", activeModelMode !== "grounded_box_2d");
-    if (provCard) provCard.classList.toggle("hidden", activeModelMode === "schematic_3d");
+    if (provCard) provCard.classList.toggle("hidden", activeModelMode === "schematic_3d" || isWaveContrast);
 
     var epBadge = el("v1-mode-epistemic-badge");
     if (epBadge) {
-      if (activeModelMode === "schematic_3d") {
+      if (isWaveContrast) {
+        epBadge.textContent = "MATHEMATICAL TOY (ISOLATED)";
+        epBadge.className = "provenance-pill pill-provisional";
+      } else if (activeModelMode === "schematic_3d") {
         epBadge.textContent = "PROVISIONAL ILLUSTRATIVE SCENE";
         epBadge.className = "provenance-pill pill-provisional";
       } else {
@@ -1230,18 +1246,20 @@
     if (mode !== "schematic_3d" && mode !== "parallel_plate_1d" && mode !== "grounded_box_2d") {
       return;
     }
-    if (mode === "schematic_3d") {
-      invalidatePending("schematic_3d", "3d_schematic", null, "idle");
-      return;
-    }
-    // If Chapter 5 scalar wave view was active, exit it cleanly when user explicitly enters a computed V1 solver mode
+    // B3-R2-L1: If Chapter 5 scalar wave view was active, exit it cleanly on EVERY explicit mode
+    // selection (including "schematic_3d", "parallel_plate_1d", and "grounded_box_2d") so 3D Exodus
+    // geometry, wave badges, and mode-panel indicators stay strictly synchronized with zero stray fetches.
     if (window.__explorer && typeof window.__explorer.isScalarWaveContrastActive === "function" && window.__explorer.isScalarWaveContrastActive()) {
       suppressWaveCallback = true;
       try {
-        window.__explorer.toggleScalarWaveContrast(false);
+        window.__explorer.toggleScalarWaveContrast(false, { silentV1Notify: true });
       } finally {
         suppressWaveCallback = false;
       }
+    }
+    if (mode === "schematic_3d") {
+      invalidatePending("schematic_3d", "3d_schematic", null, "idle");
+      return;
     }
     activeModelMode = mode;
     if (mode === "grounded_box_2d") {
@@ -1257,6 +1275,10 @@
       invalidatePending(activeModelMode, "scalar_wave_contrast", null, "idle");
     } else if (activeModelMode !== "schematic_3d") {
       scheduleV1Request("/api/v1/solve", true);
+    } else {
+      // B3-R2-L1: Restoring electrostatic view directly from Chapter 5 while in schematic_3d mode
+      // must return activeViewContext and UI indicators cleanly to 3d_schematic.
+      invalidatePending("schematic_3d", "3d_schematic", null, "idle");
     }
   }
 
