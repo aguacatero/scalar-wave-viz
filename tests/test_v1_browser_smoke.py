@@ -816,8 +816,40 @@ class V1ExplorerBrowserIntegrationTests(unittest.TestCase):
             ctx.close()
 
     def test_b3_r2_l1_schematic_mode_exits_chapter5_scalar_wave_desktop_and_mobile(self):
-        """B3-R2-L1 regression: selecting 3D Schematic exits Chapter 5 scalar-wave contrast cleanly on desktop and mobile, preserving re-entry and repeated transitions."""
+        """B3-R2-L1 / V1-B3-POLISH-R1-M1 & L1 regression: full Chapter 5 wave isolation across schematic, 1D, and 2D origins, blocked solver inputs, >200 ms post-debounce zero-fetch checks, desktop and mobile."""
         url = f"http://127.0.0.1:{self.live_port}/index.html"
+
+        def assert_wave_isolated(p, label):
+            self.assertTrue(p.evaluate("() => window.__explorer.isScalarWaveContrastActive()"), f"{label}: wave active")
+            self.assertTrue(p.evaluate("() => window.__explorer.scalarWaveGroup.visible"), f"{label}: wave group visible")
+            self.assertFalse(p.evaluate("() => window.__explorer.geometryGroup.visible"), f"{label}: 3D geometry hidden")
+            self.assertTrue(p.locator("#scalar-wave-badge").is_visible(), f"{label}: wave badge visible")
+            self.assertTrue(p.locator("#v1-2d-viewport").is_hidden(), f"{label}: 2D viewport hidden")
+            self.assertEqual(p.evaluate("() => window.__v1SolverUI.getState().activeViewContext"), "scalar_wave_contrast")
+            self.assertTrue(p.locator("#v1-panel-schematic").is_visible(), f"{label}: wave status panel visible")
+            self.assertIn("scalar-wave contrast toy", p.locator("#v1-panel-schematic").inner_text())
+            self.assertTrue(p.locator("#v1-panel-1d").is_hidden(), f"{label}: 1D panel hidden during wave")
+            self.assertTrue(p.locator("#v1-panel-2d").is_hidden(), f"{label}: 2D panel hidden during wave")
+            self.assertTrue(p.locator("#v1-provenance-card").is_hidden(), f"{label}: provenance card hidden during wave")
+            self.assertIn("MATHEMATICAL TOY", p.locator("#v1-mode-epistemic-badge").inner_text())
+            for btn_id in ("#v1-mode-schematic", "#v1-mode-1d", "#v1-mode-2d"):
+                self.assertEqual(p.locator(btn_id).get_attribute("aria-checked"), "false", f"{label}: {btn_id} unchecked")
+            for ctrl_id in ("#v1-1d-voltage", "#v1-2d-preset", "#v1-2d-grid-n", "#v1-2d-gap", "#v1-2d-btn-study"):
+                self.assertTrue(p.locator(ctrl_id).is_disabled(), f"{label}: {ctrl_id} disabled during wave")
+
+        def trigger_synthetic_solver_inputs_during_wave(p):
+            p.evaluate("""() => {
+              const v1d = document.getElementById('v1-1d-voltage');
+              if (v1d) { v1d.value = '2200'; v1d.dispatchEvent(new Event('input', { bubbles: true })); }
+              const gap2d = document.getElementById('v1-2d-gap');
+              if (gap2d) { gap2d.value = '14'; gap2d.dispatchEvent(new Event('input', { bubbles: true })); }
+              const grid2d = document.getElementById('v1-2d-grid-n');
+              if (grid2d) { grid2d.value = '81'; grid2d.dispatchEvent(new Event('change', { bubbles: true })); }
+              const preset2d = document.getElementById('v1-2d-preset');
+              if (preset2d) { preset2d.dispatchEvent(new Event('change', { bubbles: true })); }
+              const studyBtn = document.getElementById('v1-2d-btn-study');
+              if (studyBtn) { studyBtn.dispatchEvent(new MouseEvent('click', { bubbles: true })); }
+            }""")
 
         # --- Part 1: Desktop (1280x860) ---
         ctx, page, errors = self._open_page(url, viewport={"width": 1280, "height": 860})
@@ -825,39 +857,41 @@ class V1ExplorerBrowserIntegrationTests(unittest.TestCase):
             page.evaluate("""() => {
               window.__origFetchL1 = window.fetch.bind(window);
               window.__solveFetchCountL1 = 0;
+              window.__studyFetchCountL1 = 0;
               window.fetch = function(input, init) {
                 const urlStr = typeof input === 'string' ? input : input.url;
                 if (urlStr.includes('/api/v1/solve')) {
                   window.__solveFetchCountL1 += 1;
+                } else if (urlStr.includes('/api/v1/study')) {
+                  window.__studyFetchCountL1 += 1;
                 }
                 return window.__origFetchL1(input, init);
               };
             }""")
 
-            # 1. Navigate to Chapter 5 and open V1 Solver tab
+            # Navigate to Chapter 5 and open V1 Solver tab
             page.click("button.chapter-step-btn[data-chapter='4']")
             page.click("#tab-btn-solver")
             page.wait_for_timeout(50)
 
-            # 2. Activate Chapter 5 scalar-wave contrast toy
+            # === Origin 1: Schematic -> Wave -> Attempted Inputs -> Schematic & Direct Wave OFF ===
             page.click("#btn-toggle-wave-contrast")
             page.wait_for_timeout(50)
-            self.assertTrue(page.evaluate("() => window.__explorer.isScalarWaveContrastActive()"))
-            self.assertTrue(page.evaluate("() => window.__explorer.scalarWaveGroup.visible"))
-            self.assertFalse(page.evaluate("() => window.__explorer.geometryGroup.visible"))
-            self.assertTrue(page.locator("#scalar-wave-badge").is_visible())
+            assert_wave_isolated(page, "schematic->wave")
             self.assertEqual(page.locator("#btn-toggle-wave-contrast").get_attribute("aria-pressed"), "true")
-            self.assertEqual(page.evaluate("() => window.__v1SolverUI.getState().activeViewContext"), "scalar_wave_contrast")
-            # UI indicators must not falsely claim 3D Exodus schematic is active during wave toy view
-            self.assertEqual(page.locator("#v1-mode-schematic").get_attribute("aria-checked"), "false")
-            self.assertIn("MATHEMATICAL TOY", page.locator("#v1-mode-epistemic-badge").inner_text())
-            self.assertIn("scalar-wave contrast toy", page.locator("#v1-panel-schematic").inner_text())
 
-            # 3. Explicitly select 3D Schematic -> must cleanly exit wave toy, restore Exodus geometry, hide wave badge/group, sync indicators, zero stray solves
-            page.evaluate("() => { window.__solveFetchCountL1 = 0; }")
-            page.click("#v1-mode-schematic")
-            page.wait_for_timeout(60)
+            page.evaluate("() => { window.__solveFetchCountL1 = 0; window.__studyFetchCountL1 = 0; }")
+            trigger_synthetic_solver_inputs_during_wave(page)
+            page.wait_for_timeout(240)  # Exceeds 150 ms debounce window (V1-B3-POLISH-R1-L1)
             self.assertEqual(page.evaluate("() => window.__solveFetchCountL1"), 0)
+            self.assertEqual(page.evaluate("() => window.__studyFetchCountL1"), 0)
+            assert_wave_isolated(page, "schematic->wave after synthetic inputs")
+
+            page.evaluate("() => { window.__solveFetchCountL1 = 0; window.__studyFetchCountL1 = 0; }")
+            page.click("#v1-mode-schematic")
+            page.wait_for_timeout(240)  # Post-debounce verification (> 200 ms)
+            self.assertEqual(page.evaluate("() => window.__solveFetchCountL1"), 0)
+            self.assertEqual(page.evaluate("() => window.__studyFetchCountL1"), 0)
             self.assertFalse(page.evaluate("() => window.__explorer.isScalarWaveContrastActive()"))
             self.assertFalse(page.evaluate("() => window.__explorer.scalarWaveGroup.visible"))
             self.assertTrue(page.evaluate("() => window.__explorer.geometryGroup.visible"))
@@ -870,50 +904,111 @@ class V1ExplorerBrowserIntegrationTests(unittest.TestCase):
             self.assertEqual(page.locator("#v1-mode-schematic").get_attribute("aria-checked"), "true")
             self.assertIn("PROVISIONAL ILLUSTRATIVE SCENE", page.locator("#v1-mode-epistemic-badge").inner_text())
             self.assertIn("provisional 3D Exodus schematic", page.locator("#v1-panel-schematic").inner_text())
-            self.assertTrue(page.locator("#v1-panel-schematic").is_visible())
 
-            # 4. Re-enter Chapter 5 scalar-wave view -> still fully functional, then toggle wave OFF directly -> returns cleanly to 3d_schematic
+            # Direct Wave ON -> Wave OFF from schematic restores 3d_schematic cleanly
             page.click("#btn-toggle-wave-contrast")
             page.wait_for_timeout(50)
-            self.assertTrue(page.evaluate("() => window.__explorer.isScalarWaveContrastActive()"))
-            self.assertTrue(page.evaluate("() => window.__explorer.scalarWaveGroup.visible"))
-            self.assertFalse(page.evaluate("() => window.__explorer.geometryGroup.visible"))
-            self.assertTrue(page.locator("#scalar-wave-badge").is_visible())
-
+            assert_wave_isolated(page, "schematic->wave re-entry")
             page.click("#btn-toggle-wave-contrast")
             page.wait_for_timeout(50)
             self.assertFalse(page.evaluate("() => window.__explorer.isScalarWaveContrastActive()"))
-            self.assertFalse(page.evaluate("() => window.__explorer.scalarWaveGroup.visible"))
             self.assertTrue(page.evaluate("() => window.__explorer.geometryGroup.visible"))
             self.assertTrue(page.locator("#scalar-wave-badge").is_hidden())
             self.assertEqual(page.evaluate("() => window.__v1SolverUI.getState().activeViewContext"), "3d_schematic")
             self.assertEqual(page.locator("#v1-mode-schematic").get_attribute("aria-checked"), "true")
-            self.assertIn("provisional 3D Exodus schematic", page.locator("#v1-panel-schematic").inner_text())
 
-            # 5. Repeated transitions across 2D -> Wave -> 3D Schematic -> Wave -> 3D Schematic remain consistent with zero stray solves on schematic exit
-            for _ in range(2):
+            # === Origin 2: 1D -> Wave -> Attempted Inputs -> Schematic AND 1D ===
+            page.click("#v1-mode-1d")
+            self._wait_solve_state(page, "ready")
+            self.assertTrue(page.locator("#v1-panel-1d").is_visible())
+            self.assertTrue(page.locator("#v1-1d-voltage").is_enabled())
+
+            page.click("#btn-toggle-wave-contrast")
+            page.wait_for_timeout(50)
+            assert_wave_isolated(page, "1D->wave")
+
+            page.evaluate("() => { window.__solveFetchCountL1 = 0; window.__studyFetchCountL1 = 0; }")
+            trigger_synthetic_solver_inputs_during_wave(page)
+            page.wait_for_timeout(240)
+            self.assertEqual(page.evaluate("() => window.__solveFetchCountL1"), 0)
+            self.assertEqual(page.evaluate("() => window.__studyFetchCountL1"), 0)
+            assert_wave_isolated(page, "1D->wave after synthetic inputs")
+
+            # 1D -> Wave -> Schematic (zero stray fetches past 200 ms)
+            page.evaluate("() => { window.__solveFetchCountL1 = 0; window.__studyFetchCountL1 = 0; }")
+            page.click("#v1-mode-schematic")
+            page.wait_for_timeout(240)
+            self.assertEqual(page.evaluate("() => window.__solveFetchCountL1"), 0)
+            self.assertEqual(page.evaluate("() => window.__studyFetchCountL1"), 0)
+            self.assertFalse(page.evaluate("() => window.__explorer.isScalarWaveContrastActive()"))
+            self.assertTrue(page.evaluate("() => window.__explorer.geometryGroup.visible"))
+            self.assertTrue(page.locator("#scalar-wave-badge").is_hidden())
+            self.assertEqual(page.evaluate("() => window.__v1SolverUI.getState().activeModelMode"), "schematic_3d")
+            self.assertEqual(page.evaluate("() => window.__v1SolverUI.getState().activeViewContext"), "3d_schematic")
+            self.assertEqual(page.locator("#v1-mode-schematic").get_attribute("aria-checked"), "true")
+
+            # 1D -> Wave -> explicit 1D re-entry
+            page.click("#v1-mode-1d")
+            self._wait_solve_state(page, "ready")
+            page.click("#btn-toggle-wave-contrast")
+            page.wait_for_timeout(50)
+            assert_wave_isolated(page, "1D->wave before 1D re-entry")
+            page.click("#v1-mode-1d")
+            self._wait_solve_state(page, "ready")
+            self.assertFalse(page.evaluate("() => window.__explorer.isScalarWaveContrastActive()"))
+            self.assertTrue(page.locator("#scalar-wave-badge").is_hidden())
+            self.assertTrue(page.locator("#v1-panel-1d").is_visible())
+            self.assertTrue(page.locator("#v1-1d-voltage").is_enabled())
+            self.assertEqual(page.evaluate("() => window.__v1SolverUI.getState().activeViewContext"), "v1_1d")
+            self.assertEqual(page.locator("#v1-mode-1d").get_attribute("aria-checked"), "true")
+            self.assertIn("ESTABLISHED MODEL", page.locator("#v1-mode-epistemic-badge").inner_text())
+
+            # === Origin 3: 2D -> Wave -> Attempted Inputs -> Schematic AND 2D (repeated) ===
+            for cycle in range(2):
                 page.click("#v1-mode-2d")
                 self._wait_solve_state(page, "ready")
                 self.assertTrue(page.locator("#v1-2d-viewport").is_visible())
+                self.assertTrue(page.locator("#v1-panel-2d").is_visible())
+                self.assertTrue(page.locator("#v1-2d-gap").is_enabled())
 
                 page.click("#btn-toggle-wave-contrast")
-                page.wait_for_timeout(40)
-                self.assertTrue(page.evaluate("() => window.__explorer.isScalarWaveContrastActive()"))
-                self.assertTrue(page.locator("#scalar-wave-badge").is_visible())
-                self.assertTrue(page.locator("#v1-2d-viewport").is_hidden())
+                page.wait_for_timeout(50)
+                assert_wave_isolated(page, f"2D->wave cycle {cycle}")
 
-                page.evaluate("() => { window.__solveFetchCountL1 = 0; }")
-                page.click("#v1-mode-schematic")
-                page.wait_for_timeout(60)
+                page.evaluate("() => { window.__solveFetchCountL1 = 0; window.__studyFetchCountL1 = 0; }")
+                trigger_synthetic_solver_inputs_during_wave(page)
+                page.wait_for_timeout(240)
                 self.assertEqual(page.evaluate("() => window.__solveFetchCountL1"), 0)
-                self.assertFalse(page.evaluate("() => window.__explorer.isScalarWaveContrastActive()"))
-                self.assertFalse(page.evaluate("() => window.__explorer.scalarWaveGroup.visible"))
-                self.assertTrue(page.evaluate("() => window.__explorer.geometryGroup.visible"))
-                self.assertTrue(page.locator("#scalar-wave-badge").is_hidden())
-                self.assertTrue(page.locator("#v1-2d-viewport").is_hidden())
-                self.assertEqual(page.evaluate("() => window.__v1SolverUI.getState().activeModelMode"), "schematic_3d")
-                self.assertEqual(page.evaluate("() => window.__v1SolverUI.getState().activeViewContext"), "3d_schematic")
-                self.assertEqual(page.locator("#v1-mode-schematic").get_attribute("aria-checked"), "true")
+                self.assertEqual(page.evaluate("() => window.__studyFetchCountL1"), 0)
+                assert_wave_isolated(page, f"2D->wave after synthetic inputs cycle {cycle}")
+
+                if cycle == 0:
+                    # Exit to 3D Schematic -> zero stray solves past 200 ms
+                    page.evaluate("() => { window.__solveFetchCountL1 = 0; window.__studyFetchCountL1 = 0; }")
+                    page.click("#v1-mode-schematic")
+                    page.wait_for_timeout(240)
+                    self.assertEqual(page.evaluate("() => window.__solveFetchCountL1"), 0)
+                    self.assertEqual(page.evaluate("() => window.__studyFetchCountL1"), 0)
+                    self.assertFalse(page.evaluate("() => window.__explorer.isScalarWaveContrastActive()"))
+                    self.assertFalse(page.evaluate("() => window.__explorer.scalarWaveGroup.visible"))
+                    self.assertTrue(page.evaluate("() => window.__explorer.geometryGroup.visible"))
+                    self.assertTrue(page.locator("#scalar-wave-badge").is_hidden())
+                    self.assertTrue(page.locator("#v1-2d-viewport").is_hidden())
+                    self.assertEqual(page.evaluate("() => window.__v1SolverUI.getState().activeModelMode"), "schematic_3d")
+                    self.assertEqual(page.evaluate("() => window.__v1SolverUI.getState().activeViewContext"), "3d_schematic")
+                    self.assertEqual(page.locator("#v1-mode-schematic").get_attribute("aria-checked"), "true")
+                else:
+                    # Exit directly back to 2D -> reaches ready, restores 2D viewport & enabled controls
+                    page.click("#v1-mode-2d")
+                    self._wait_solve_state(page, "ready")
+                    self.assertFalse(page.evaluate("() => window.__explorer.isScalarWaveContrastActive()"))
+                    self.assertTrue(page.locator("#scalar-wave-badge").is_hidden())
+                    self.assertTrue(page.locator("#v1-2d-viewport").is_visible())
+                    self.assertTrue(page.locator("#v1-panel-2d").is_visible())
+                    self.assertTrue(page.locator("#v1-2d-gap").is_enabled())
+                    self.assertEqual(page.evaluate("() => window.__v1SolverUI.getState().activeViewContext"), "v1_2d")
+                    self.assertEqual(page.locator("#v1-mode-2d").get_attribute("aria-checked"), "true")
+                    self.assertIn("ESTABLISHED MODEL", page.locator("#v1-mode-epistemic-badge").inner_text())
 
             self.assertEqual(errors, [], f"Unexpected desktop page errors: {errors}")
         finally:
@@ -922,19 +1017,43 @@ class V1ExplorerBrowserIntegrationTests(unittest.TestCase):
         # --- Part 2: Mobile (390x844) ---
         m_ctx, m_page, m_errors = self._open_page(url, viewport={"width": 390, "height": 844})
         try:
-            # Enter Chapter 5 in mobile guide tab and activate wave contrast
-            m_page.click("button.chapter-step-btn[data-chapter='4']")
-            m_page.wait_for_timeout(50)
-            m_page.click("#btn-toggle-wave-contrast")
-            m_page.wait_for_timeout(50)
-            self.assertTrue(m_page.evaluate("() => window.__explorer.isScalarWaveContrastActive()"))
-            self.assertTrue(m_page.locator("#scalar-wave-badge").is_visible())
+            m_page.evaluate("""() => {
+              window.__origFetchMob = window.fetch.bind(window);
+              window.__mobApiCount = 0;
+              window.fetch = function(input, init) {
+                const urlStr = typeof input === 'string' ? input : input.url;
+                if (urlStr.includes('/api/v1/solve') || urlStr.includes('/api/v1/study')) {
+                  window.__mobApiCount += 1;
+                }
+                return window.__origFetchMob(input, init);
+              };
+            }""")
 
-            # Switch to mobile Controls tab -> V1 Solver -> click 3D Schematic
+            # Enter Chapter 5, open Controls -> 2D Ready, then return to Guide -> activate wave
+            m_page.click("button.chapter-step-btn[data-chapter='4']")
             m_page.click("#mobile-tab-controls")
             m_page.click("#tab-btn-solver")
+            m_page.click("#v1-mode-2d")
+            self._wait_solve_state(m_page, "ready")
+
+            m_page.click("#mobile-tab-guide")
+            m_page.click("#btn-toggle-wave-contrast")
+            m_page.wait_for_timeout(50)
+
+            # Switch to mobile Controls tab -> verify truthful wave panel & hidden 2D panel
+            m_page.click("#mobile-tab-controls")
+            assert_wave_isolated(m_page, "mobile 2D->wave")
+
+            m_page.evaluate("() => { window.__mobApiCount = 0; }")
+            trigger_synthetic_solver_inputs_during_wave(m_page)
+            m_page.wait_for_timeout(240)
+            self.assertEqual(m_page.evaluate("() => window.__mobApiCount"), 0)
+
+            # Click 3D Schematic -> zero stray solves past 200 ms, wave exited, <=1px overflow
+            m_page.evaluate("() => { window.__mobApiCount = 0; }")
             m_page.click("#v1-mode-schematic")
-            m_page.wait_for_timeout(60)
+            m_page.wait_for_timeout(240)
+            self.assertEqual(m_page.evaluate("() => window.__mobApiCount"), 0)
             self.assertFalse(m_page.evaluate("() => window.__explorer.isScalarWaveContrastActive()"))
             self.assertFalse(m_page.evaluate("() => window.__explorer.scalarWaveGroup.visible"))
             self.assertTrue(m_page.evaluate("() => window.__explorer.geometryGroup.visible"))

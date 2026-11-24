@@ -456,10 +456,39 @@
     if (isOffline) {
       sync2DSliderBounds(true);
     }
+    syncSolverControlsDisabledState();
+  }
+
+  function isScalarWaveViewActive() {
+    return (
+      activeViewContext === "scalar_wave_contrast" ||
+      Boolean(
+        window.__explorer &&
+        typeof window.__explorer.isScalarWaveContrastActive === "function" &&
+        window.__explorer.isScalarWaveContrastActive()
+      )
+    );
+  }
+
+  function syncSolverControlsDisabledState() {
+    var isWave = isScalarWaveViewActive();
+    var isOffline = (transportMode === "offline");
+    ["v1-1d-voltage", "v1-1d-gap", "v1-1d-area"].forEach(function (id) {
+      var c = el(id);
+      if (c) c.disabled = isWave;
+    });
+    ["v1-2d-preset", "v1-2d-grid-n", "v1-2d-btn-study"].forEach(function (id) {
+      var c = el(id);
+      if (c) c.disabled = isWave;
+    });
+    ["v1-2d-vleft", "v1-2d-vright", "v1-2d-gap", "v1-2d-cy", "v1-2d-probe-x", "v1-2d-probe-y"].forEach(function (id) {
+      var c = el(id);
+      if (c) c.disabled = isWave || isOffline;
+    });
   }
 
   function syncModePanelsAndViewport() {
-    var isWaveContrast = (activeViewContext === "scalar_wave_contrast");
+    var isWaveContrast = isScalarWaveViewActive();
     var modeBtns = document.querySelectorAll(".v1-mode-btn");
     modeBtns.forEach(function (btn) {
       var isAct = !isWaveContrast && (btn.dataset.v1Mode === activeModelMode);
@@ -472,21 +501,24 @@
     var p2d = el("v1-panel-2d");
     var provCard = el("v1-provenance-card");
     if (pSch) {
-      pSch.classList.toggle("hidden", activeModelMode !== "schematic_3d");
+      // V1-B3-POLISH-R1-M1: Always present the truthful wave-contrast status panel during
+      // Chapter 5 wave mode regardless of whether prior activeModelMode was schematic, 1D, or 2D.
+      pSch.classList.toggle("hidden", !(isWaveContrast || activeModelMode === "schematic_3d"));
       var pSchDesc = pSch.querySelector(".card-desc");
       if (pSchDesc) {
         if (isWaveContrast) {
           pSchDesc.innerHTML =
-            "Currently viewing the isolated <strong>Chapter 5 mathematical scalar-wave contrast toy</strong> (physical Exodus schematic hidden). Select <strong>3D Schematic</strong> above to return to the 3D Exodus scene, or choose <strong>1D Parallel Plate</strong> / <strong>2D Grounded Box</strong> for validated P0/P1 calculations.";
+            "Currently viewing the isolated <strong>Chapter 5 mathematical scalar-wave contrast toy</strong> (physical Exodus schematic and solver panels paused). Select <strong>3D Schematic</strong> above to return to the 3D Exodus scene, or choose <strong>1D Parallel Plate</strong> / <strong>2D Grounded Box</strong> for validated P0/P1 calculations.";
         } else {
           pSchDesc.innerHTML =
             "Currently viewing the <strong>provisional 3D Exodus schematic</strong>. Select <strong>1D Parallel Plate</strong> or <strong>2D Grounded Box</strong> above to inspect validated P0/P1 electrostatic calculations.";
         }
       }
     }
-    if (p1d) p1d.classList.toggle("hidden", activeModelMode !== "parallel_plate_1d");
-    if (p2d) p2d.classList.toggle("hidden", activeModelMode !== "grounded_box_2d");
+    if (p1d) p1d.classList.toggle("hidden", isWaveContrast || activeModelMode !== "parallel_plate_1d");
+    if (p2d) p2d.classList.toggle("hidden", isWaveContrast || activeModelMode !== "grounded_box_2d");
     if (provCard) provCard.classList.toggle("hidden", activeModelMode === "schematic_3d" || isWaveContrast);
+    syncSolverControlsDisabledState();
 
     var epBadge = el("v1-mode-epistemic-badge");
     if (epBadge) {
@@ -560,6 +592,11 @@
   }
 
   function scheduleV1Request(endpoint, immediate) {
+    // V1-B3-POLISH-R1-M1: Defense-in-depth — never schedule solve/study requests while
+    // Chapter 5 scalar-wave contrast remains active.
+    if (isScalarWaveViewActive()) {
+      return;
+    }
     var targetView = activeModelMode === "grounded_box_2d" ? "v1_2d" : (activeModelMode === "parallel_plate_1d" ? "v1_1d" : "3d_schematic");
     if (activeModelMode === "schematic_3d") {
       invalidatePending("schematic_3d", "3d_schematic", null, "idle");
@@ -1262,6 +1299,7 @@
       return;
     }
     activeModelMode = mode;
+    activeViewContext = mode === "grounded_box_2d" ? "v1_2d" : "v1_1d";
     if (mode === "grounded_box_2d") {
       sync2DSliderBounds(false);
     }
@@ -1274,6 +1312,7 @@
       // Section 4.2 & 6.1: Chapter 5 entry while solve/study is in flight immediately aborts & invalidates!
       invalidatePending(activeModelMode, "scalar_wave_contrast", null, "idle");
     } else if (activeModelMode !== "schematic_3d") {
+      activeViewContext = activeModelMode === "grounded_box_2d" ? "v1_2d" : "v1_1d";
       scheduleV1Request("/api/v1/solve", true);
     } else {
       // B3-R2-L1: Restoring electrostatic view directly from Chapter 5 while in schematic_3d mode
@@ -1316,7 +1355,7 @@
         if (window.location && window.location.protocol === "file:") return;
         transportMode = "live";
         syncTransportUI();
-        if (activeModelMode !== "schematic_3d") {
+        if (activeModelMode !== "schematic_3d" && !isScalarWaveViewActive()) {
           scheduleV1Request("/api/v1/solve", true);
         }
       });
@@ -1327,6 +1366,7 @@
       var input = el(id);
       if (input) {
         input.addEventListener("input", function () {
+          if (isScalarWaveViewActive()) return;
           updateSliderReadoutLabels();
           if (activeModelMode === "parallel_plate_1d") {
             scheduleV1Request("/api/v1/solve", false);
@@ -1339,6 +1379,7 @@
     var presetSel = el("v1-2d-preset");
     if (presetSel) {
       presetSel.addEventListener("change", function () {
+        if (isScalarWaveViewActive()) return;
         active2DPresetId = presetSel.value;
         sync2DSliderBounds(true);
         if (activeModelMode === "grounded_box_2d") {
@@ -1350,6 +1391,7 @@
     var gridSel = el("v1-2d-grid-n");
     if (gridSel) {
       gridSel.addEventListener("change", function () {
+        if (isScalarWaveViewActive()) return;
         sync2DSliderBounds(transportMode === "offline");
         if (activeModelMode === "grounded_box_2d") {
           scheduleV1Request("/api/v1/solve", true);
@@ -1362,6 +1404,7 @@
       var input = el(id);
       if (input) {
         input.addEventListener("input", function () {
+          if (isScalarWaveViewActive()) return;
           updateSliderReadoutLabels();
           if (activeModelMode === "grounded_box_2d" && transportMode === "live") {
             scheduleV1Request("/api/v1/solve", false);
@@ -1374,6 +1417,7 @@
     var studyBtn = el("v1-2d-btn-study");
     if (studyBtn) {
       studyBtn.addEventListener("click", function () {
+        if (isScalarWaveViewActive()) return;
         if (activeModelMode === "grounded_box_2d") {
           scheduleV1Request("/api/v1/study", true);
         }
@@ -1384,7 +1428,7 @@
     var canvas2d = el("v1-2d-canvas");
     if (canvas2d) {
       canvas2d.addEventListener("click", function (ev) {
-        if (transportMode !== "live" || !lastCanvasBounds || activeModelMode !== "grounded_box_2d") return;
+        if (isScalarWaveViewActive() || transportMode !== "live" || !lastCanvasBounds || activeModelMode !== "grounded_box_2d") return;
         var rect = canvas2d.getBoundingClientRect();
         var scaleX = canvas2d.width / Math.max(1, rect.width);
         var scaleY = canvas2d.height / Math.max(1, rect.height);
