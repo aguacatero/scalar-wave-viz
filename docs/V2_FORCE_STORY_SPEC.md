@@ -1,10 +1,12 @@
-# V2 Design Specification — Whole-Device Force Story (Revision R2 — Draft for Independent Re-Review)
+# V2 Design Specification — Whole-Device Force Story (Revision R3 — Draft for Independent Re-Review)
 
-**Status:** **IN PROGRESS — DRAFT R2 SPECIFICATION FOR INDEPENDENT RE-REVIEW (NOT YET INDEPENDENTLY ACCEPTED, NOT IMPLEMENTED, NOT MERGED).**  
+**Status:** **IN PROGRESS — DRAFT R3 SPECIFICATION FOR INDEPENDENT RE-REVIEW (NOT YET INDEPENDENTLY ACCEPTED, NOT IMPLEMENTED, NOT MERGED).**  
 **Tracking Issue:** [Issue #30](https://github.com/aguacatero/scalar-wave-viz/issues/30) (`V2 — Whole-Device Force Story`)  
 **Draft PR:** [PR #31](https://github.com/aguacatero/scalar-wave-viz/pull/31) (`OPEN`, `draft`, unmerged)  
 **Specification Branch:** `feat/v2-whole-device-force-story-spec`  
-**Prior Reviewed R1 SHA & Governing Review:** `453f7840461c7f2d1de1c2515421cc6df7c075a6` — [ChatGPT Independent R1 Review #6059541798](https://github.com/aguacatero/scalar-wave-viz/pull/31#pullrequestreview-6059541798) (`REVISE — 0 HIGH, 5 MEDIUM, 2 LOW`; remediating `V2-SPEC-R1-M1`, `M2`, `M3`, `M4`, `M5`, `L1`, `L2`)  
+**Prior Reviewed SHAs & Governing Reviews:**
+- R2 SHA `4717a60f31e04a1e7c459d3c2b14acaa8bacb0ef` — [ChatGPT Independent R2 Review #6066454553](https://github.com/aguacatero/scalar-wave-viz/pull/31#pullrequestreview-6066454553) (`REVISE — 0 HIGH, 2 MEDIUM, 1 LOW`; remediating `V2-SPEC-R2-M1`, `V2-SPEC-R2-M2`, `V2-SPEC-R2-L1` in R3)
+- R1 SHA `453f7840461c7f2d1de1c2515421cc6df7c075a6` — [ChatGPT Independent R1 Review #6059541798](https://github.com/aguacatero/scalar-wave-viz/pull/31#pullrequestreview-6059541798) (`REVISE — 0 HIGH, 5 MEDIUM, 2 LOW`; all 7 R1 remediations `V2-SPEC-R1-M1`–`M5`, `L1`, `L2` preserved)  
 **Verified `main` Baseline:** `3519e409e60c126ca724f9b2bf2bf360a0855592` (post-V1-B3 Polish R2 closeout [PR #29](https://github.com/aguacatero/scalar-wave-viz/pull/29), `main` CI [Run 45547040079](https://github.com/aguacatero/scalar-wave-viz/actions/runs/45547040079) `success`, `229` tests passing)  
 **Governing Contracts:** [Scientific Charter](SCIENCE_CHARTER.md), [Exodus Model Contract](EXODUS_MODEL_CONTRACT.md), [Visual Product Vision](PROPULSION_EXPLORER_VISION.md), [Accepted V1 Solver Integration Spec R5](V1_SOLVER_INTEGRATION_SPEC.md) (git blob `3ccf8ae0e8caa4d367d93eddd173dda98a13f00a`, unchanged)  
 **Implementation Gate:** **Do NOT begin V2-A or V2-B code implementation until this specification receives independent ChatGPT acceptance (`0 HIGH, 0 MEDIUM`) AND separate explicit owner kickoff authorization.**
@@ -122,17 +124,19 @@ V2 replaces static prose-only ledger tables with a synchronized, provenance-awar
 | **Boundary C Numerical Closure Residual** | `COMPUTED_SCALAR_1D`: `value_n = 0.0 N` (exact analytic cancellation) | `COMPUTED_RESIDUAL_2D`: signed `(net_fx_n_per_m, net_fy_n_per_m)`, `norm_n_per_m`, `relative_closure_residual`, `tolerance_n_per_m = 1e-4`, `is_force_balanced_to_tolerance` (strict `<`), `force_closure_status` (`BALANCED_WITHIN_TOLERANCE` vs `UNBALANCED_EXCEEDS_TOLERANCE`) — explicitly labeled **DISCRETIZATION RESIDUAL, NOT THRUST** | `PENDING_SCIENTIFIC_ACCEPTANCE` (`value: null`) |
 | **Whole-Body Propellantless Thrust** | `NOT MEASURED / NOT ESTABLISHED` | `NOT MEASURED / NOT ESTABLISHED` | `NOT MEASURED / NOT ESTABLISHED` |
 
-**Lossless Native V1 Adapter Status & Error Mapping (`V2-SPEC-R1-M2`):** V2 preserves native V1 status and error codes verbatim without collapsing distinct failure modes into a single generic label:
+**Lossless Native V1 Adapter Status, Error Mapping & Primary-vs-Study Provenance Separation (`V2-SPEC-R1-M2`, `V2-SPEC-R2-L1`):** V2 preserves native V1 status and error codes verbatim without collapsing distinct failure modes into a single generic label, AND strictly separates **primary-grid force-budget provenance** (`source_scope: "primary_force_budget"`) from **multi-grid convergence-study provenance** (`source_scope: "convergence_study"`):
 
-| Native V1 Response / Error Condition | HTTP Status | Native V1 Field / Code | Exact V2 `LedgerRowValue.status` | `native_v1_code` Preserved |
-| --- | --- | --- | --- | --- |
-| Valid 2D force budget returned | `200` | `force_budget_status: "COMPUTED"` | `COMPUTED_VECTOR_2D` / `COMPUTED_RESIDUAL_2D` | `"COMPUTED"` |
-| Post-solve snapped-contour topology gate failed (`potential_v` succeeded, `force_budget: null`) | `200` | `force_budget_status: "WITHHELD_INVALID_CONTOUR_TOPOLOGY"` | `WITHHELD_INVALID_CONTOUR_TOPOLOGY` (`value: null`) | `"WITHHELD_INVALID_CONTOUR_TOPOLOGY"` |
-| Pre-solve grid-resolved domain eligibility rejected (`/api/v1/solve`) | `400` | `error.code: "INVALID_FORCE_DOMAIN"` | `REJECTED_INVALID_FORCE_DOMAIN` (`value: null`) | `"INVALID_FORCE_DOMAIN"` |
-| Primary grid ineligible during `/api/v1/study` (`force_budget: null`) | `200` | `force_budget_status: "WITHHELD_INELIGIBLE_PRIMARY_GRID"` | `WITHHELD_INELIGIBLE_PRIMARY_GRID` (`value: null`) | `"WITHHELD_INELIGIBLE_PRIMARY_GRID"` |
-| Multi-grid `/api/v1/study` coarse level ineligible or invalid topology | `200` | `force_study.status: "WITHHELD_INELIGIBLE_MESH_LEVEL"` / `"WITHHELD_INVALID_CONTOUR_TOPOLOGY"` | `WITHHELD_INELIGIBLE_MESH_LEVEL` / `WITHHELD_INVALID_CONTOUR_TOPOLOGY` (`value: null`) | Exact native `force_study.status` |
-| Schema/transport/worker/offline-lookup error (`400`/`408`/`413`/`415`/`429`/`500`/`503`/`504`, `NETWORK_ERROR`, `MALFORMED_JSON`, `IDENTITY_MISMATCH`, `OFFLINE_SNAPSHOT_UNAVAILABLE`) | `4xx` / `5xx` / `null` | `error.code` or client error code | `UNAVAILABLE_SOLVER_ERROR` (`value: null`) | Exact native `error.code` |
-| Invalidation / pending request / Chapter 5 wave mode active | N/A | `solveState: "pending" \| "idle"` or `activeViewContext: "scalar_wave_contrast"` | `CLEARED_PENDING_OR_INACTIVE` (`value: null`) | N/A |
+| Native V1 Response / Error Condition | HTTP Status | Native V1 Field / Code | V2 `source_scope` | Exact V2 Status Mapping | `native_v1_code` Preserved |
+| --- | --- | --- | --- | --- | --- |
+| Valid 2D primary force budget returned | `200` | `force_budget_status: "COMPUTED"` | `"primary_force_budget"` | `COMPUTED_VECTOR_2D` / `COMPUTED_RESIDUAL_2D` | `"COMPUTED"` |
+| Post-solve primary snapped-contour topology gate failed (`force_budget: null`) | `200` | `force_budget_status: "WITHHELD_INVALID_CONTOUR_TOPOLOGY"` | `"primary_force_budget"` | `WITHHELD_INVALID_CONTOUR_TOPOLOGY` (`value: null`) | `"WITHHELD_INVALID_CONTOUR_TOPOLOGY"` |
+| Primary grid ineligible during `/api/v1/study` (`force_budget: null`) | `200` | `force_budget_status: "WITHHELD_INELIGIBLE_PRIMARY_GRID"` | `"primary_force_budget"` | `WITHHELD_INELIGIBLE_PRIMARY_GRID` (`value: null`) | `"WITHHELD_INELIGIBLE_PRIMARY_GRID"` |
+| Pre-solve grid-resolved domain eligibility rejected (`/api/v1/solve`) | `400` | `error.code: "INVALID_FORCE_DOMAIN"` | `"primary_force_budget"` | `REJECTED_INVALID_FORCE_DOMAIN` (`value: null`) | `"INVALID_FORCE_DOMAIN"` |
+| Multi-grid `/api/v1/study` coarse level ineligible or invalid topology (independent of primary grid!) | `200` | `force_study.status: "WITHHELD_INELIGIBLE_MESH_LEVEL"` / `"WITHHELD_INVALID_CONTOUR_TOPOLOGY"` | `"convergence_study"` (`convergence_study_provenance` record) | `WITHHELD_INELIGIBLE_MESH_LEVEL` / `WITHHELD_INVALID_CONTOUR_TOPOLOGY` (`value: null`, `failed_levels`) — **MUST NOT overwrite or clear computed primary-grid `force_budget` rows** | Exact native `force_study.status` |
+| Schema/transport/worker/offline-lookup/retry-exhaustion error (`400`/`408`/`413`/`415`/`429`/`500`/`503`/`504`, `HTTP_429_RETRY_EXHAUSTED`, `NETWORK_ERROR`, `MALFORMED_JSON`, `IDENTITY_MISMATCH`, `OFFLINE_SNAPSHOT_UNAVAILABLE`) | `4xx` / `5xx` / `null` | `error.code` or client error code | `"primary_force_budget"` | `UNAVAILABLE_SOLVER_ERROR` (`value: null`) | Exact native `error.code` |
+| Invalidation / pending request / transport-epoch mismatch (`V2-SPEC-R2-M1`) / Chapter 5 wave mode active | N/A | `solveState: "pending" \| "idle"`, `TRANSPORT_EPOCH_MISMATCH`, or `activeViewContext: "scalar_wave_contrast"` | `"primary_force_budget"` | `CLEARED_PENDING_OR_INACTIVE` (`value: null`) | N/A |
+
+**Simultaneous Primary-Grid + Withheld-Study Invariant (`V2-SPEC-R2-L1`):** Accepted `/api/v1/study` can return `force_budget_status: "COMPUTED"` (valid signed primary-grid `N/m` vectors, e.g. at primary `n = 101`) **simultaneously** with `force_study.status: "WITHHELD_INELIGIBLE_MESH_LEVEL"` (e.g. coarse `n = 41` fails Section 3.1 `r >= 3h` eligibility) in the **same HTTP `200` response**. V2 MUST populate primary ledger rows exclusively from `resp.force_budget` / `resp.force_budget_status` under `source_scope: "primary_force_budget"` (preserving all valid signed `(fx_n_per_m, fy_n_per_m)` `N/m` vectors and closure residual) while recording `resp.force_study` / `resp.force_mesh_sensitivity_status` exclusively inside the independent `convergence_study_provenance` record (`source_scope: "convergence_study"`, `value: null`, exact `failed_levels`, and **zero** synthesized numeric study rows or `0.0` placeholders).
 
 ---
 
@@ -197,25 +201,31 @@ V2 implementation will proceed only **after** independent V2-Spec acceptance (`0
   - Interactive **Surface A (Qualitative 3D DUT H0/H1/H2)** and **Surface B (Separate Quantitative P0/P1 Analogue)** views (`role="tablist"` / `role="radiogroup"`), synchronized Three-Boundary Force & Momentum Ledger (`Boundary A / B / C`) with signed 2D `(Fx, Fy)` vectors (`N/m`), 1D scalars (`N`), and 3D `PENDING_SCIENTIFIC_ACCEPTANCE`, plus optional 3D Boundary A/B highlight overlay and 2D P1 contour-path overlay.
   - Zero new backend HTTP endpoints; zero changes to `electrostatics_baseline.py`, `electrostatics_numerics.py`, `v1_worker_bridge.py`, `v1_solver_adapter.py`, `run_explorer.py`, `run_v1_solver.py`, or B2 snapshots.
 
-#### 7.1.1 Explicit V1 → V2 State Synchronization & Atomic Identity Contract (`V2-SPEC-R1-M3`)
+#### 7.1.1 Explicit V1 → V2 State Synchronization, Transport Epoch & Atomic Identity Contract (`V2-SPEC-R1-M3`, `V2-SPEC-R2-M1`)
 
-Accepted `window.__v1SolverUI` currently exposes `getState()` (containing `activeModelMode`, `activeViewContext`, `activeEndpoint`, `transportMode`, `solveState`, `clientStateGeneration`, `currentCanonicalFingerprint`, `latestDispatchedRequestId`, `isComputed2DActive`, and `lastRenderedResponse`), with **no** push subscription API. Slice V2-A must **not** assume an undocumented emitter and must **not** alter V1's accepted request/invalidation/DOM semantics:
+Accepted `window.__v1SolverUI` currently exposes `getState()` (containing `activeModelMode`, `activeViewContext`, `activeEndpoint`, `transportMode`, `solveState`, `clientStateGeneration`, `currentCanonicalFingerprint`, `latestDispatchedRequestId`, `isComputed2DActive`, and `lastRenderedResponse`), with **no** push subscription API, and accepted `setTransportMode(mode)` (`explorer/v1_solver_ui.js` lines 1455–1459) mutates `transportMode` and calls `syncTransportUI()` without invalidating `lastRenderedResponse`, incrementing `clientStateGeneration`, or changing `solveState`. Slice V2-A must **not** assume an undocumented emitter, must **not** retroactively relabel a previous live response as an offline snapshot (or vice versa), and must **preserve** accepted PR #28 V1 semantics outside this narrowly defined read-only integration:
 
-1. **Minimal Additive Read-Only Observer Hook on `window.__v1SolverUI`:**
-   - Extend `window.__v1SolverUI.getState()` with read-only `lastError: { code: string, message: string, httpStatus: number | null } | null` (reset to `null` inside `invalidatePending()` and `renderVerifiedResponse()`, populated inside `handleCurrentError()`).
+1. **Minimal Additive Read-Only Observer & Transport-Origin Metadata on `window.__v1SolverUI`:**
+   - Extend `window.__v1SolverUI.getState()` with three read-only fields:
+     - `lastError: { code: string, message: string, httpStatus: number | null } | null` (reset to `null` inside `invalidatePending()` and `renderVerifiedResponse()`, populated inside `handleCurrentError()`).
+     - `transportEpoch: number` (initialized to `0`; incremented synchronously by `+1` whenever `transportMode` actually changes — `nextMode !== transportMode` — inside `setTransportMode(mode)`, `enterOfflineModeAndRender()`, and the `v1-btn-retry-live` click handler, **immediately before** calling `syncTransportUI()`).
+     - `lastRenderedOrigin: { transportMode: "live" | "offline", transportEpoch: number } | null` (captured at `dispatchCurrentRequest()` into `captured.transportMode` and `captured.transportEpoch`, stamped synchronously inside `renderVerifiedResponse(captured, resp)`, and reset to `null` inside `invalidatePending()` and `handleCurrentError()`).
+   - Extend `isCapturedCurrent(captured)` in `explorer/v1_solver_ui.js` with `captured.transportMode === transportMode && captured.transportEpoch === transportEpoch` so any in-flight live/offline response returning after a transport transition is rejected by the shared staleness gate.
    - Add `window.__v1SolverUI.subscribe(listener)` returning `unsubscribe()`. V1 notifies registered listeners synchronously **immediately after** committing its own state inside `invalidatePending()`, `renderVerifiedResponse()`, `handleCurrentError()`, and `syncTransportUI()`, passing `{ eventType: "invalidate" | "ready" | "error" | "transport", state: window.__v1SolverUI.getState() }`.
-   - Listener invocation is wrapped in `try { listener(evt); } catch (_err) {}` so a V2 subscriber can never disrupt V1 execution. With zero subscribers, V1 behavior is byte-for-byte identical to accepted PR #28.
-2. **Pull-on-Mount + Atomic Identity Validation in V2:**
+   - Listener invocation is wrapped in `try { listener(evt); } catch (_err) {}` so a V2 subscriber can never disrupt V1 execution. Outside this narrow transport-epoch tracking and subscriber hook, accepted PR #28 V1 DOM/request/offline behavior remains preserved.
+2. **Pull-on-Mount + 8-Predicate Atomic Identity & Transport-Origin Validation in V2:**
    - On DOM initialization, V2 pulls initial state synchronously via `window.__v1SolverUI.getState()` and registers its `subscribe()` callback.
-   - V2 renders `COMPUTED_SCALAR_1D`, `COMPUTED_VECTOR_2D`, or `COMPUTED_RESIDUAL_2D` ledger rows **if and only if ALL six atomic predicates hold** on the received `state`:
+   - V2 renders `COMPUTED_SCALAR_1D`, `COMPUTED_VECTOR_2D`, or `COMPUTED_RESIDUAL_2D` ledger rows **if and only if ALL eight atomic predicates hold** on the received `state`:
      1. `state.solveState === "ready"`
      2. `state.lastRenderedResponse !== null`
      3. `state.lastRenderedResponse.request_id === state.latestDispatchedRequestId`
      4. `state.lastRenderedResponse.input_fingerprint === state.currentCanonicalFingerprint`
      5. `(state.activeModelMode === "parallel_plate_1d" && state.activeViewContext === "v1_1d") || (state.activeModelMode === "grounded_box_2d" && state.activeViewContext === "v1_2d")`
-     6. `state.clientStateGeneration >= lastRenderedV2Generation` (monotonically non-decreasing; V2 never retains cached solver payloads across generation bumps).
-   - **Immediate Synchronous Stale-Ledger Clearing:** Whenever `eventType === "invalidate"`, `state.solveState === "pending"`, `state.solveState === "idle"`, `state.activeViewContext === "scalar_wave_contrast"`, or any atomic predicate fails, V2 **immediately clears** all numeric `COMPUTED_*` cells (rendering `CLEARED_PENDING_OR_INACTIVE` / `"—"` or the appropriate schematic/wave view) so V2 can never display an older solver ledger after a slider edit, mode switch, chapter change, `Explore Freely`, wave toggle, or offline switch.
-   - **Lossless Error Mapping:** Whenever `state.solveState === "error"`, V2 clears all `COMPUTED_*` cells and maps `state.lastError.code` directly per §3.2 (`INVALID_FORCE_DOMAIN` → `REJECTED_INVALID_FORCE_DOMAIN`; other codes → `UNAVAILABLE_SOLVER_ERROR` preserving `native_v1_code`).
+     6. `state.clientStateGeneration >= lastRenderedV2Generation` (monotonically non-decreasing; V2 never retains cached solver payloads across generation bumps)
+     7. `state.lastRenderedOrigin !== null`
+     8. `state.lastRenderedOrigin.transportMode === state.transportMode && state.lastRenderedOrigin.transportEpoch === state.transportEpoch` (exact transport-origin & epoch parity — prevents any prior-transport response from rendering under a new transport mode).
+   - **Immediate Synchronous Stale-Ledger & Transport-Change Clearing Barrier (`V2-SPEC-R2-M1`):** Whenever `eventType === "invalidate"`, `eventType === "transport"` with mismatched `(transportMode, transportEpoch)` (e.g. direct `setTransportMode("offline")` or `setTransportMode("live")` without dispatching a new request), `state.solveState === "pending"`, `state.solveState === "idle"`, `state.activeViewContext === "scalar_wave_contrast"`, or **any** of the 8 atomic predicates fails, V2 **immediately and synchronously clears** all numeric `COMPUTED_*` cells (rendering `CLEARED_PENDING_OR_INACTIVE` / `"—"`, with `reason_code: "TRANSPORT_EPOCH_MISMATCH"` on transport transitions, or the appropriate schematic/wave view). V2 updates its transport badge truthfully to `state.transportMode` and **never** displays or retroactively relabels a prior live response as an offline snapshot (or a prior offline snapshot as a live result) until a fresh verified response publishes under the new `(transportMode, transportEpoch)`.
+   - **Lossless Error Mapping & Primary-vs-Study Separation (`V2-SPEC-R2-L1`):** Whenever `state.solveState === "error"`, V2 clears all `COMPUTED_*` cells and maps `state.lastError.code` directly per §3.2 (`INVALID_FORCE_DOMAIN` → `REJECTED_INVALID_FORCE_DOMAIN`; other codes including `HTTP_429_RETRY_EXHAUSTED` → `UNAVAILABLE_SOLVER_ERROR` preserving `native_v1_code`). Whenever `state.solveState === "ready"` passes all 8 predicates for a `/api/v1/study` response, V2 populates primary force-ledger rows (`source_scope: "primary_force_budget"`) strictly from `resp.force_budget` / `resp.force_budget_status` and records `resp.force_study` / `resp.force_mesh_sensitivity_status` separately in `convergence_study_provenance` (`source_scope: "convergence_study"`).
 
 ### 7.2 Slice `V2-B` — Competing-Mechanism Comparators, Coordinated Live Clearance Sweep & Null-Control Laboratory
 
@@ -224,25 +234,36 @@ Accepted `window.__v1SolverUI` currently exposes `getState()` (containing `activ
   - Interactive 6-control Null-Control Laboratory (§5).
   - Live `H2-WALL` 3-point chamber-clearance sweep (`W ∈ {0.080, 0.120, 0.160} m` on `asymmetric_hv_80mm_bench` geometry, fixed electrodes `cx = ±0.015 m`, `r = 0.007 m`, `-20 kV / 0 V`, pinned strictly to `n = 101` — empirically verified against accepted `v1_solver_adapter.py` to pass V1 Section 3.1/3.2 gates with `BALANCED_WITHIN_TOLERANCE` `< 1e-4 N/m` at all three widths and case-specific enclosure reaction decay `8.38e-2 → 1.96e-2 → 8.43e-3 N/m`; `n = 41` is ineligible at `W = 0.160 m` because `r < 3h`, and `n = 81` at `W = 0.160 m` yields `UNBALANCED_EXCEEDS_TOLERANCE` `8.01e-4 N/m`).
 
-#### 7.2.1 Global Single-Slot Backend Concurrency, Preemption & Bounded `429` Contract (`V2-SPEC-R1-M4`)
+#### 7.2.1 Global Single-Slot Backend Concurrency, Preemption & Shared Bounded `429` Recovery (`V2-SPEC-R1-M4`, `V2-SPEC-R2-M2`)
 
-Because the local solver server enforces a **single shared backend compute slot** (`max_concurrent_computes = 1`, returning HTTP `429` on overlap, and `503 WORKER_UNAVAILABLE_POISONED` taking strict precedence over `429`) and because aborting a browser `fetch` via `AbortController` does **not** guarantee the Python child worker has already finished or released `_compute_lock`, V2-B enforces explicit client-side global arbitration plus bounded `429` handling:
+Because the local solver server enforces a **single shared backend compute slot** (`max_concurrent_computes = 1`, returning HTTP `429` on overlap, and `503 WORKER_UNAVAILABLE_POISONED` taking strict precedence over `429`) and because aborting a browser `fetch` via `AbortController.abort()` does **not** guarantee the Python child worker has already finished or released `_compute_lock`, V2-B enforces symmetric client-side global arbitration plus bounded `429` recovery in **both** transition directions (`V1 → V2 sweep` AND `V2 sweep → preempting V1 request`):
 
 1. **Shared Client-Side Request Arbitration (Last User Intent Wins — Mutually Exclusive):**
    - `window.__v1SolverUI` exposes a narrow additive coordination helper (`beginExternalSweepCoordination(onPreempt)` / `endExternalSweepCoordination()`):
-     - *When V2-B starts a live 3-point sweep:* V1 synchronously runs `invalidatePending(activeModelMode, activeViewContext, null, "idle")` (clearing any pending V1 debounce timer and aborting any in-flight V1 `fetch`), increments `v2SweepGeneration += 1`, sets `v2SweepState = "running"`, and registers `onPreempt`.
-     - *When ANY V1/Explorer user transition occurs during an active sweep* (V1 slider edit, preset/grid change, `Run Convergence Study`, `setMode()`, chapter switch, `Explore Freely`, Chapter 5 wave toggle, or `Retry Live`/offline transition): V1 invokes `onPreempt()` **synchronously before** scheduling its own work. `onPreempt()` immediately increments `v2SweepGeneration += 1`, calls `sweepAbortController.abort()`, clears any pending `429` backoff retry timer (`clearTimeout`), sets `v2SweepState = "cancelled"`, and prevents any further sweep step from firing.
-2. **Sequential Step Dispatch & Bounded `429` Retry Policy (Handling Outstanding Worker Compute After Abort):**
+     - *When V2-B starts a live 3-point sweep:* V1 synchronously runs `invalidatePending(activeModelMode, activeViewContext, null, "idle")` (clearing any pending V1 debounce timer, any pending post-preemption V1 retry timer, and aborting any in-flight V1 `fetch`), increments `v2SweepGeneration += 1`, sets `v2SweepState = "running"`, and registers `onPreempt`.
+     - *When ANY V1/Explorer user transition occurs during an active sweep* (V1 slider edit, preset/grid change, `Run Convergence Study`, `setMode()`, chapter switch, `Explore Freely`, Chapter 5 wave toggle, or `Retry Live`/offline transition): V1 invokes `onPreempt()` **synchronously before** scheduling its own work. `onPreempt()` immediately increments `v2SweepGeneration += 1`, calls `sweepAbortController.abort()`, clears any pending sweep `429` backoff retry timer (`clearTimeout`), sets `v2SweepState = "cancelled"`, and returns `hadInFlightSweepFetch: boolean` indicating whether an HTTP sweep step was actually in flight when aborted.
+2. **V2 Sweep Sequential Step Dispatch & Bounded `429` Retry Policy (`V1 → V2` Transition):**
    - Sweep steps `k ∈ {0, 1, 2}` (`W = 0.080, 0.120, 0.160 m`) dispatch strictly sequentially (`step k+1` never starts before `step k` resolves and passes `capturedSweepGen === v2SweepGeneration`).
    - If step `k` receives HTTP **`429`** (e.g., a recently aborted V1 solve/study is still finishing inside the Python worker's `_compute_lock`):
      - Re-check `capturedSweepGen === v2SweepGeneration && !isScalarWaveViewActive() && transportMode === "live"`. If false, discard silently.
-     - Retry up to **`max_retries_per_step = 3`** using deterministic backoff delays **`[250, 500, 1000] ms`** (maximum retry wait `1750 ms` per step; timer handle stored and cleared immediately on `onPreempt()` / cancel).
+     - Retry up to **`max_retries_per_step = 3`** using deterministic backoff delays **`[250, 500, 1000] ms`** (hard per-step retry deadline `2000 ms`; timer handle stored and cleared immediately on `onPreempt()` / cancel).
      - Before issuing each retry `fetch`, re-check `capturedSweepGen === v2SweepGeneration && !isScalarWaveViewActive() && transportMode === "live"`.
-3. **Fail-Closed `503` Precedence, Explicit Partial-Result Semantics & Offline Fallback:**
+3. **Shared Admission & Bounded `429` Recovery for V1-After-V2-Preemption (`V2 → V1` Transition, `V2-SPEC-R2-M2`):**
+   - **Strict Scoping (Zero Silent Change to Normal Non-Sweep V1 Behavior):** `v1_solver_ui.js` tracks a single internal timestamped marker `preemptedSweepAtMs: number | null` set to `Date.now()` **only** when `onPreempt()` reports `hadInFlightSweepFetch === true`. Under normal non-sweep V1 operation (`preemptedSweepAtMs === null` or expired `Date.now() - preemptedSweepAtMs > 5000`), accepted PR #28 V1 behavior is **completely unchanged**: HTTP `429` proceeds immediately to `handleCurrentError()` with `0` retries.
+   - **Armed Post-Preemption Recovery Window:** When `dispatchCurrentRequest()` dispatches a live V1 request while `preemptedSweepAtMs !== null && Date.now() - preemptedSweepAtMs <= 5000`, it stamps `captured.allowPostPreempt429Recovery = true`, `captured.retryAttempt = 0`, and `captured.retryDeadlineMs = Date.now() + 2000` (finite budget: **`max_v1_post_preempt_retries = 3`**, deterministic backoff **`[250, 500, 1000] ms`**, hard wall-clock deadline **`2000 ms`** from initial dispatch, single tracked timer handle `v1RetryTimerId`).
+   - **Staleness-First, Fail-Closed Recovery Rules:**
+     - On every response, V1 evaluates `isCapturedCurrent(captured)` (`gen === clientStateGeneration && fp === currentCanonicalFingerprint && mode === activeModelMode && view === activeViewContext && reqId === latestDispatchedRequestId && transportMode === captured.transportMode && transportEpoch === captured.transportEpoch`) **first** before parsing, retrying, or displaying errors.
+     - On HTTP **`503`** (`WORKER_UNAVAILABLE_POISONED`, `SERVER_SHUTTING_DOWN`, `WORKER_STARTUP_FAILED`, `WORKER_CRASHED`): **zero retries**; clear `preemptedSweepAtMs = null` and call `handleCurrentError(captured, errCode, errMsg)` immediately.
+     - On HTTP **`429`** when `captured.allowPostPreempt429Recovery === true`:
+       - If `captured.retryAttempt < 3` AND `Date.now() + backoffMs[captured.retryAttempt] <= captured.retryDeadlineMs`: increment `captured.retryAttempt += 1`, keep `solveState === "pending"` (preserving cleared V1 readouts and cleared V2 ledger), and schedule `v1RetryTimerId = setTimeout(...)`. When the timer fires, re-check `isCapturedCurrent(captured) && !isScalarWaveViewActive() && transportMode === "live"` **before** re-issuing `fetch` (reusing `captured.reqId`, `captured.fp`, `captured.gen`, `captured.transportEpoch` with a fresh `AbortController` assigned to `activeAbortController`).
+       - If retries or the `2000 ms` deadline are exhausted: clear `preemptedSweepAtMs = null` and report an honest terminal error via `handleCurrentError(captured, "HTTP_429_RETRY_EXHAUSTED", "Solver remained busy after preempting an earlier clearance sweep (finite retries exhausted). Please retry.")` — never loop indefinitely and never restore stale numbers.
+     - **Synchronous Cancellation on Superseding Intent:** `invalidatePending()` MUST synchronously execute `clearTimeout(v1RetryTimerId); v1RetryTimerId = null;` so any newer V1 slider/preset/study/mode/chapter/wave/transport action immediately cancels a pending post-preemption backoff retry (`0` extra fetches for the superseded intent). Transitions to `schematic_3d` or `scalar_wave_contrast` also clear `preemptedSweepAtMs = null`.
+     - **Settlement Disarm:** On HTTP `200`, static offline fallback, or any non-`429` error, clear `preemptedSweepAtMs = null`.
+4. **Fail-Closed `503` Precedence, Explicit Partial-Result Semantics & Offline Fallback (V2 Sweep):**
    - On HTTP **`503`** (`WORKER_UNAVAILABLE_POISONED`), **zero retries** are performed; sweep halts immediately with `sweep_status: "PARTIAL_ABORTED_POISONED"`.
    - On exhausted `429` retries, sweep halts immediately with `sweep_status: "PARTIAL_ABORTED_BUSY"`.
    - On any `400`/`408`/`500`/`504`/network/JSON/identity-mismatch error, sweep halts immediately with `sweep_status: "PARTIAL_ABORTED_ERROR"`.
-   - On static HTTP fallback (`501`/`405`/`404` non-JSON or `V1_A_TRANSPORT_ONLY`), sweep halts immediately, switches V1/V2 to `transportMode = "offline"`, locks the live sweep button (`SOLVER BRIDGE OFFLINE`), and displays the bundled B2 offline preset comparison.
+   - On static HTTP fallback (`501`/`405`/`404` non-JSON or `V1_A_TRANSPORT_ONLY`), sweep halts immediately, switches V1/V2 to `transportMode = "offline"` (incrementing `transportEpoch`), locks the live sweep button (`SOLVER BRIDGE OFFLINE`), and displays the bundled B2 offline preset comparison.
    - **Partial-Result Truthfulness Rule:** Whenever `sweep_status !== "COMPLETED"`, already-finished steps may remain visible **explicitly labeled `PARTIAL SWEEP — INCOMPLETE`**, every unexecuted/failed step records `status: "NOT_RUN_SWEEP_TERMINATED"` (`value: null`), and V2 **withholds** any multi-point decay summary or completed-trend badge!
 
 #### 7.2.2 Fail-Closed Comparator Input Validation Contract (`V2-SPEC-R1-L2`, Python & JS Parity)
@@ -256,7 +277,7 @@ All four V2-B comparator functions in `v2_comparators.py` and their JS mirror in
 | `evaluate_ref_photon_recoil(power_w)` | `power_w ∈ [0.0, 1.0e3]` (`W`), `c = 299792458.0 m/s` | Identical strict fail-closed validation (`NON_FINITE_OR_TYPE_ERROR` / `OUT_OF_RANGE`, `value: null`); exact `0.0 N` at `power_w == 0.0`. |
 | `evaluate_ref_ion_exhaust(beam_current_a, accel_voltage_v, ion_mass_kg)` | `beam_current_a ∈ [0.0, 1.0e-1]` (`A`), `accel_voltage_v ∈ [1.0e2, 5.0e3]` (`V`), `ion_mass_kg ∈ [1.67e-27, 4.0e-25]` (`kg`), `q_i = 1.602176634e-19 C` | Identical strict fail-closed validation (`NON_FINITE_OR_TYPE_ERROR` / `OUT_OF_RANGE`, `value: null`, rejecting `<= 0` mass or voltage); exact `0.0 N` at `beam_current_a == 0.0`. |
 
-### 7.3 Typed Schema Contracts (Exhaustive Discriminated Unions — `V2-SPEC-R1-M2`, `L1`, `L2`)
+### 7.3 Typed Schema Contracts (Exhaustive Discriminated Unions — `V2-SPEC-R1-M2`, `L1`, `L2`; `V2-SPEC-R2-M1`, `L1`)
 
 ```ts
 type EpistemicClass =
@@ -340,8 +361,8 @@ type LedgerRowValue =
       diagnostic: string;
     }
   | {
-      status: "WITHHELD_INELIGIBLE_MESH_LEVEL";
-      value: null;                     // NEVER 0.0
+      status: "WITHHELD_INELIGIBLE_MESH_LEVEL"; // Permitted ONLY when source_scope === "convergence_study"
+      value: null;                     // NEVER 0.0; NEVER overwrites primary_force_budget rows
       http_status: 200;
       native_v1_code: "WITHHELD_INELIGIBLE_MESH_LEVEL";
       failed_levels: number[];
@@ -374,8 +395,44 @@ type LedgerRowValue =
       note: string;
     };
 
+type LedgerRowSourceScope =
+  | "primary_force_budget"
+  | "convergence_study"
+  | "comparator_estimate"
+  | "qualitative_3d_dut"
+  | "null_control_sweep";
+
+type ConvergenceStudyStatusRecord =
+  | {
+      source_scope: "convergence_study";
+      status: "NOT_REQUESTED";
+      force_mesh_sensitivity_status: "NOT_ASSESSED";
+      study_n_list: null;
+      failed_levels: [];
+      value: null;
+    }
+  | {
+      source_scope: "convergence_study";
+      status: "COMPUTED";
+      force_mesh_sensitivity_status: string;
+      study_n_list: number[];
+      failed_levels: [];
+      order_of_accuracy_status: "NOT_COMPUTED_NONUNIFORM_H_RATIO" | string;
+    }
+  | {
+      source_scope: "convergence_study";
+      status: "WITHHELD_INELIGIBLE_MESH_LEVEL" | "WITHHELD_INVALID_CONTOUR_TOPOLOGY";
+      force_mesh_sensitivity_status: string;
+      study_n_list: number[];
+      failed_levels: number[];
+      native_v1_code: "WITHHELD_INELIGIBLE_MESH_LEVEL" | "WITHHELD_INVALID_CONTOUR_TOPOLOGY";
+      diagnostic: string;
+      value: null;                     // NEVER 0.0; NEVER synthesize numeric study rows
+    };
+
 interface ForceLedgerRow {
   row_id: string;
+  source_scope: LedgerRowSourceScope;  // V2-SPEC-R2-L1: primary_force_budget rows NEVER overwritten by study status
   boundary: "boundary_a_dut" | "boundary_b_environment" | "boundary_c_closed";
   component_label: string;
   epistemic_class: EpistemicClass;
@@ -393,9 +450,12 @@ interface ForceLedgerSnapshot {
   transport_mode: "live" | "offline" | "static_schematic";
   sync_identity: {
     client_state_generation: number;
+    transport_epoch: number;                              // V2-SPEC-R2-M1
+    response_origin_transport: "live" | "offline" | null; // V2-SPEC-R2-M1: must match transport_mode when computed
     input_fingerprint: string | null;
     request_id: number | null;
   };
+  convergence_study_provenance: ConvergenceStudyStatusRecord | null; // V2-SPEC-R2-L1: independent of primary rows
   whole_body_thrust_status: "NOT MEASURED / NOT ESTABLISHED";
   p2_scientific_status: "PENDING_SCIENTIFIC_ACCEPTANCE";
   provenance: {
@@ -416,27 +476,31 @@ interface ForceLedgerSnapshot {
 3. **Required Automated Test Suites (Implementation Phase — Pending Spec Acceptance + Owner Kickoff):**
    - **`tests/test_v2_force_story_contracts.py` (Python + Node/JS parity):**
      - **Cross-Geometry Non-Conflation (`V2-SPEC-R1-M1`):** Assert Surface A (`qualitative_3d_dut_hypotheses`) contains zero computed 1D (`N`) or 2D (`N/m`) P0/P1 numbers and marks both 3D H0 and 3D H1 quantitative slots `PENDING_SCIENTIFIC_ACCEPTANCE`; assert Surface B explicitly banners separate idealized benchmark geometry and never emits shared-apparatus H1 numeric claims.
-     - **Typed Schema & Lossless V1 Mapping Rejection Tests (`V2-SPEC-R1-M2`):** Reject scalar-only `value` on 2D vector rows; reject 2D vector rows omitting signed `fx_n_per_m` / `fy_n_per_m`; reject numeric `0.0` on any `null`-value status (`UNKNOWN_UNMODELED`, `PENDING_SCIENTIFIC_ACCEPTANCE`, `OUT_OF_MODEL_VALIDITY_REGIME`, `INVALID_COMPARATOR_INPUT`, `WITHHELD_INVALID_CONTOUR_TOPOLOGY`, `WITHHELD_INELIGIBLE_PRIMARY_GRID`, `WITHHELD_INELIGIBLE_MESH_LEVEL`, `REJECTED_INVALID_FORCE_DOMAIN`); reject cross-unit (`N` + `N/m`) aggregation; verify lossless 1-to-1 preservation of native V1 `WITHHELD_INVALID_CONTOUR_TOPOLOGY`, `WITHHELD_INELIGIBLE_PRIMARY_GRID`, `INVALID_FORCE_DOMAIN`, and `WITHHELD_INELIGIBLE_MESH_LEVEL`.
+     - **Typed Schema, Lossless V1 Mapping & Primary-vs-Study Provenance Tests (`V2-SPEC-R1-M2`, `V2-SPEC-R2-L1`):** Reject scalar-only `value` on 2D vector rows; reject 2D vector rows omitting signed `fx_n_per_m` / `fy_n_per_m`; reject numeric `0.0` on any `null`-value status (`UNKNOWN_UNMODELED`, `PENDING_SCIENTIFIC_ACCEPTANCE`, `OUT_OF_MODEL_VALIDITY_REGIME`, `INVALID_COMPARATOR_INPUT`, `WITHHELD_INVALID_CONTOUR_TOPOLOGY`, `WITHHELD_INELIGIBLE_PRIMARY_GRID`, `WITHHELD_INELIGIBLE_MESH_LEVEL`, `REJECTED_INVALID_FORCE_DOMAIN`); reject cross-unit (`N` + `N/m`) aggregation; verify lossless 1-to-1 preservation of native V1 `WITHHELD_INVALID_CONTOUR_TOPOLOGY`, `WITHHELD_INELIGIBLE_PRIMARY_GRID`, `INVALID_FORCE_DOMAIN`, and `WITHHELD_INELIGIBLE_MESH_LEVEL`; **simultaneous primary/study provenance test (`V2-SPEC-R2-L1`)**: feed a `/api/v1/study` payload with `force_budget_status: "COMPUTED"` (valid primary signed `N/m` vectors) AND `force_study.status: "WITHHELD_INELIGIBLE_MESH_LEVEL"` (`failed_levels: [41]`) and assert all primary-grid `COMPUTED_VECTOR_2D` / `COMPUTED_RESIDUAL_2D` rows remain preserved under `source_scope: "primary_force_budget"`, `convergence_study_provenance` independently records `status: "WITHHELD_INELIGIBLE_MESH_LEVEL"`, `source_scope: "convergence_study"`, `value: null`, `failed_levels: [41]`, and zero synthesized numeric study rows or `0.0` placeholders exist.
      - **Charter Crosswalk (`V2-SPEC-R1-L1`):** Assert every `EpistemicClass` maps cleanly to valid `ScientificCharterCategory[]` and every conditional comparator output carries non-empty `what_if_parameters` and `"WHAT-IF PARAMETER"` charter disclosure.
      - **Comparator Parity & Complete Fail-Closed Negative Matrix (`V2-SPEC-R1-L2`):** Verify exact Python-vs-JS numeric parity (`max(1e-15, 1e-12 * max(|js|, |py|))`) at boundary extrema and `0.0` current/power across all 4 comparators; verify fail-closed `value: null` (`INVALID_COMPARATOR_INPUT` / `OUT_OF_MODEL_VALIDITY_REGIME`) in **both** Python and JS for `pressure_regime = "rarefied_or_high_vacuum"`, unknown regime strings (`""`, `"low_vacuum"`, `"760"`, `null`, `true`), `NaN`, `+Inf`, `-Inf`, negative inputs, zero mobility/mass, above-max inputs, booleans (`true`/`false`), and numeric strings (`"10"`).
      - **Cryptographic Baseline & P2 Isolation:** Assert unchanged git blob SHA-1 for `electrostatics_baseline.py`, `electrostatics_numerics.py`, and `docs/V1_SOLVER_INTEGRATION_SPEC.md`, `--check-committed` snapshot parity, and **zero** Track B P2 (`exodus_hypothesis_evaluator`, `exodus_patent_geometry`, `p2_`) imports.
    - **`tests/test_v2_browser_smoke.py` (Playwright — Desktop `1280×860`, Mobile `375×812` & `390×844`):**
-     - **V2-A Sync & Identity (`V2-SPEC-R1-M1`, `M2`, `M3`):** Verify `window.__v1SolverUI.subscribe()` + `getState()` atomic sync across slider edits (immediate synchronous V2 ledger clear before `150 ms` debounce), mode switches (`1D → 2D → 3D`), chapter changes, `Explore Freely`, live→offline fallback, current `400 INVALID_FORCE_DOMAIN` / `200 WITHHELD_INVALID_CONTOUR_TOPOLOGY` / `500` error mapping, and delayed stale `200`/`500` responses never repopulating a cleared V2 ledger; verify signed `(Fx, Fy)` display in `N/m`, `UNBALANCED_EXCEEDS_TOLERANCE` coarse `n=41` banner never labeled thrust, zero 2D `N/m` arrows on 3D Exodus blade, and Surface A/B strict non-conflation.
-     - **V2-B Global Concurrency, Adversarial `429`/Abort & Scientific Framing (`V2-SPEC-R1-M4`, `M5`, `L2`):**
-       - Adversarial live tests with `run_v1_solver.py` + delayed worker simulation: (a) V1 slider/study traffic immediately preceding V2 sweep causing transient `429` → bounded backoff retry succeeds without crashing; (b) sustained `429` exhausting `max_retries_per_step = 3` → deterministic `PARTIAL_ABORTED_BUSY` state with unrun steps `null` and trend summary withheld; (c) `503 WORKER_UNAVAILABLE_POISONED` → immediate stop with `0` retries; (d) mid-sweep preemption via V1 mode/slider/study/chapter/Chapter 5 wave toggle → synchronous cancel, `0` stray sweep fetches past `240 ms`, and delayed step responses discarded; (e) mid-sweep offline fallback transition.
+     - **V2-A Sync, Bidirectional Transport-Epoch Clearing & Identity (`V2-SPEC-R1-M1`, `M2`, `M3`; `V2-SPEC-R2-M1`, `L1`):**
+       - Verify `window.__v1SolverUI.subscribe()` + `getState()` 8-predicate atomic sync across slider edits (immediate synchronous V2 ledger clear before `150 ms` debounce), mode switches (`1D → 2D → 3D`), chapter changes, `Explore Freely`, live→offline fallback, current `400 INVALID_FORCE_DOMAIN` / `200 WITHHELD_INVALID_CONTOUR_TOPOLOGY` / `500` error mapping, and delayed stale `200`/`500` responses never repopulating a cleared V2 ledger.
+       - **Bidirectional Direct Transport-Switch Adversarial Tests (`V2-SPEC-R2-M1`):** (a) Ready live 2D ledger → direct `window.__v1SolverUI.setTransportMode("offline")` with zero request dispatch → assert V2 numeric ledger clears synchronously (`CLEARED_PENDING_OR_INACTIVE`, `TRANSPORT_EPOCH_MISMATCH`), zero prior live numbers remain labeled as offline snapshots, and ledger stays cleared until a verified offline snapshot publishes under the new `transportEpoch`; (b) reverse direction: ready offline 2D ledger → direct `window.__v1SolverUI.setTransportMode("live")` with zero request dispatch → assert V2 numeric ledger clears synchronously and never presents an offline snapshot as a live result until a verified live response publishes under the new `transportEpoch`.
+       - Verify signed `(Fx, Fy)` display in `N/m`, simultaneous `COMPUTED` primary + `WITHHELD_INELIGIBLE_MESH_LEVEL` study UI preserving primary signed vectors while displaying withheld study notice separately (`V2-SPEC-R2-L1`), `UNBALANCED_EXCEEDS_TOLERANCE` coarse `n=41` banner never labeled thrust, zero 2D `N/m` arrows on 3D Exodus blade, and Surface A/B strict non-conflation.
+     - **V2-B Global Concurrency, Bidirectional Preemption Recovery & Scientific Framing (`V2-SPEC-R1-M4`, `M5`, `L2`; `V2-SPEC-R2-M2`):**
+       - **V1 → V2 Sweep Concurrency (`V2-SPEC-R1-M4`):** (a) V1 slider/study traffic immediately preceding V2 sweep causing transient `429` → bounded backoff retry succeeds; (b) sustained `429` exhausting `max_retries_per_step = 3` → deterministic `PARTIAL_ABORTED_BUSY` with unrun steps `null` and trend summary withheld; (c) `503 WORKER_UNAVAILABLE_POISONED` → immediate stop with `0` retries; (d) mid-sweep preemption via V1 mode/slider/study/chapter/Chapter 5 wave toggle → synchronous cancel, `0` stray sweep fetches past `240 ms`, delayed step responses discarded; (e) mid-sweep offline fallback transition.
+       - **V2 Sweep → Preempting V1 Recovery (`V2-SPEC-R2-M2` — Actual-Worker & Delayed-Worker Tests):** (a) Active V2 sweep holds Python `_compute_lock` → preempting V1 slider/preset/study action hits transient `429`, bounded V1 post-preemption retry recovers once slot releases, and latest V1 intent renders truthfully in both V1 and V2 ledgers; (b) superseding newer V1 intent (or Chapter 5 wave / 3D schematic switch) during post-preemption retry backoff synchronously cancels the pending retry timer (`0` extra fetches for superseded intent); (c) persistent `429` past finite retry budget / `2000 ms` deadline terminates honestly with `HTTP_429_RETRY_EXHAUSTED` (no infinite loop, V2 ledger stays cleared); (d) `503 WORKER_UNAVAILABLE_POISONED` during preemption recovery fails closed immediately with `0` retries; (e) normal non-sweep V1 `429` (no prior sweep preemption) fails immediately with `0` retries, preserving accepted PR #28 V1 semantics.
        - Verify `NC-WALL` DOM text strictly qualifies the 3-point 2D sweep as a case-specific `N/m` model trend, never asserts universal monotonicity or unique identification of measured `µN` wall coupling, and never equates `N/m` with `µN`.
        - Verify `H2-ION` atmospheric calculation vs high-vacuum `OUT_OF_MODEL_VALIDITY_REGIME` (`value: null`), `H2-WIRE` & reference comparators, 6-control Null-Control Lab keyboard navigation, and truthful `file://` / static `http.server` offline fallback.
      - **Preservation & Isolation:** Chapter 5 scalar-wave isolation (`> 200 ms` post-debounce zero `/api/v1/solve` & `/api/v1/study` checks across V2 triggers), zero console/page errors, `<= 1 px` mobile overflow at `375px` & `390px`, and full `229`-test V0/V0.1/V0.2/V1/P0/P1 suite passing without regression.
 
 ---
 
-## 8. Independent Review Acceptance Criteria (V2 Spec R2)
+## 8. Independent Review Acceptance Criteria (V2 Spec R3)
 
 This specification is ready for independent ChatGPT acceptance when:
 
-1. All 7 R1 findings (`V2-SPEC-R1-M1`, `M2`, `M3`, `M4`, `M5`, `L1`, `L2`) are closed cleanly without weakening any of the 8 mandatory scientific constraints in Section 1.
+1. All 7 R1 findings (`V2-SPEC-R1-M1`–`M5`, `L1`, `L2`) AND all 3 R2 findings (`V2-SPEC-R2-M1`, `V2-SPEC-R2-M2`, `V2-SPEC-R2-L1`) are closed cleanly without weakening any of the 8 mandatory scientific constraints in Section 1.
 2. Surface A (qualitative 3D Exodus DUT hypotheses) and Surface B (separate quantitative 1D/2D P0/P1 analogues) never imply shared geometry or conflate units (`N` vs `N/m` vs `PENDING_SCIENTIFIC_ACCEPTANCE`).
-3. Typed ledger schemas represent signed 2D `(Fx, Fy)` vectors cleanly without scalar coercion, preserve native V1 `WITHHELD_INVALID_CONTOUR_TOPOLOGY` / `INVALID_FORCE_DOMAIN` / `WITHHELD_INELIGIBLE_MESH_LEVEL` statuses losslessly, and reject `0.0` coercion of unknowns.
-4. V1 → V2 synchronization (`subscribe()` + `getState()` atomic validation), global single-slot backend concurrency (`onPreempt`, bounded `429` retry, `503` fail-closed precedence, partial-result semantics), `NC-WALL` evidence-compatible framing, Charter 5-category crosswalk, and fail-closed Python/JS comparator validation are completely and testably specified.
-5. Frozen P0/P1 kernels, accepted V1 Spec R5, accepted V1 baselines, and Track B P2 (`Draft PR #11`) remain untouched; Track B remains at `2 of 5` accepted scientific gates.
+3. Typed ledger schemas represent signed 2D `(Fx, Fy)` vectors cleanly without scalar coercion, preserve native V1 `WITHHELD_INVALID_CONTOUR_TOPOLOGY` / `INVALID_FORCE_DOMAIN` / `WITHHELD_INELIGIBLE_PRIMARY_GRID` / `WITHHELD_INELIGIBLE_MESH_LEVEL` statuses losslessly, separate `source_scope: "primary_force_budget"` from independent `convergence_study_provenance` (`V2-SPEC-R2-L1`), and reject `0.0` coercion of unknowns or fabricated study rows.
+4. V1 → V2 synchronization enforces all 8 atomic identity predicates including `transportEpoch` & `lastRenderedOrigin` with bidirectional synchronous clearing on direct `setTransportMode()` (`V2-SPEC-R2-M1`); global single-slot concurrency covers both `V1 → V2` sweep retries and narrowly scoped `V2 → V1` post-preemption bounded `429` recovery with fail-closed `503` precedence (`V2-SPEC-R2-M2`); `NC-WALL` inference, Charter 5-category crosswalk, and fail-closed Python/JS comparator validation are completely and testably specified.
+5. Frozen P0/P1 kernels, accepted V1 Spec R5, accepted V1 baselines, and Track B P2 (`Draft PR #11`) remain untouched; Track B remains at `2 of 5` accepted scientific gates; whole-body thrust remains `NOT MEASURED / NOT ESTABLISHED`.
 6. **Independent Review Verdict:** `0 HIGH, 0 MEDIUM` findings on this specification, followed by separate explicit owner authorization before opening any V2-A or V2-B implementation branch.
