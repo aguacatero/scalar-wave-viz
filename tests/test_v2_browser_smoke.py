@@ -31,6 +31,8 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+import electrostatics_baseline as eb  # noqa: E402
+import electrostatics_numerics as en  # noqa: E402
 import v1_solver_adapter as adapter  # noqa: E402
 from test_v0_browser_smoke import QuietHandler, find_browser_executable, is_playwright_available  # noqa: E402
 
@@ -570,6 +572,176 @@ class V2ForceStoryBrowserTests(unittest.TestCase):
             self.assertEqual(snap["transport_mode"], "offline")
             self.assertEqual(snap["sync_identity"]["response_origin_transport"], "offline")
             self.assertEqual(snap["rows"][0]["quantity"]["status"], "COMPUTED_VECTOR_2D")
+            self.assertEqual(errors, [])
+        finally:
+            ctx.close()
+
+    def test_2d_exact_p1_contour_stroke_coordinates_and_withheld_suppression(self):
+        """V2-A-R1-M1: Verify exact snapped P1 contour pixel coordinates on unequal/off-axis geometry and strict suppression when force budget is withheld."""
+        # Build a real unequal-radius off-axis 2D solve response via the frozen P0/P1 kernels
+        cfg = eb.GroundedBoxConfig(
+            n=81,
+            box_width_m=0.080,
+            left_electrode=eb.ElectrodeConfig(center_x_m=-0.016, center_y_m=0.006, radius_m=0.005, voltage_v=-20000.0),
+            right_electrode=eb.ElectrodeConfig(center_x_m=0.015, center_y_m=-0.004, radius_m=0.009, voltage_v=0.0),
+        )
+        sol = eb.electrode_pair_in_grounded_box(config=cfg)
+        captured_contours = []
+        orig_contour_fn = en.compute_maxwell_stress_contour
+
+        def _spy_contour(*args, **kwargs):
+            res_c = orig_contour_fn(*args, **kwargs)
+            captured_contours.append(res_c)
+            return res_c
+
+        en.compute_maxwell_stress_contour = _spy_contour
+        try:
+            en.evaluate_whole_apparatus_force_budget(sol)
+        finally:
+            en.compute_maxwell_stress_contour = orig_contour_fn
+        self.assertEqual(len(captured_contours), 3)
+        c_left_py, c_right_py, c_enc_py = captured_contours
+        norm_req = adapter.validate_and_normalize_request(
+            "/api/v1/solve",
+            {
+                "request_id": 1,
+                "mode": "grounded_box_2d",
+                "parameters": {
+                    "n": 81,
+                    "box_width_m": 0.080,
+                    "left_electrode": {"center_x_m": -0.016, "center_y_m": 0.006, "radius_m": 0.005, "voltage_v": -20000.0},
+                    "right_electrode": {"center_x_m": 0.015, "center_y_m": -0.004, "radius_m": 0.009, "voltage_v": 0.0},
+                },
+                "probe_xy_m": [0.0, 0.0],
+            },
+        )
+        _, unequal_resp = adapter.solve_normalized_request(norm_req)
+
+        url = f"http://127.0.0.1:{self.live_port}/index.html"
+        ctx, page, errors = self._open_page(url)
+        try:
+            page.click("#tab-btn-v2-story")
+            page.evaluate("() => window.__v1SolverUI.setMode('grounded_box_2d')")
+            self._wait_solve_state(page, "ready")
+
+            # Enable 2D P1 contour overlay
+            page.click("#v2-toggle-2d-contours")
+            self.assertTrue(page.evaluate("() => window.__v2ForceStoryUI.getState().show2DContourOverlay"))
+
+            # Intercept /api/v1/solve with real unequal-radius off-axis response
+            def route_unequal(route):
+                post = json.loads(route.request.post_data or "{}")
+                fp = page.evaluate("() => window.__v1SolverUI.getState().currentCanonicalFingerprint")
+                patched = dict(unequal_resp)
+                patched["request_id"] = post.get("request_id")
+                patched["input_fingerprint"] = fp
+                route.fulfill(status=200, content_type="application/json", body=json.dumps(patched))
+
+            page.route("**/api/v1/solve", route_unequal)
+            page.evaluate("() => window.__v1SolverUI.setMode('grounded_box_2d')")
+            self._wait_solve_state(page, "ready")
+            page.unroute("**/api/v1/solve", route_unequal)
+
+            drawn = page.evaluate("() => window.__v2ForceStoryUI.getState().lastDrawn2DContours")
+            self.assertIsNotNone(drawn)
+            self.assertEqual(drawn["world_contours"]["c_left"]["contour_indices"], list(c_left_py.contour_indices))
+            self.assertEqual(drawn["world_contours"]["c_right"]["contour_indices"], list(c_right_py.contour_indices))
+            self.assertEqual(drawn["world_contours"]["c_enclosure_inner"]["contour_indices"], list(c_enc_py.contour_indices))
+
+            # Distinct unequal-radius pixel boxes & off-axis vertical positions
+            rect_l = drawn["canvas_rects"]["c_left"]
+            rect_r = drawn["canvas_rects"]["c_right"]
+            rect_enc = drawn["canvas_rects"]["c_enclosure_inner"]
+            self.assertGreater(rect_l["width"], 0.0)
+            self.assertGreater(rect_r["width"], rect_l["width"])
+            self.assertNotAlmostEqual(rect_l["y"], rect_r["y"], places=2)
+            self.assertLess(rect_enc["x"], rect_l["x"])
+            self.assertGreater(rect_enc["x"] + rect_enc["width"], rect_r["x"] + rect_r["width"])
+
+            # Now intercept /api/v1/solve returning a REAL non-null solution (canvas renders heatmap!)
+            # BUT withheld force budget -> contours MUST be strictly suppressed (lastDrawn2DContours === null)
+            def route_withheld_with_solution(route):
+                post = json.loads(route.request.post_data or "{}")
+                fp = page.evaluate("() => window.__v1SolverUI.getState().currentCanonicalFingerprint")
+                patched = dict(unequal_resp)
+                patched["request_id"] = post.get("request_id")
+                patched["input_fingerprint"] = fp
+                patched["force_budget"] = None
+                patched["force_budget_status"] = "WITHHELD_INVALID_CONTOUR_TOPOLOGY"
+                patched["force_budget_diagnostic"] = "Contour touched conductor mask"
+                route.fulfill(status=200, content_type="application/json", body=json.dumps(patched))
+
+            page.route("**/api/v1/solve", route_withheld_with_solution)
+            page.evaluate("() => window.__v1SolverUI.setMode('grounded_box_2d')")
+            self._wait_solve_state(page, "ready")
+            page.unroute("**/api/v1/solve", route_withheld_with_solution)
+
+            v2_state = page.evaluate("() => window.__v2ForceStoryUI.getState()")
+            self.assertTrue(v2_state["show2DContourOverlay"])
+            self.assertIsNone(v2_state["lastDrawn2DContours"])
+            self.assertEqual(v2_state["snapshot"]["rows"][0]["quantity"]["status"], "WITHHELD_INVALID_CONTOUR_TOPOLOGY")
+            self.assertEqual(errors, [])
+        finally:
+            ctx.close()
+
+    def test_malformed_payload_fails_closed_in_v2_ui(self):
+        """V2-A-R1-M2: Malformed HTTP-200 payload violating §7.3 invariants fails closed in V2 UI (value: null, contours suppressed)."""
+        url = f"http://127.0.0.1:{self.live_port}/index.html"
+        ctx, page, errors = self._open_page(url)
+        try:
+            page.click("#tab-btn-v2-story")
+            page.evaluate("() => window.__v1SolverUI.setMode('grounded_box_2d')")
+            self._wait_solve_state(page, "ready")
+            good_resp = page.evaluate("() => window.__v1SolverUI.getState().lastRenderedResponse")
+
+            # Enable 2D contours so we also prove malformed payloads suppress contour rendering
+            page.click("#v2-toggle-2d-contours")
+            self.assertIsNotNone(page.evaluate("() => window.__v2ForceStoryUI.getState().lastDrawn2DContours"))
+
+            # Case 1: Inconsistent residual norm_n_per_m (999.0 != hypot(net_fx, net_fy))
+            def route_bad_norm(route):
+                post = json.loads(route.request.post_data or "{}")
+                fp = page.evaluate("() => window.__v1SolverUI.getState().currentCanonicalFingerprint")
+                patched = json.loads(json.dumps(good_resp))
+                patched["request_id"] = post.get("request_id")
+                patched["input_fingerprint"] = fp
+                patched["force_budget"]["net_electrostatic_force_norm_n_per_m"] = 999.0
+                route.fulfill(status=200, content_type="application/json", body=json.dumps(patched))
+
+            page.route("**/api/v1/solve", route_bad_norm)
+            page.evaluate("() => window.__v1SolverUI.setMode('grounded_box_2d')")
+            self._wait_solve_state(page, "ready")
+            page.unroute("**/api/v1/solve", route_bad_norm)
+
+            st1 = page.evaluate("() => window.__v2ForceStoryUI.getState()")
+            self.assertGreater(len(st1["lastValidationErrors"]), 0)
+            self.assertEqual(st1["snapshot"]["rows"][0]["quantity"]["status"], "UNAVAILABLE_SOLVER_ERROR")
+            self.assertEqual(st1["snapshot"]["rows"][0]["quantity"]["native_v1_code"], "V2_SCHEMA_VALIDATION_FAILED")
+            self.assertIsNone(st1["snapshot"]["rows"][0]["quantity"]["value"])
+            self.assertIsNone(st1["lastDrawn2DContours"])
+            self.assertNotIn("9.990e+2", page.locator("#v2-ledger-tbody").inner_text())
+
+            # Case 2: Tampered provenance.kernel_blob_sha1
+            def route_bad_sha(route):
+                post = json.loads(route.request.post_data or "{}")
+                fp = page.evaluate("() => window.__v1SolverUI.getState().currentCanonicalFingerprint")
+                patched = json.loads(json.dumps(good_resp))
+                patched["request_id"] = post.get("request_id")
+                patched["input_fingerprint"] = fp
+                patched["provenance"]["kernel_blob_sha1"]["electrostatics_numerics"] = "0" * 40
+                route.fulfill(status=200, content_type="application/json", body=json.dumps(patched))
+
+            page.route("**/api/v1/solve", route_bad_sha)
+            page.evaluate("() => window.__v1SolverUI.setMode('grounded_box_2d')")
+            self._wait_solve_state(page, "ready")
+            page.unroute("**/api/v1/solve", route_bad_sha)
+
+            st2 = page.evaluate("() => window.__v2ForceStoryUI.getState()")
+            self.assertGreater(len(st2["lastValidationErrors"]), 0)
+            self.assertTrue(any("electrostatics_numerics" in e for e in st2["lastValidationErrors"]))
+            self.assertEqual(st2["snapshot"]["rows"][0]["quantity"]["status"], "UNAVAILABLE_SOLVER_ERROR")
+            self.assertEqual(st2["snapshot"]["rows"][0]["quantity"]["native_v1_code"], "V2_SCHEMA_VALIDATION_FAILED")
+            self.assertIsNone(st2["lastDrawn2DContours"])
             self.assertEqual(errors, [])
         finally:
             ctx.close()

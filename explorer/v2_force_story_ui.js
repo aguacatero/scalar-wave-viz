@@ -27,6 +27,8 @@
   var lastSnapshot = null;
   var lastEventType = "init";
   var lastV1State = null;
+  var lastDrawn2DContours = null;
+  var lastValidationErrors = [];
 
   function el(id) {
     return document.getElementById(id);
@@ -186,22 +188,29 @@
       chk2D.setAttribute("aria-disabled", is2D ? "false" : "true");
     }
 
+    if (!is2D || !show2DContourOverlay) {
+      lastDrawn2DContours = null;
+    }
+
     if (window.__v1SolverUI && typeof window.__v1SolverUI.redraw2DCanvasIfReady === "function" && is2D) {
       window.__v1SolverUI.redraw2DCanvasIfReady();
     }
   }
 
   /**
-   * Optional 2D P1 Boundary A/B/C contour overlay drawn cleanly on #v1-2d-canvas.
-   * Mirrors exact accepted P1 contour geometry (c_left, c_right around electrodes; c_enclosure_inner near walls).
+   * V2-A-R1-M1: Optional 2D P1 Boundary A/B/C contour overlay drawn cleanly on #v1-2d-canvas.
+   * Uses exact snapped P1 integration paths (electrostatics_numerics.py dynamic margin_x/margin_y,
+   * unequal electrode radii, 2.5*h enclosure margin, and grid-node snapping).
+   * Strictly suppressed whenever primary force_budget_status !== "COMPUTED" or schema validation failed.
    */
   function draw2DBoundaryContours(ctx, resp, bounds) {
-    if (!show2DContourOverlay || !resp || !resp.parameters || !bounds) return;
+    lastDrawn2DContours = null;
+    if (!show2DContourOverlay || !resp || !bounds) return;
     if (lastV1State && lastV1State.activeViewContext === "scalar_wave_contrast") return;
-    var p = resp.parameters;
-    var le = p.left_electrode;
-    var re = p.right_electrode;
-    if (!le || !re) return;
+    if (lastValidationErrors.length > 0) return;
+
+    var contours = Data.computeExactP1IntegrationContours(resp);
+    if (!contours) return;
 
     var halfWMm = bounds.halfWMm;
     var plotX = bounds.plotX;
@@ -214,36 +223,52 @@
       return { cx: plotX + u * plotSize, cy: plotY + v * plotSize };
     }
 
-    var pxPerMm = plotSize / (2.0 * halfWMm);
-    var padMm = Math.max(1.5, (p.box_width_m * 1000.0 / Math.max(2, p.n - 1)) * 1.5);
-    var halfBoxMm = Math.min(le.radius_m * 1000.0 + padMm, halfWMm * 0.42);
-    var rBoxPx = halfBoxMm * pxPerMm;
+    function contourToCanvasRect(c) {
+      var topLeft = worldMmToCanvas(c.contour_x_range_m[0] * 1000.0, c.contour_y_range_m[1] * 1000.0);
+      var bottomRight = worldMmToCanvas(c.contour_x_range_m[1] * 1000.0, c.contour_y_range_m[0] * 1000.0);
+      return {
+        x: topLeft.cx,
+        y: topLeft.cy,
+        width: bottomRight.cx - topLeft.cx,
+        height: bottomRight.cy - topLeft.cy
+      };
+    }
+
+    var rectLeft = contourToCanvasRect(contours.c_left);
+    var rectRight = contourToCanvasRect(contours.c_right);
+    var rectEnc = contourToCanvasRect(contours.c_enclosure_inner);
 
     ctx.save();
     ctx.setLineDash([6, 4]);
     ctx.lineWidth = 1.8;
 
-    // Boundary A electrode contours (c_left, c_right — cyan)
+    // Boundary A exact snapped electrode contours (c_left, c_right — cyan)
     ctx.strokeStyle = "#38bdf8";
-    var lC = worldMmToCanvas(le.center_x_m * 1000.0, le.center_y_m * 1000.0);
-    var rC = worldMmToCanvas(re.center_x_m * 1000.0, re.center_y_m * 1000.0);
-    ctx.strokeRect(lC.cx - rBoxPx, lC.cy - rBoxPx, rBoxPx * 2, rBoxPx * 2);
-    ctx.strokeRect(rC.cx - rBoxPx, rC.cy - rBoxPx, rBoxPx * 2, rBoxPx * 2);
+    ctx.strokeRect(rectLeft.x, rectLeft.y, rectLeft.width, rectLeft.height);
+    ctx.strokeRect(rectRight.x, rectRight.y, rectRight.width, rectRight.height);
 
-    // Boundary B inner enclosure contour (c_enclosure_inner — amber)
+    // Boundary B exact snapped inner enclosure contour (c_enclosure_inner — amber)
     ctx.strokeStyle = "#f59e0b";
-    var insetPx = Math.max(6, (3.0 / Math.max(10, p.n - 1)) * plotSize);
-    ctx.strokeRect(plotX + insetPx, plotY + insetPx, plotSize - insetPx * 2, plotSize - insetPx * 2);
+    ctx.strokeRect(rectEnc.x, rectEnc.y, rectEnc.width, rectEnc.height);
 
     // Compact corner legend label on canvas
     ctx.setLineDash([]);
     ctx.font = "bold 10px ui-monospace, SFMono-Regular, Menlo, monospace";
     ctx.fillStyle = "#38bdf8";
     ctx.textAlign = "left";
-    ctx.fillText("Boundary A (c_left, c_right)", plotX + 6, plotY + plotSize - 20);
+    ctx.fillText("Boundary A (c_left, c_right — snapped P1)", plotX + 6, plotY + plotSize - 20);
     ctx.fillStyle = "#f59e0b";
-    ctx.fillText("Boundary B (c_enclosure_inner)", plotX + 6, plotY + plotSize - 7);
+    ctx.fillText("Boundary B (c_enclosure_inner — snapped P1)", plotX + 6, plotY + plotSize - 7);
     ctx.restore();
+
+    lastDrawn2DContours = {
+      world_contours: contours,
+      canvas_rects: {
+        c_left: rectLeft,
+        c_right: rectRight,
+        c_enclosure_inner: rectEnc
+      }
+    };
   }
 
   function formatQuantityCellHtml(qty) {
@@ -405,9 +430,47 @@
     if (mainBody) mainBody.classList.toggle("hidden", isWave);
 
     var syncCheck = Data.evaluateV1SyncPredicates(v1State, lastRenderedV2Generation);
-    var snap = Data.buildForceLedgerSnapshot(v1State, lastRenderedV2Generation);
-    if (syncCheck.ok && v1State && typeof v1State.clientStateGeneration === "number") {
-      lastRenderedV2Generation = v1State.clientStateGeneration;
+    var snap;
+    var validationErrors = [];
+    try {
+      snap = Data.buildForceLedgerSnapshot(v1State, lastRenderedV2Generation);
+      validationErrors = Data.validateForceLedgerSnapshot(snap);
+    } catch (buildErr) {
+      validationErrors = [buildErr && buildErr.message ? buildErr.message : String(buildErr)];
+      snap = Data.buildForceLedgerSnapshot(
+        Object.assign({}, v1State || {}, {
+          solveState: "error",
+          lastRenderedResponse: null,
+          lastRenderedOrigin: null,
+          lastError: { code: "V2_SCHEMA_VALIDATION_FAILED", message: validationErrors[0], httpStatus: null }
+        }),
+        lastRenderedV2Generation
+      );
+    }
+
+    // V2-A-R1-M2: Fail closed before rendering if any built snapshot violates §7.3 schema validation
+    if (validationErrors.length > 0) {
+      lastValidationErrors = validationErrors.slice();
+      lastDrawn2DContours = null;
+      snap = Data.buildForceLedgerSnapshot(
+        Object.assign({}, v1State || {}, {
+          solveState: "error",
+          lastRenderedResponse: null,
+          lastRenderedOrigin: null,
+          lastError: {
+            code: "V2_SCHEMA_VALIDATION_FAILED",
+            message: "Malformed solver payload rejected by §7.3 schema validator: " + validationErrors[0],
+            httpStatus: null
+          }
+        }),
+        lastRenderedV2Generation
+      );
+      syncCheck = { ok: false, failedPredicate: null, reasonCode: "V2_SCHEMA_VALIDATION_FAILED" };
+    } else {
+      lastValidationErrors = [];
+      if (syncCheck.ok && v1State && typeof v1State.clientStateGeneration === "number") {
+        lastRenderedV2Generation = v1State.clientStateGeneration;
+      }
     }
     lastSnapshot = snap;
 
@@ -469,7 +532,7 @@
           statusBanner.className = "v1-banner v1-banner-balanced";
           statusBanner.textContent = "Synchronized verified " + snap.unit_domain + " P0/P1 ledger (origin: " + snap.sync_identity.response_origin_transport + ", epoch " + String(snap.sync_identity.transport_epoch) + "). Separate idealized benchmark — NOT 3D Exodus geometry.";
         }
-      } else if (v1State && v1State.solveState === "error") {
+      } else if ((v1State && v1State.solveState === "error") || lastValidationErrors.length > 0) {
         var errQ = snap.rows[0].quantity;
         statusBanner.className = "v1-banner v1-banner-error";
         statusBanner.textContent = "Ledger cleared on solver error (" + String(errQ.native_v1_code || errQ.status) + "): " + String(errQ.diagnostic || "");
@@ -598,6 +661,8 @@
           show2DContourOverlay: show2DContourOverlay,
           lastRenderedV2Generation: lastRenderedV2Generation,
           lastEventType: lastEventType,
+          lastDrawn2DContours: lastDrawn2DContours,
+          lastValidationErrors: lastValidationErrors.slice(),
           snapshot: lastSnapshot
         };
       },

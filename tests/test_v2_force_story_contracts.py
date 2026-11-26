@@ -26,6 +26,8 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+import electrostatics_baseline as eb  # noqa: E402
+import electrostatics_numerics as en  # noqa: E402
 import v1_solver_adapter as adapter  # noqa: E402
 
 EXPLORER_DIR = REPO_ROOT / "explorer"
@@ -559,6 +561,347 @@ class V2ForceStoryContractTests(unittest.TestCase):
         self.assertEqual(res["primIneligQty"]["status"], "WITHHELD_INELIGIBLE_PRIMARY_GRID")
         self.assertIsNone(res["primIneligQty"]["value"])
         self.assertEqual(res["primIneligErrs"], [])
+
+    def test_exact_p1_integration_contour_parity_and_withheld_suppression(self):
+        """V2-A-R1-M1: JS snapped P1 contours match frozen electrostatics_numerics.py across unequal radii, off-axis, n, W; withheld budgets return null."""
+        cases = [
+            {
+                "name": "unequal_radii_off_axis_80mm_n81",
+                "n": 81,
+                "box_width_m": 0.080,
+                "left": (-0.016, 0.006, 0.005, -20000.0),
+                "right": (0.015, -0.004, 0.009, 0.0),
+            },
+            {
+                "name": "asymmetric_hv_bench_80mm_n101",
+                "n": 101,
+                "box_width_m": 0.080,
+                "left": (-0.015, 0.0, 0.007, -20000.0),
+                "right": (0.015, 0.0, 0.007, 0.0),
+            },
+            {
+                "name": "wide_160mm_unequal_off_axis_n101",
+                "n": 101,
+                "box_width_m": 0.160,
+                "left": (-0.015, 0.008, 0.007, -20000.0),
+                "right": (0.018, -0.005, 0.008, 0.0),
+            },
+            {
+                "name": "tight_40mm_dynamic_margin_n61",
+                "n": 61,
+                "box_width_m": 0.040,
+                "left": (-0.010, 0.003, 0.004, -5000.0),
+                "right": (0.010, -0.002, 0.0035, 5000.0),
+            },
+        ]
+
+        py_payload = []
+        py_expected = {}
+        orig_contour_fn = en.compute_maxwell_stress_contour
+        for c in cases:
+            lx, ly, lr, lv = c["left"]
+            rx, ry, rr, rv = c["right"]
+            cfg = eb.GroundedBoxConfig(
+                n=c["n"],
+                box_width_m=c["box_width_m"],
+                left_electrode=eb.ElectrodeConfig(center_x_m=lx, center_y_m=ly, radius_m=lr, voltage_v=lv),
+                right_electrode=eb.ElectrodeConfig(center_x_m=rx, center_y_m=ry, radius_m=rr, voltage_v=rv),
+            )
+            sol = eb.electrode_pair_in_grounded_box(config=cfg)
+            captured = []
+
+            def _spy_contour(*args, **kwargs):
+                res_c = orig_contour_fn(*args, **kwargs)
+                captured.append(res_c)
+                return res_c
+
+            en.compute_maxwell_stress_contour = _spy_contour
+            try:
+                fb = en.evaluate_whole_apparatus_force_budget(sol)
+            finally:
+                en.compute_maxwell_stress_contour = orig_contour_fn
+            self.assertEqual(len(captured), 3)
+            c_left_py, c_right_py, c_enc_py = captured
+            py_expected[c["name"]] = {
+                "c_left": {
+                    "indices": list(c_left_py.contour_indices),
+                    "x_range": list(c_left_py.contour_x_range_m),
+                    "y_range": list(c_left_py.contour_y_range_m),
+                },
+                "c_right": {
+                    "indices": list(c_right_py.contour_indices),
+                    "x_range": list(c_right_py.contour_x_range_m),
+                    "y_range": list(c_right_py.contour_y_range_m),
+                },
+                "c_enclosure_inner": {
+                    "indices": list(c_enc_py.contour_indices),
+                    "x_range": list(c_enc_py.contour_x_range_m),
+                    "y_range": list(c_enc_py.contour_y_range_m),
+                },
+            }
+            py_payload.append({
+                "name": c["name"],
+                "resp": {
+                    "force_budget_status": "COMPUTED",
+                    "force_budget": {"left_electrode_fx_n_per_m": fb.left_electrode_fx_n_per_m},
+                    "parameters": {
+                        "n": c["n"],
+                        "box_width_m": c["box_width_m"],
+                        "left_electrode": {"center_x_m": lx, "center_y_m": ly, "radius_m": lr, "voltage_v": lv},
+                        "right_electrode": {"center_x_m": rx, "center_y_m": ry, "radius_m": rr, "voltage_v": rv},
+                    },
+                    "solution": {"grid_spacing_m": float(sol.grid_spacing_m)},
+                },
+            })
+
+        res = run_node_v2(
+            """
+            const computed = {};
+            for (const item of input.cases) {
+              computed[item.name] = D.computeExactP1IntegrationContours(item.resp);
+            }
+            const sample = input.cases[0].resp;
+            const withheldTopo = D.computeExactP1IntegrationContours(Object.assign({}, sample, {
+              force_budget_status: 'WITHHELD_INVALID_CONTOUR_TOPOLOGY',
+              force_budget: null
+            }));
+            const withheldPrimary = D.computeExactP1IntegrationContours(Object.assign({}, sample, {
+              force_budget_status: 'WITHHELD_INELIGIBLE_PRIMARY_GRID',
+              force_budget: null
+            }));
+            const missingBudget = D.computeExactP1IntegrationContours(Object.assign({}, sample, {
+              force_budget: null
+            }));
+            return { computed, withheldTopo, withheldPrimary, missingBudget };
+            """,
+            {"cases": py_payload},
+        )
+
+        for name, exp in py_expected.items():
+            got = res["computed"][name]
+            self.assertIsNotNone(got, f"Expected non-null contours for {name}")
+            for cname in ("c_left", "c_right", "c_enclosure_inner"):
+                self.assertEqual(
+                    got[cname]["contour_indices"],
+                    exp[cname]["indices"],
+                    f"Contour index mismatch for {name}.{cname}",
+                )
+                for idx in (0, 1):
+                    self.assertAlmostEqual(got[cname]["contour_x_range_m"][idx], exp[cname]["x_range"][idx], delta=1e-12)
+                    self.assertAlmostEqual(got[cname]["contour_y_range_m"][idx], exp[cname]["y_range"][idx], delta=1e-12)
+
+        # Unequal radii case must produce distinct contour spans for left vs right electrode
+        unequal = res["computed"]["unequal_radii_off_axis_80mm_n81"]
+        left_span = unequal["c_left"]["contour_x_range_m"][1] - unequal["c_left"]["contour_x_range_m"][0]
+        right_span = unequal["c_right"]["contour_x_range_m"][1] - unequal["c_right"]["contour_x_range_m"][0]
+        self.assertGreater(right_span, left_span)
+
+        # Withheld / unavailable budgets MUST return null (suppressing contours)
+        self.assertIsNone(res["withheldTopo"])
+        self.assertIsNone(res["withheldPrimary"])
+        self.assertIsNone(res["missingBudget"])
+
+    def test_exhaustive_schema_validation_counterexamples(self):
+        """V2-A-R1-M2: Reject every §7.3 counterexample from Review #6080392750 (uncertainty, vector/residual norms, units, study_n_list, crosswalk, snapshot provenance)."""
+        res = run_node_v2(
+            """
+            const out = {};
+
+            // 1. COMPUTED_VECTOR_2D inconsistent magnitude_n_per_m AND mismatched uncertainty.unit ('N' inside 'N/m')
+            out.vecBadMagAndUncUnit = D.validateLedgerRowValue({
+              status: 'COMPUTED_VECTOR_2D',
+              fx_n_per_m: 3.0,
+              fy_n_per_m: 4.0,
+              magnitude_n_per_m: 99.0,
+              unit: 'N/m',
+              uncertainty: { status: 'NOT_ASSESSED', value: null, unit: 'N', note: 'wrong unit' }
+            }, 'N/m', 'primary_force_budget');
+
+            out.vecValid = D.validateLedgerRowValue({
+              status: 'COMPUTED_VECTOR_2D',
+              fx_n_per_m: 3.0,
+              fy_n_per_m: 4.0,
+              magnitude_n_per_m: 5.0,
+              unit: 'N/m',
+              uncertainty: { status: 'NUMERICAL_RESIDUAL_ONLY', value: null, unit: 'N/m', note: 'valid' }
+            }, 'N/m', 'primary_force_budget');
+
+            // 2. NullableUncertainty edge cases: NOT_ASSESSED/UNBOUNDED_UNKNOWN with 0.0, negative BOUNDED, invalid status
+            out.uncNotAssessedZero = D.validateNullableUncertainty({ status: 'NOT_ASSESSED', value: 0.0, unit: 'N', note: 'bad' }, 'N');
+            out.uncUnboundedZero = D.validateNullableUncertainty({ status: 'UNBOUNDED_UNKNOWN', value: 0.0, unit: 'N/m', note: 'bad' }, 'N/m');
+            out.uncNegBounded = D.validateNullableUncertainty({ status: 'BOUNDED', value: -1e-4, unit: 'N/m', note: 'bad' }, 'N/m');
+            out.uncBadStatus = D.validateNullableUncertainty({ status: 'APPROX', value: 1e-4, unit: 'N/m', note: 'bad' }, 'N/m');
+
+            // 3. COMPUTED_RESIDUAL_2D inconsistent norm and negative relative_closure_residual
+            out.resBadNorm = D.validateLedgerRowValue({
+              status: 'COMPUTED_RESIDUAL_2D',
+              net_fx_n_per_m: 3e-5,
+              net_fy_n_per_m: 4e-5,
+              norm_n_per_m: 9e-5,
+              relative_closure_residual: 1e-4,
+              tolerance_n_per_m: 1e-4,
+              is_force_balanced_to_tolerance: true,
+              force_closure_status: 'BALANCED_WITHIN_TOLERANCE',
+              unit: 'N/m'
+            }, 'N/m', 'primary_force_budget');
+
+            out.resNegRel = D.validateLedgerRowValue({
+              status: 'COMPUTED_RESIDUAL_2D',
+              net_fx_n_per_m: 3e-5,
+              net_fy_n_per_m: 4e-5,
+              norm_n_per_m: 5e-5,
+              relative_closure_residual: -0.05,
+              tolerance_n_per_m: 1e-4,
+              is_force_balanced_to_tolerance: true,
+              force_closure_status: 'BALANCED_WITHIN_TOLERANCE',
+              unit: 'N/m'
+            }, 'N/m', 'primary_force_budget');
+
+            // 4. CONDITIONAL_ESTIMATE (unit 'N') inside 'N/m' domain MUST be rejected; non-string assumptions rejected; valid 'N' accepted
+            out.condIn2DDomain = D.validateLedgerRowValue({
+              status: 'CONDITIONAL_ESTIMATE',
+              value_n: 5e-3,
+              unit: 'N',
+              validity_regime: 'atmospheric_1atm_collisional',
+              assumptions: ['1 atm air'],
+              what_if_parameters: ['corona_current_ua']
+            }, 'N/m', 'comparator_estimate');
+
+            out.condNonStringWhatIf = D.validateLedgerRowValue({
+              status: 'CONDITIONAL_ESTIMATE',
+              value_n: 5e-3,
+              unit: 'N',
+              validity_regime: 'atmospheric_1atm_collisional',
+              assumptions: ['1 atm air'],
+              what_if_parameters: [42]
+            }, 'N', 'comparator_estimate');
+
+            out.condValid1D = D.validateLedgerRowValue({
+              status: 'CONDITIONAL_ESTIMATE',
+              value_n: 5e-3,
+              unit: 'N',
+              validity_regime: 'atmospheric_1atm_collisional',
+              assumptions: ['1 atm air'],
+              what_if_parameters: ['corona_current_ua']
+            }, 'N', 'comparator_estimate');
+
+            // 5. ConvergenceStudyStatusRecord.study_n_list non-integer elements ["41", true] & n < 3 MUST be rejected
+            out.studyBadNListWithheld = D.validateConvergenceStudyRecord({
+              source_scope: 'convergence_study',
+              status: 'WITHHELD_INELIGIBLE_MESH_LEVEL',
+              force_mesh_sensitivity_status: 'WITHHELD_INELIGIBLE_MESH_LEVEL',
+              study_n_list: ['41', true],
+              failed_levels: [{ n: 41, reason: 'r < 3h' }],
+              rows: [],
+              derived_sensitivity: null,
+              native_v1_code: 'WITHHELD_INELIGIBLE_MESH_LEVEL',
+              value: null
+            });
+
+            out.studyBadNListComputed = D.validateConvergenceStudyRecord({
+              source_scope: 'convergence_study',
+              status: 'STABLE_WITHIN_STUDY_TOLERANCE',
+              force_mesh_sensitivity_status: 'STABLE_WITHIN_STUDY_TOLERANCE',
+              study_n_list: ['41', true],
+              failed_levels: [],
+              observed_order_status: 'NOT_COMPUTED_NONUNIFORM_H_RATIO'
+            });
+
+            out.studySmallN = D.validateConvergenceStudyRecord({
+              source_scope: 'convergence_study',
+              status: 'STABLE_WITHIN_STUDY_TOLERANCE',
+              force_mesh_sensitivity_status: 'STABLE_WITHIN_STUDY_TOLERANCE',
+              study_n_list: [2, 41],
+              failed_levels: [],
+              observed_order_status: 'NOT_COMPUTED_NONUNIFORM_H_RATIO'
+            });
+
+            // 6. ForceLedgerSnapshot crosswalk mismatch, transport_mode, sync_identity, and provenance tampering
+            const baseSnap = D.buildForceLedgerSnapshot({
+              activeModelMode: 'schematic_3d',
+              activeViewContext: '3d_schematic',
+              transportMode: 'live',
+              transportEpoch: 0,
+              solveState: 'idle',
+              clientStateGeneration: 1,
+              lastRenderedResponse: null,
+              lastRenderedOrigin: null,
+              lastError: null
+            }, 0);
+
+            const badCrosswalk = JSON.parse(JSON.stringify(baseSnap));
+            badCrosswalk.rows[0].epistemic_class = 'PUBLISHED_HYPOTHESIS';
+            badCrosswalk.rows[0].charter_categories = ['EXPERIMENTAL MEASUREMENT'];
+            out.snapBadCrosswalk = D.validateForceLedgerSnapshot(badCrosswalk);
+
+            const badCondCrosswalk = JSON.parse(JSON.stringify(baseSnap));
+            badCondCrosswalk.rows[6].epistemic_class = 'CONDITIONAL_CONFOUNDER_MODEL';
+            badCondCrosswalk.rows[6].charter_categories = ['ESTABLISHED MODEL'];
+            out.snapMissingWhatIfCrosswalk = D.validateForceLedgerSnapshot(badCondCrosswalk);
+
+            const badTransport = JSON.parse(JSON.stringify(baseSnap));
+            badTransport.transport_mode = 'cached';
+            out.snapBadTransport = D.validateForceLedgerSnapshot(badTransport);
+
+            const bad3DTransport = JSON.parse(JSON.stringify(baseSnap));
+            bad3DTransport.transport_mode = 'live';
+            out.snap3DLiveTransport = D.validateForceLedgerSnapshot(bad3DTransport);
+
+            const badKernelSha = JSON.parse(JSON.stringify(baseSnap));
+            badKernelSha.provenance.kernel_blob_sha1.electrostatics_numerics = 'deadbeef';
+            out.snapBadKernelSha = D.validateForceLedgerSnapshot(badKernelSha);
+
+            const badNegEpoch = JSON.parse(JSON.stringify(baseSnap));
+            badNegEpoch.sync_identity.transport_epoch = -1;
+            out.snapNegEpoch = D.validateForceLedgerSnapshot(badNegEpoch);
+
+            const badOrigin = JSON.parse(JSON.stringify(baseSnap));
+            badOrigin.sync_identity.response_origin_transport = 'bogus';
+            out.snapBadOrigin = D.validateForceLedgerSnapshot(badOrigin);
+
+            const badRowBoundary = JSON.parse(JSON.stringify(baseSnap));
+            badRowBoundary.rows[0].boundary = 'boundary_z_fake';
+            out.snapBadBoundary = D.validateForceLedgerSnapshot(badRowBoundary);
+
+            return out;
+            """
+        )
+
+        # Counterexample 1: BOTH magnitude mismatch and uncertainty unit mismatch must be flagged
+        self.assertGreaterEqual(len(res["vecBadMagAndUncUnit"]), 2)
+        self.assertTrue(any("magnitude_n_per_m" in e for e in res["vecBadMagAndUncUnit"]))
+        self.assertTrue(any("uncertainty.unit" in e for e in res["vecBadMagAndUncUnit"]))
+        self.assertEqual(res["vecValid"], [])
+
+        # Counterexample 2: NullableUncertainty checks
+        self.assertGreater(len(res["uncNotAssessedZero"]), 0)
+        self.assertGreater(len(res["uncUnboundedZero"]), 0)
+        self.assertGreater(len(res["uncNegBounded"]), 0)
+        self.assertGreater(len(res["uncBadStatus"]), 0)
+
+        # Counterexample 3: COMPUTED_RESIDUAL_2D checks
+        self.assertTrue(any("norm_n_per_m" in e for e in res["resBadNorm"]))
+        self.assertTrue(any("relative_closure_residual" in e for e in res["resNegRel"]))
+
+        # Counterexample 4: CONDITIONAL_ESTIMATE unit-domain & string[] checks
+        self.assertTrue(any("Cross-unit" in e for e in res["condIn2DDomain"]))
+        self.assertGreater(len(res["condNonStringWhatIf"]), 0)
+        self.assertEqual(res["condValid1D"], [])
+
+        # Counterexample 5: study_n_list element-level integer >= 3 checks
+        self.assertGreaterEqual(len(res["studyBadNListWithheld"]), 2)
+        self.assertGreaterEqual(len(res["studyBadNListComputed"]), 2)
+        self.assertGreater(len(res["studySmallN"]), 0)
+
+        # Counterexample 6: Snapshot crosswalk, transport_mode, sync_identity, provenance, boundary
+        self.assertTrue(any("crosswalk" in e for e in res["snapBadCrosswalk"]))
+        self.assertTrue(any("crosswalk" in e for e in res["snapMissingWhatIfCrosswalk"]))
+        self.assertGreater(len(res["snapBadTransport"]), 0)
+        self.assertGreater(len(res["snap3DLiveTransport"]), 0)
+        self.assertTrue(any("electrostatics_numerics" in e for e in res["snapBadKernelSha"]))
+        self.assertGreater(len(res["snapNegEpoch"]), 0)
+        self.assertGreater(len(res["snapBadOrigin"]), 0)
+        self.assertGreater(len(res["snapBadBoundary"]), 0)
 
 
 if __name__ == "__main__":

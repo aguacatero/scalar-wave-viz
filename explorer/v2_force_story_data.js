@@ -815,6 +815,114 @@
   }
 
   /**
+   * V2-A-R1-M1: Compute exact snapped P1 Maxwell-stress integration contours (c_left, c_right, c_enclosure_inner)
+   * matching frozen electrostatics_numerics.py (lines 292-304, 408-445) and v1_solver_adapter.py (lines 795-837).
+   *
+   * Returns null (suppressing any purported integration-path overlay) whenever the primary force budget is
+   * withheld, unavailable, non-COMPUTED, or has invalid geometry parameters.
+   */
+  function computeExactP1IntegrationContours(resp) {
+    if (!isPlainObject(resp)) return null;
+    if (resp.force_budget_status !== "COMPUTED" || !isPlainObject(resp.force_budget)) {
+      return null;
+    }
+    var p = resp.parameters;
+    if (!isPlainObject(p)) return null;
+    var le = p.left_electrode;
+    var re = p.right_electrode;
+    if (!isPlainObject(le) || !isPlainObject(re)) return null;
+
+    var n = p.n;
+    var w = p.box_width_m;
+    if (!isStrictInteger(n) || n < 5) return null;
+    if (!isStrictFiniteNumber(w) || w <= 0) return null;
+
+    var lcx = le.center_x_m;
+    var lcy = le.center_y_m;
+    var lr = le.radius_m;
+    var rcx = re.center_x_m;
+    var rcy = re.center_y_m;
+    var rr = re.radius_m;
+    if (
+      !isStrictFiniteNumber(lcx) || !isStrictFiniteNumber(lcy) || !isStrictFiniteNumber(lr) || lr <= 0 ||
+      !isStrictFiniteNumber(rcx) || !isStrictFiniteNumber(rcy) || !isStrictFiniteNumber(rr) || rr <= 0
+    ) {
+      return null;
+    }
+
+    var h = (isPlainObject(resp.solution) && isStrictFiniteNumber(resp.solution.grid_spacing_m) && resp.solution.grid_spacing_m > 0)
+      ? resp.solution.grid_spacing_m
+      : (w / (n - 1));
+    var wContour = (n - 1) * h;
+
+    // Exact np.linspace(-wContour / 2.0, wContour / 2.0, n) lattice coordinates
+    var coords = new Array(n);
+    var start = -wContour / 2.0;
+    var step = wContour / (n - 1);
+    for (var i = 0; i < n; i++) {
+      coords[i] = i === n - 1 ? (wContour / 2.0) : (start + i * step);
+    }
+
+    // Exact frozen P1 dynamic vacuum margins (electrostatics_numerics.py lines 414-424, 440)
+    var sep = Math.abs(rcx - lcx);
+    var dInter = sep - (lr + rr);
+    var dLeftWall = (lcx - lr) - (-w / 2.0);
+    var dRightWall = (w / 2.0) - (rcx + rr);
+    var dVert = (w / 2.0) - Math.max(Math.abs(lcy) + lr, Math.abs(rcy) + rr);
+
+    var marginX = Math.max(Math.min(dInter * 0.35, dLeftWall * 0.35, dRightWall * 0.35, 0.003), 1.5 * h);
+    var marginY = Math.max(Math.min(dVert * 0.35, 0.003), 1.5 * h);
+    var wallMargin = 2.5 * h;
+
+    // Exact np.clip(np.argmin(np.abs(coords - target)), 1, n - 2) tie-breaking (lowest index wins on strict <)
+    function snapIdx(target) {
+      var bestIdx = 0;
+      var bestDist = Math.abs(coords[0] - target);
+      for (var k = 1; k < n; k++) {
+        var d = Math.abs(coords[k] - target);
+        if (d < bestDist) {
+          bestDist = d;
+          bestIdx = k;
+        }
+      }
+      if (bestIdx < 1) return 1;
+      if (bestIdx > n - 2) return n - 2;
+      return bestIdx;
+    }
+
+    function snapRect(xLo, xHi, yLo, yHi) {
+      var ixMin = snapIdx(xLo);
+      var ixMax = snapIdx(xHi);
+      var iyMin = snapIdx(yLo);
+      var iyMax = snapIdx(yHi);
+      if (ixMin >= ixMax || iyMin >= iyMax) return null;
+      return {
+        contour_indices: [ixMin, ixMax, iyMin, iyMax],
+        contour_x_range_m: [coords[ixMin], coords[ixMax]],
+        contour_y_range_m: [coords[iyMin], coords[iyMax]]
+      };
+    }
+
+    var cLeft = snapRect(lcx - lr - marginX, lcx + lr + marginX, lcy - lr - marginY, lcy + lr + marginY);
+    var cRight = snapRect(rcx - rr - marginX, rcx + rr + marginX, rcy - rr - marginY, rcy + rr + marginY);
+    var cEnc = snapRect(-w / 2.0 + wallMargin, w / 2.0 - wallMargin, -w / 2.0 + wallMargin, w / 2.0 - wallMargin);
+
+    if (!cLeft || !cRight || !cEnc) return null;
+
+    return {
+      n: n,
+      box_width_m: w,
+      grid_spacing_m: h,
+      margin_x_m: marginX,
+      margin_y_m: marginY,
+      wall_margin_m: wallMargin,
+      c_left: cLeft,
+      c_right: cRight,
+      c_enclosure_inner: cEnc
+    };
+  }
+
+  /**
    * Build a schema-valid ForceLedgerSnapshot directly from window.__v1SolverUI.getState().
    */
   function buildForceLedgerSnapshot(v1State, lastRenderedV2Generation) {
@@ -850,8 +958,52 @@
     return build3DSchematicSnapshot(v1State);
   }
 
+  var UNCERTAINTY_STATUSES = Object.freeze([
+    "BOUNDED",
+    "NUMERICAL_RESIDUAL_ONLY",
+    "NOT_ASSESSED",
+    "UNBOUNDED_UNKNOWN"
+  ]);
+
+  var UNIT_DOMAINS = Object.freeze(["N", "N/m", "NONE"]);
+  var TRANSPORT_MODES = Object.freeze(["live", "offline", "static_schematic"]);
+  var BOUNDARY_IDS = Object.freeze(["boundary_a_dut", "boundary_b_environment", "boundary_c_closed"]);
+
+  function isNonEmptyString(v) {
+    return typeof v === "string" && v.trim().length > 0;
+  }
+
   /**
-   * Exhaustive strict validator for LedgerRowValue discriminated union (§7.3).
+   * Exhaustive strict validator for nested NullableUncertainty (§7.3, V2-A-R1-M2).
+   */
+  function validateNullableUncertainty(unc, expectedUnit) {
+    var errors = [];
+    if (!isPlainObject(unc)) {
+      return ["uncertainty must be a NullableUncertainty object."];
+    }
+    if (UNCERTAINTY_STATUSES.indexOf(unc.status) === -1) {
+      errors.push("uncertainty.status invalid: " + String(unc.status));
+    }
+    if (UNIT_DOMAINS.indexOf(unc.unit) === -1) {
+      errors.push("uncertainty.unit invalid: " + String(unc.unit));
+    } else if (expectedUnit && unc.unit !== expectedUnit) {
+      errors.push("uncertainty.unit '" + String(unc.unit) + "' must match row unit '" + String(expectedUnit) + "'.");
+    }
+    if (unc.status === "NOT_ASSESSED" || unc.status === "UNBOUNDED_UNKNOWN") {
+      if (unc.value !== null) {
+        errors.push("uncertainty.value must be null when uncertainty.status is " + String(unc.status) + " (never 0.0).");
+      }
+    } else if (unc.value !== null && (!isStrictFiniteNumber(unc.value) || unc.value < 0)) {
+      errors.push("uncertainty.value must be null or a non-negative finite number.");
+    }
+    if (!isNonEmptyString(unc.note)) {
+      errors.push("uncertainty.note must be a non-empty string.");
+    }
+    return errors;
+  }
+
+  /**
+   * Exhaustive strict validator for LedgerRowValue discriminated union (§7.3, V2-A-R1-M2).
    */
   function validateLedgerRowValue(val, expectedUnitDomain, sourceScope) {
     var errors = [];
@@ -868,7 +1020,7 @@
       if (Object.prototype.hasOwnProperty.call(val, "fx_n_per_m") || Object.prototype.hasOwnProperty.call(val, "fy_n_per_m")) {
         errors.push("COMPUTED_SCALAR_1D must not contain 2D vector fields.");
       }
-      if (!isPlainObject(val.uncertainty)) errors.push("COMPUTED_SCALAR_1D requires uncertainty object.");
+      errors = errors.concat(validateNullableUncertainty(val.uncertainty, "N"));
       return errors;
     }
 
@@ -876,33 +1028,51 @@
       if (Object.prototype.hasOwnProperty.call(val, "value") || Object.prototype.hasOwnProperty.call(val, "value_n")) {
         errors.push("COMPUTED_VECTOR_2D must not coerce 2D signed vectors into scalar value/value_n.");
       }
-      if (!isStrictFiniteNumber(val.fx_n_per_m)) errors.push("COMPUTED_VECTOR_2D requires finite signed fx_n_per_m.");
-      if (!isStrictFiniteNumber(val.fy_n_per_m)) errors.push("COMPUTED_VECTOR_2D requires finite signed fy_n_per_m.");
-      if (!isStrictFiniteNumber(val.magnitude_n_per_m) || val.magnitude_n_per_m < 0) {
+      var fxOk = isStrictFiniteNumber(val.fx_n_per_m);
+      var fyOk = isStrictFiniteNumber(val.fy_n_per_m);
+      var magOk = isStrictFiniteNumber(val.magnitude_n_per_m) && val.magnitude_n_per_m >= 0;
+      if (!fxOk) errors.push("COMPUTED_VECTOR_2D requires finite signed fx_n_per_m.");
+      if (!fyOk) errors.push("COMPUTED_VECTOR_2D requires finite signed fy_n_per_m.");
+      if (!magOk) {
         errors.push("COMPUTED_VECTOR_2D requires non-negative finite magnitude_n_per_m.");
+      } else if (fxOk && fyOk) {
+        var expectedMag = Math.hypot(val.fx_n_per_m, val.fy_n_per_m);
+        var magTol = Math.max(1e-12, 1e-9 * Math.max(expectedMag, val.magnitude_n_per_m));
+        if (Math.abs(val.magnitude_n_per_m - expectedMag) > magTol) {
+          errors.push("COMPUTED_VECTOR_2D magnitude_n_per_m (" + String(val.magnitude_n_per_m) + ") inconsistent with hypot(fx, fy) (" + String(expectedMag) + ").");
+        }
       }
       if (val.unit !== "N/m") errors.push("COMPUTED_VECTOR_2D requires unit === 'N/m'.");
       if (expectedUnitDomain && expectedUnitDomain !== "N/m") errors.push("Cross-unit violation: COMPUTED_VECTOR_2D not permitted in unit_domain " + expectedUnitDomain);
-      if (!isPlainObject(val.uncertainty)) errors.push("COMPUTED_VECTOR_2D requires uncertainty object.");
+      errors = errors.concat(validateNullableUncertainty(val.uncertainty, "N/m"));
       return errors;
     }
 
     if (st === "COMPUTED_RESIDUAL_2D") {
-      if (!isStrictFiniteNumber(val.net_fx_n_per_m) || !isStrictFiniteNumber(val.net_fy_n_per_m)) {
+      var nfxOk = isStrictFiniteNumber(val.net_fx_n_per_m);
+      var nfyOk = isStrictFiniteNumber(val.net_fy_n_per_m);
+      var normOk = isStrictFiniteNumber(val.norm_n_per_m) && val.norm_n_per_m >= 0;
+      if (!nfxOk || !nfyOk) {
         errors.push("COMPUTED_RESIDUAL_2D requires finite net_fx_n_per_m and net_fy_n_per_m.");
       }
-      if (!isStrictFiniteNumber(val.norm_n_per_m) || val.norm_n_per_m < 0) {
+      if (!normOk) {
         errors.push("COMPUTED_RESIDUAL_2D requires non-negative finite norm_n_per_m.");
+      } else if (nfxOk && nfyOk) {
+        var expectedNorm = Math.hypot(val.net_fx_n_per_m, val.net_fy_n_per_m);
+        var normTol = Math.max(1e-12, 1e-9 * Math.max(expectedNorm, val.norm_n_per_m));
+        if (Math.abs(val.norm_n_per_m - expectedNorm) > normTol) {
+          errors.push("COMPUTED_RESIDUAL_2D norm_n_per_m (" + String(val.norm_n_per_m) + ") inconsistent with hypot(net_fx, net_fy) (" + String(expectedNorm) + ").");
+        }
       }
-      if (val.relative_closure_residual !== null && !isStrictFiniteNumber(val.relative_closure_residual)) {
-        errors.push("COMPUTED_RESIDUAL_2D relative_closure_residual must be finite number or null.");
+      if (val.relative_closure_residual !== null && (!isStrictFiniteNumber(val.relative_closure_residual) || val.relative_closure_residual < 0)) {
+        errors.push("COMPUTED_RESIDUAL_2D relative_closure_residual must be non-negative finite number or null.");
       }
       if (val.tolerance_n_per_m !== FORCE_BALANCE_TOLERANCE_N_PER_M) {
         errors.push("COMPUTED_RESIDUAL_2D requires tolerance_n_per_m === 1e-4.");
       }
       if (typeof val.is_force_balanced_to_tolerance !== "boolean") {
         errors.push("COMPUTED_RESIDUAL_2D requires boolean is_force_balanced_to_tolerance.");
-      } else {
+      } else if (normOk) {
         var expectedBalanced = val.norm_n_per_m < FORCE_BALANCE_TOLERANCE_N_PER_M;
         if (val.is_force_balanced_to_tolerance !== expectedBalanced) {
           errors.push("COMPUTED_RESIDUAL_2D is_force_balanced_to_tolerance must follow strict norm < 1e-4.");
@@ -920,10 +1090,15 @@
     if (st === "CONDITIONAL_ESTIMATE") {
       if (!isStrictFiniteNumber(val.value_n)) errors.push("CONDITIONAL_ESTIMATE requires finite numeric value_n.");
       if (val.unit !== "N") errors.push("CONDITIONAL_ESTIMATE requires unit === 'N'.");
-      if (typeof val.validity_regime !== "string" || !val.validity_regime) errors.push("CONDITIONAL_ESTIMATE requires validity_regime.");
-      if (!Array.isArray(val.assumptions) || val.assumptions.length === 0) errors.push("CONDITIONAL_ESTIMATE requires non-empty assumptions.");
-      if (!Array.isArray(val.what_if_parameters) || val.what_if_parameters.length === 0) {
-        errors.push("CONDITIONAL_ESTIMATE requires non-empty what_if_parameters (Charter WHAT-IF PARAMETER disclosure).");
+      if (expectedUnitDomain && expectedUnitDomain !== "N") {
+        errors.push("Cross-unit violation: CONDITIONAL_ESTIMATE (unit 'N') not permitted in unit_domain " + expectedUnitDomain);
+      }
+      if (!isNonEmptyString(val.validity_regime)) errors.push("CONDITIONAL_ESTIMATE requires non-empty validity_regime.");
+      if (!Array.isArray(val.assumptions) || val.assumptions.length === 0 || !val.assumptions.every(isNonEmptyString)) {
+        errors.push("CONDITIONAL_ESTIMATE requires non-empty string[] assumptions.");
+      }
+      if (!Array.isArray(val.what_if_parameters) || val.what_if_parameters.length === 0 || !val.what_if_parameters.every(isNonEmptyString)) {
+        errors.push("CONDITIONAL_ESTIMATE requires non-empty string[] what_if_parameters (Charter WHAT-IF PARAMETER disclosure).");
       }
       return errors;
     }
@@ -932,7 +1107,7 @@
       if (val.value !== null) errors.push("WITHHELD_INVALID_CONTOUR_TOPOLOGY must have value === null (NEVER 0.0).");
       if (val.http_status !== 200) errors.push("WITHHELD_INVALID_CONTOUR_TOPOLOGY requires http_status === 200.");
       if (val.native_v1_code !== "WITHHELD_INVALID_CONTOUR_TOPOLOGY") errors.push("native_v1_code must equal WITHHELD_INVALID_CONTOUR_TOPOLOGY.");
-      if (typeof val.diagnostic !== "string") errors.push("WITHHELD_INVALID_CONTOUR_TOPOLOGY requires string diagnostic.");
+      if (!isNonEmptyString(val.diagnostic)) errors.push("WITHHELD_INVALID_CONTOUR_TOPOLOGY requires non-empty string diagnostic.");
       return errors;
     }
 
@@ -940,7 +1115,7 @@
       if (val.value !== null) errors.push("REJECTED_INVALID_FORCE_DOMAIN must have value === null (NEVER 0.0).");
       if (val.http_status !== 400) errors.push("REJECTED_INVALID_FORCE_DOMAIN requires http_status === 400.");
       if (val.native_v1_code !== "INVALID_FORCE_DOMAIN") errors.push("native_v1_code must equal INVALID_FORCE_DOMAIN.");
-      if (typeof val.diagnostic !== "string") errors.push("REJECTED_INVALID_FORCE_DOMAIN requires string diagnostic.");
+      if (!isNonEmptyString(val.diagnostic)) errors.push("REJECTED_INVALID_FORCE_DOMAIN requires non-empty string diagnostic.");
       return errors;
     }
 
@@ -948,7 +1123,7 @@
       if (val.value !== null) errors.push("WITHHELD_INELIGIBLE_PRIMARY_GRID must have value === null (NEVER 0.0).");
       if (val.http_status !== 200) errors.push("WITHHELD_INELIGIBLE_PRIMARY_GRID requires http_status === 200.");
       if (val.native_v1_code !== "WITHHELD_INELIGIBLE_PRIMARY_GRID") errors.push("native_v1_code must equal WITHHELD_INELIGIBLE_PRIMARY_GRID.");
-      if (typeof val.diagnostic !== "string") errors.push("WITHHELD_INELIGIBLE_PRIMARY_GRID requires string diagnostic.");
+      if (!isNonEmptyString(val.diagnostic)) errors.push("WITHHELD_INELIGIBLE_PRIMARY_GRID requires non-empty string diagnostic.");
       return errors;
     }
 
@@ -959,13 +1134,14 @@
       if (val.value !== null) errors.push("WITHHELD_INELIGIBLE_MESH_LEVEL must have value === null (NEVER 0.0).");
       if (val.http_status !== 200) errors.push("WITHHELD_INELIGIBLE_MESH_LEVEL requires http_status === 200.");
       if (val.native_v1_code !== "WITHHELD_INELIGIBLE_MESH_LEVEL") errors.push("native_v1_code must equal WITHHELD_INELIGIBLE_MESH_LEVEL.");
+      if (!isNonEmptyString(val.diagnostic)) errors.push("WITHHELD_INELIGIBLE_MESH_LEVEL requires non-empty string diagnostic.");
       if (!Array.isArray(val.failed_levels) || val.failed_levels.length === 0) {
         errors.push("WITHHELD_INELIGIBLE_MESH_LEVEL requires non-empty failed_levels: StudyFailedLevelRecord[].");
       } else {
         for (var i = 0; i < val.failed_levels.length; i++) {
           var fl = val.failed_levels[i];
-          if (!isPlainObject(fl) || !isStrictInteger(fl.n) || typeof fl.reason !== "string" || fl.reason.length === 0) {
-            errors.push("failed_levels[" + i + "] must be lossless { n: integer, reason: non-empty string } (never number-only array).");
+          if (!isPlainObject(fl) || !isStrictInteger(fl.n) || fl.n < 3 || !isNonEmptyString(fl.reason)) {
+            errors.push("failed_levels[" + i + "] must be lossless { n: integer >= 3, reason: non-empty string } (never number-only array).");
           }
         }
       }
@@ -975,29 +1151,43 @@
     if (st === "UNAVAILABLE_SOLVER_ERROR") {
       if (val.value !== null) errors.push("UNAVAILABLE_SOLVER_ERROR must have value === null (NEVER 0.0).");
       if (val.http_status !== null && !isStrictInteger(val.http_status)) errors.push("http_status must be integer or null.");
-      if (typeof val.native_v1_code !== "string" || !val.native_v1_code) errors.push("UNAVAILABLE_SOLVER_ERROR requires non-empty native_v1_code.");
+      if (!isNonEmptyString(val.native_v1_code)) errors.push("UNAVAILABLE_SOLVER_ERROR requires non-empty native_v1_code.");
+      if (!isNonEmptyString(val.diagnostic)) errors.push("UNAVAILABLE_SOLVER_ERROR requires non-empty diagnostic.");
       return errors;
     }
 
     if (st === "PENDING_SCIENTIFIC_ACCEPTANCE") {
       if (val.value !== null) errors.push("PENDING_SCIENTIFIC_ACCEPTANCE must have value === null (NEVER 0.0).");
       if (val.blocking_gate !== "TRACK_B_P2") errors.push("PENDING_SCIENTIFIC_ACCEPTANCE requires blocking_gate === 'TRACK_B_P2'.");
-      if (typeof val.note !== "string" || !val.note) errors.push("PENDING_SCIENTIFIC_ACCEPTANCE requires note.");
+      if (!isNonEmptyString(val.note)) errors.push("PENDING_SCIENTIFIC_ACCEPTANCE requires non-empty note.");
       return errors;
     }
 
     if (NULL_VALUE_STATUSES.indexOf(st) !== -1) {
       if (val.value !== null) errors.push(st + " must have value === null (NEVER 0.0).");
-      if (typeof val.reason_code !== "string" || !val.reason_code) errors.push(st + " requires non-empty reason_code.");
-      if (typeof val.note !== "string" || !val.note) errors.push(st + " requires non-empty note.");
+      if (!isNonEmptyString(val.reason_code)) errors.push(st + " requires non-empty reason_code.");
+      if (!isNonEmptyString(val.note)) errors.push(st + " requires non-empty note.");
       return errors;
     }
 
     return ["Unknown LedgerRowValue status: " + st];
   }
 
+  function validateStudyNList(list, label) {
+    var errs = [];
+    if (!Array.isArray(list) || list.length === 0) {
+      return [label + " requires non-empty integer[] study_n_list."];
+    }
+    for (var i = 0; i < list.length; i++) {
+      if (!isStrictInteger(list[i]) || list[i] < 3) {
+        errs.push(label + " study_n_list[" + i + "] must be an integer >= 3 (got " + JSON.stringify(list[i]) + ").");
+      }
+    }
+    return errs;
+  }
+
   /**
-   * Exhaustive strict validator for ConvergenceStudyStatusRecord (§7.3, V2-SPEC-R3-M1).
+   * Exhaustive strict validator for ConvergenceStudyStatusRecord (§7.3, V2-SPEC-R3-M1, V2-A-R1-M2).
    */
   function validateConvergenceStudyRecord(rec) {
     var errors = [];
@@ -1017,16 +1207,16 @@
 
     if (rec.status === "STABLE_WITHIN_STUDY_TOLERANCE" || rec.status === "SENSITIVE_OR_UNBALANCED") {
       if (rec.force_mesh_sensitivity_status !== rec.status) errors.push("Computed study force_mesh_sensitivity_status must match status.");
-      if (!Array.isArray(rec.study_n_list) || rec.study_n_list.length === 0) errors.push("Computed study requires non-empty study_n_list.");
+      errors = errors.concat(validateStudyNList(rec.study_n_list, "Computed study"));
       if (!Array.isArray(rec.failed_levels) || rec.failed_levels.length !== 0) errors.push("Computed study requires failed_levels === [].");
-      if (typeof rec.observed_order_status !== "string" || !rec.observed_order_status) errors.push("Computed study requires observed_order_status.");
+      if (!isNonEmptyString(rec.observed_order_status)) errors.push("Computed study requires non-empty observed_order_status.");
       return errors;
     }
 
     if (rec.status === "WITHHELD_INELIGIBLE_MESH_LEVEL" || rec.status === "WITHHELD_INVALID_CONTOUR_TOPOLOGY") {
       if (rec.force_mesh_sensitivity_status !== rec.status) errors.push("Withheld study force_mesh_sensitivity_status must match status.");
       if (rec.native_v1_code !== rec.status) errors.push("Withheld study native_v1_code must match status.");
-      if (!Array.isArray(rec.study_n_list) || rec.study_n_list.length === 0) errors.push("Withheld study requires study_n_list.");
+      errors = errors.concat(validateStudyNList(rec.study_n_list, "Withheld study"));
       if (!Array.isArray(rec.rows) || rec.rows.length !== 0) errors.push("Withheld study MUST have empty rows: [] (never synthesize study rows).");
       if (rec.derived_sensitivity !== null) errors.push("Withheld study MUST have derived_sensitivity === null.");
       if (rec.value !== null) errors.push("Withheld study MUST have value === null (NEVER 0.0).");
@@ -1035,8 +1225,8 @@
       } else {
         for (var i = 0; i < rec.failed_levels.length; i++) {
           var fl = rec.failed_levels[i];
-          if (!isPlainObject(fl) || !isStrictInteger(fl.n) || typeof fl.reason !== "string" || fl.reason.length === 0) {
-            errors.push("Withheld study failed_levels[" + i + "] must be lossless { n: integer, reason: non-empty string } (rejects number-only arrays).");
+          if (!isPlainObject(fl) || !isStrictInteger(fl.n) || fl.n < 3 || !isNonEmptyString(fl.reason)) {
+            errors.push("Withheld study failed_levels[" + i + "] must be lossless { n: integer >= 3, reason: non-empty string } (rejects number-only arrays).");
           }
         }
       }
@@ -1046,8 +1236,23 @@
     return ["Unknown ConvergenceStudyStatusRecord status: " + String(rec.status)];
   }
 
+  function hasExactCharterCrosswalk(epistemicClass, charterCategories) {
+    var entry = EPISTEMIC_CROSSWALK[epistemicClass];
+    if (!entry || !Array.isArray(charterCategories)) return false;
+    var expected = entry.charter_categories;
+    if (charterCategories.length !== expected.length) return false;
+    for (var i = 0; i < expected.length; i++) {
+      if (charterCategories.indexOf(expected[i]) === -1) return false;
+    }
+    // Reject duplicates as well
+    for (var j = 0; j < charterCategories.length; j++) {
+      if (charterCategories.indexOf(charterCategories[j]) !== j) return false;
+    }
+    return true;
+  }
+
   /**
-   * Exhaustive strict validator for ForceLedgerSnapshot (§7.3).
+   * Exhaustive strict validator for ForceLedgerSnapshot (§7.3, V2-A-R1-M2).
    */
   function validateForceLedgerSnapshot(snap) {
     var errors = [];
@@ -1072,6 +1277,17 @@
       errors.push("unit_domain " + String(snap.unit_domain) + " does not match context_id " + String(snap.context_id) + " (expected " + expectedUnit + ").");
     }
 
+    if (TRANSPORT_MODES.indexOf(snap.transport_mode) === -1) {
+      errors.push("Invalid transport_mode: " + String(snap.transport_mode));
+    } else {
+      if (snap.context_id === "schematic_3d_exodus" && snap.transport_mode !== "static_schematic") {
+        errors.push("schematic_3d_exodus requires transport_mode === 'static_schematic'.");
+      }
+      if ((snap.context_id === "parallel_plate_1d" || snap.context_id === "grounded_box_2d") && snap.transport_mode === "static_schematic") {
+        errors.push("1D/2D contexts require transport_mode 'live' or 'offline' (not 'static_schematic').");
+      }
+    }
+
     if (snap.context_id === "schematic_3d_exodus" && snap.comparison_surface !== "qualitative_3d_dut_hypotheses") {
       errors.push("schematic_3d_exodus must use comparison_surface 'qualitative_3d_dut_hypotheses'.");
     }
@@ -1082,8 +1298,42 @@
     if (!isPlainObject(snap.sync_identity)) {
       errors.push("sync_identity is required.");
     } else {
-      if (!isStrictInteger(snap.sync_identity.client_state_generation)) errors.push("sync_identity.client_state_generation must be integer.");
-      if (!isStrictInteger(snap.sync_identity.transport_epoch)) errors.push("sync_identity.transport_epoch must be integer.");
+      if (!isStrictInteger(snap.sync_identity.client_state_generation) || snap.sync_identity.client_state_generation < 0) {
+        errors.push("sync_identity.client_state_generation must be non-negative integer.");
+      }
+      if (!isStrictInteger(snap.sync_identity.transport_epoch) || snap.sync_identity.transport_epoch < 0) {
+        errors.push("sync_identity.transport_epoch must be non-negative integer.");
+      }
+      var origT = snap.sync_identity.response_origin_transport;
+      if (origT !== null && origT !== "live" && origT !== "offline") {
+        errors.push("sync_identity.response_origin_transport must be 'live', 'offline', or null.");
+      }
+      var fp = snap.sync_identity.input_fingerprint;
+      if (fp !== null && !isNonEmptyString(fp)) {
+        errors.push("sync_identity.input_fingerprint must be non-empty string or null.");
+      }
+      var reqId = snap.sync_identity.request_id;
+      if (reqId !== null && (!isStrictInteger(reqId) || reqId < 0)) {
+        errors.push("sync_identity.request_id must be non-negative integer or null.");
+      }
+    }
+
+    if (!isPlainObject(snap.provenance)) {
+      errors.push("provenance object is required.");
+    } else {
+      if (snap.provenance.source_head_sha !== null && !isNonEmptyString(snap.provenance.source_head_sha)) {
+        errors.push("provenance.source_head_sha must be non-empty string or null.");
+      }
+      if (!isPlainObject(snap.provenance.kernel_blob_sha1)) {
+        errors.push("provenance.kernel_blob_sha1 object is required.");
+      } else {
+        if (snap.provenance.kernel_blob_sha1.electrostatics_baseline !== FROZEN_KERNEL_BLOB_SHA1.electrostatics_baseline) {
+          errors.push("provenance.kernel_blob_sha1.electrostatics_baseline does not match frozen P0 SHA-1.");
+        }
+        if (snap.provenance.kernel_blob_sha1.electrostatics_numerics !== FROZEN_KERNEL_BLOB_SHA1.electrostatics_numerics) {
+          errors.push("provenance.kernel_blob_sha1.electrostatics_numerics does not match frozen P1 SHA-1.");
+        }
+      }
     }
 
     errors = errors.concat(validateConvergenceStudyRecord(snap.convergence_study_provenance));
@@ -1100,25 +1350,34 @@
         errors.push("rows[" + i + "] must be an object.");
         continue;
       }
+      if (!isNonEmptyString(r.row_id)) errors.push("rows[" + i + "] requires non-empty row_id.");
+      if (!isNonEmptyString(r.component_label)) errors.push("rows[" + i + "] requires non-empty component_label.");
+      if (!isNonEmptyString(r.qualitative_direction)) errors.push("rows[" + i + "] requires non-empty qualitative_direction.");
+      if (!isNonEmptyString(r.source_citation)) errors.push("rows[" + i + "] requires non-empty source_citation.");
+      if (BOUNDARY_IDS.indexOf(r.boundary) === -1) {
+        errors.push("rows[" + i + "] invalid boundary: " + String(r.boundary));
+      }
       if (SOURCE_SCOPES.indexOf(r.source_scope) === -1) {
         errors.push("rows[" + i + "] invalid source_scope: " + String(r.source_scope));
       }
       if (EPISTEMIC_CLASSES.indexOf(r.epistemic_class) === -1) {
         errors.push("rows[" + i + "] invalid epistemic_class: " + String(r.epistemic_class));
-      }
-      if (!Array.isArray(r.charter_categories) || r.charter_categories.length === 0) {
-        errors.push("rows[" + i + "] requires non-empty charter_categories.");
-      } else {
-        for (var c = 0; c < r.charter_categories.length; c++) {
-          if (CHARTER_CATEGORIES.indexOf(r.charter_categories[c]) === -1) {
-            errors.push("rows[" + i + "] invalid Charter category: " + String(r.charter_categories[c]));
-          }
-        }
+      } else if (!hasExactCharterCrosswalk(r.epistemic_class, r.charter_categories)) {
+        errors.push(
+          "rows[" + i + "] charter_categories " + JSON.stringify(r.charter_categories) +
+          " does not match exact Scientific Charter crosswalk for epistemic_class " + String(r.epistemic_class) +
+          " (expected " + JSON.stringify(EPISTEMIC_CROSSWALK[r.epistemic_class].charter_categories) + ")."
+        );
       }
 
       var qErrs = validateLedgerRowValue(r.quantity, expectedUnit, r.source_scope);
       for (var qe = 0; qe < qErrs.length; qe++) {
         errors.push("rows[" + i + "] (" + String(r.row_id) + "): " + qErrs[qe]);
+      }
+      if (isPlainObject(r.quantity) && r.quantity.status === "CONDITIONAL_ESTIMATE") {
+        if (!Array.isArray(r.charter_categories) || r.charter_categories.indexOf("WHAT-IF PARAMETER") === -1) {
+          errors.push("rows[" + i + "] CONDITIONAL_ESTIMATE requires 'WHAT-IF PARAMETER' in charter_categories.");
+        }
       }
       if (
         isPlainObject(r.quantity) &&
@@ -1133,6 +1392,12 @@
     if (hasComputedRow && isPlainObject(snap.sync_identity)) {
       if (snap.sync_identity.response_origin_transport !== snap.transport_mode) {
         errors.push("Computed snapshot sync_identity.response_origin_transport must match transport_mode (V2-SPEC-R2-M1).");
+      }
+      if (!isNonEmptyString(snap.sync_identity.input_fingerprint)) {
+        errors.push("Computed snapshot requires non-empty sync_identity.input_fingerprint.");
+      }
+      if (!isStrictInteger(snap.sync_identity.request_id) || snap.sync_identity.request_id < 0) {
+        errors.push("Computed snapshot requires non-negative integer sync_identity.request_id.");
       }
     }
 
@@ -1155,8 +1420,10 @@
     SURFACE_A_QUALITATIVE_3D_DUT: SURFACE_A_QUALITATIVE_3D_DUT,
     SURFACE_B_QUANTITATIVE_ANALOGUES: SURFACE_B_QUANTITATIVE_ANALOGUES,
     evaluateV1SyncPredicates: evaluateV1SyncPredicates,
+    computeExactP1IntegrationContours: computeExactP1IntegrationContours,
     buildConvergenceStudyProvenance: buildConvergenceStudyProvenance,
     buildForceLedgerSnapshot: buildForceLedgerSnapshot,
+    validateNullableUncertainty: validateNullableUncertainty,
     validateLedgerRowValue: validateLedgerRowValue,
     validateConvergenceStudyRecord: validateConvergenceStudyRecord,
     validateForceLedgerSnapshot: validateForceLedgerSnapshot
