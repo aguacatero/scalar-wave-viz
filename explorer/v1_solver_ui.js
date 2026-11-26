@@ -64,10 +64,54 @@
   var activeAbortController = null;
   var solveState = "idle"; // "idle" | "pending" | "ready" | "error"
   var transportMode = (window.location && window.location.protocol === "file:") ? "offline" : "live";
+  var transportEpoch = 0;
   var lastRenderedResponse = null;
+  var lastRenderedOrigin = null; // { transportMode: "live" | "offline", transportEpoch: number } | null
+  var lastError = null; // { code: string, message: string, httpStatus: number | null } | null
+  var subscribers = [];
+  var v2CanvasOverlayRenderer = null;
   var active2DPresetId = "p0_p1_canonical_40mm";
   var lastCanvasBounds = null;
   var suppressWaveCallback = false;
+
+  function getPublicStateSnapshot() {
+    return {
+      activeModelMode: activeModelMode,
+      activeViewContext: activeViewContext,
+      activeEndpoint: activeEndpoint,
+      transportMode: transportMode,
+      transportEpoch: transportEpoch,
+      solveState: solveState,
+      clientStateGeneration: clientStateGeneration,
+      currentCanonicalFingerprint: currentCanonicalFingerprint,
+      latestDispatchedRequestId: latestDispatchedRequestId,
+      isComputed2DActive: isComputed2DActive(),
+      lastRenderedResponse: lastRenderedResponse,
+      lastRenderedOrigin: lastRenderedOrigin ? {
+        transportMode: lastRenderedOrigin.transportMode,
+        transportEpoch: lastRenderedOrigin.transportEpoch
+      } : null,
+      lastError: lastError ? {
+        code: lastError.code,
+        message: lastError.message,
+        httpStatus: lastError.httpStatus
+      } : null
+    };
+  }
+
+  function notifySubscribers(eventType) {
+    if (subscribers.length === 0) return;
+    var snap = getPublicStateSnapshot();
+    var evt = { eventType: eventType, state: snap };
+    var snapshotList = subscribers.slice();
+    for (var i = 0; i < snapshotList.length; i++) {
+      try {
+        snapshotList[i](evt);
+      } catch (_subErr) {
+        // Subscriber errors must never disrupt accepted V1 execution
+      }
+    }
+  }
 
   function getSnapshotsBundle() {
     return window.V1_REFERENCE_SNAPSHOTS || null;
@@ -380,6 +424,7 @@
 
   function clearComputedReadouts() {
     lastRenderedResponse = null;
+    lastRenderedOrigin = null;
     var ids1d = [
       "v1-1d-e-field", "v1-1d-pressure", "v1-1d-force-pos", "v1-1d-force-neg",
       "v1-1d-net-force", "v1-1d-energy", "v1-1d-vw-fixed-v", "v1-1d-vw-fixed-q",
@@ -457,6 +502,7 @@
       sync2DSliderBounds(true);
     }
     syncSolverControlsDisabledState();
+    notifySubscribers("transport");
   }
 
   function isScalarWaveViewActive() {
@@ -567,10 +613,13 @@
     }
 
     currentCanonicalFingerprint = computeCurrentFingerprintSync(activeModelMode, activeViewContext, activeEndpoint);
+    lastError = null;
+    lastRenderedOrigin = null;
     clearErrorBanner();
     clearComputedReadouts();
     syncModePanelsAndViewport();
     setSolveStateUI(nextState || "idle");
+    notifySubscribers("invalidate");
   }
 
   function isCapturedCurrent(captured) {
@@ -579,12 +628,17 @@
       captured.fp === currentCanonicalFingerprint &&
       captured.mode === activeModelMode &&
       captured.view === activeViewContext &&
-      captured.reqId === latestDispatchedRequestId
+      captured.reqId === latestDispatchedRequestId &&
+      captured.transportMode === transportMode &&
+      captured.transportEpoch === transportEpoch
     );
   }
 
   function enterOfflineModeAndRender(endpointToRun) {
-    transportMode = "offline";
+    if (transportMode !== "offline") {
+      transportMode = "offline";
+      transportEpoch += 1;
+    }
     syncTransportUI();
     var targetView = activeModelMode === "grounded_box_2d" ? "v1_2d" : (activeModelMode === "parallel_plate_1d" ? "v1_1d" : "3d_schematic");
     invalidatePending(activeModelMode, targetView, endpointToRun || "/api/v1/solve", "pending");
@@ -628,7 +682,9 @@
       fp: currentCanonicalFingerprint,
       mode: activeModelMode,
       view: activeViewContext,
-      endpoint: activeEndpoint
+      endpoint: activeEndpoint,
+      transportMode: transportMode,
+      transportEpoch: transportEpoch
     };
 
     // Offline dispatch path (true serverless file:// or static HTTP fallback)
@@ -700,7 +756,7 @@
               var errMsg = (!parseFailed && data && data.error && data.error.message)
                 ? data.error.message
                 : ("Server returned HTTP " + String(response.status) + ".");
-              handleCurrentError(captured, errCode, errMsg);
+              handleCurrentError(captured, errCode, errMsg, response.status);
               return;
             }
 
@@ -792,18 +848,29 @@
     }
   }
 
-  function handleCurrentError(captured, code, message) {
+  function handleCurrentError(captured, code, message, httpStatus) {
     if (!isCapturedCurrent(captured)) return;
     clearComputedReadouts();
+    lastError = {
+      code: String(code || "SOLVER_ERROR"),
+      message: String(message || "Request failed."),
+      httpStatus: typeof httpStatus === "number" ? httpStatus : null
+    };
     setSolveStateUI("error");
     showErrorBanner(code, message);
+    notifySubscribers("error");
   }
 
   // --- Rendering Verified Responses ---
   function renderVerifiedResponse(captured, resp) {
     if (!isCapturedCurrent(captured)) return;
     clearErrorBanner();
+    lastError = null;
     lastRenderedResponse = resp;
+    lastRenderedOrigin = {
+      transportMode: captured.transportMode,
+      transportEpoch: captured.transportEpoch
+    };
 
     if (captured.mode === "parallel_plate_1d") {
       render1DResponse(resp);
@@ -812,6 +879,7 @@
     }
     renderProvenanceCard(resp);
     setSolveStateUI("ready");
+    notifySubscribers("ready");
   }
 
   function render1DResponse(resp) {
@@ -1276,6 +1344,15 @@
       ctx.stroke();
       ctx.restore();
     }
+
+    // 7. Optional read-only V2-A 2D Boundary A/B/C contour overlay hook
+    if (typeof v2CanvasOverlayRenderer === "function" && lastCanvasBounds) {
+      try {
+        v2CanvasOverlayRenderer(ctx, resp, lastCanvasBounds);
+      } catch (_overlayErr) {
+        // Optional overlay must never disrupt V1 2D rendering
+      }
+    }
   }
 
   // --- Public Mode & Lifecycle Transitions ---
@@ -1353,10 +1430,15 @@
     if (retryBtn) {
       retryBtn.addEventListener("click", function () {
         if (window.location && window.location.protocol === "file:") return;
-        transportMode = "live";
+        if (transportMode !== "live") {
+          transportMode = "live";
+          transportEpoch += 1;
+        }
         syncTransportUI();
         if (activeModelMode !== "schematic_3d" && !isScalarWaveViewActive()) {
           scheduleV1Request("/api/v1/solve", true);
+        } else if (solveState === "pending" || debounceTimerId !== null || activeAbortController !== null) {
+          invalidatePending(activeModelMode, activeViewContext, null, "idle");
         }
       });
     }
@@ -1448,33 +1530,47 @@
       });
     }
 
-    // Expose public inspection/integration API for explorer.js and Playwright tests
+    // Expose public inspection/integration API for explorer.js, V2-A read-only observer, and Playwright tests
     window.__v1SolverUI = {
       isComputed2DActive: isComputed2DActive,
       setMode: setMode,
       setTransportMode: function (mode) {
-        if (mode === "live" || mode === "offline") {
-          transportMode = mode;
+        if (mode !== "live" && mode !== "offline") return;
+        if (mode === transportMode) {
           syncTransportUI();
+          return;
+        }
+        transportMode = mode;
+        transportEpoch += 1;
+        // V2-SPEC-R3-M2: Deterministic Pending-Work Settlement Barrier prevents stranding V1 in "pending"
+        // when transport changes while a prior-epoch request is active or debounced.
+        if (solveState === "pending" || debounceTimerId !== null || activeAbortController !== null) {
+          invalidatePending(activeModelMode, activeViewContext, null, "idle");
+        }
+        syncTransportUI();
+      },
+      subscribe: function (listener) {
+        if (typeof listener !== "function") {
+          return function () {};
+        }
+        subscribers.push(listener);
+        return function unsubscribe() {
+          var idx = subscribers.indexOf(listener);
+          if (idx !== -1) subscribers.splice(idx, 1);
+        };
+      },
+      setV2CanvasOverlayRenderer: function (fn) {
+        v2CanvasOverlayRenderer = typeof fn === "function" ? fn : null;
+      },
+      redraw2DCanvasIfReady: function () {
+        if (activeModelMode === "grounded_box_2d" && activeViewContext === "v1_2d" && solveState === "ready" && lastRenderedResponse) {
+          render2DCanvas(lastRenderedResponse);
         }
       },
       onChapterChange: onChapterChange,
       onScalarWaveToggle: onScalarWaveToggle,
       onExploreFreelyToggle: onExploreFreelyToggle,
-      getState: function () {
-        return {
-          activeModelMode: activeModelMode,
-          activeViewContext: activeViewContext,
-          activeEndpoint: activeEndpoint,
-          transportMode: transportMode,
-          solveState: solveState,
-          clientStateGeneration: clientStateGeneration,
-          currentCanonicalFingerprint: currentCanonicalFingerprint,
-          latestDispatchedRequestId: latestDispatchedRequestId,
-          isComputed2DActive: isComputed2DActive(),
-          lastRenderedResponse: lastRenderedResponse
-        };
-      }
+      getState: getPublicStateSnapshot
     };
   }
 

@@ -214,6 +214,7 @@
         <button class="tab-btn" data-tab="tab-sandbox" role="tab" aria-selected="false" id="tab-btn-sandbox">What-If Sandbox</button>
         <button class="tab-btn" data-tab="tab-inspector" role="tab" aria-selected="false" id="tab-btn-inspector">Inspector</button>
         <button class="tab-btn" data-tab="tab-solver" role="tab" aria-selected="false" id="tab-btn-solver">V1 Solver</button>
+        <button class="tab-btn" data-tab="tab-v2-story" role="tab" aria-selected="false" id="tab-btn-v2-story">Force Story (V2)</button>
       </nav>
 
       <!-- Tab 1: Layers & Display Toggles -->
@@ -702,6 +703,155 @@
         </div>
       </section>
 
+      <!-- Tab 6: Whole-Device Force Story (V2-A) -->
+      <section class="tab-panel" id="tab-v2-story" role="tabpanel" aria-labelledby="tab-btn-v2-story">
+        <div class="panel-card v2-card">
+          <div class="card-header-with-badge">
+            <h2 class="card-title">Whole-Device Force Story (V2-A)</h2>
+            <span class="provenance-pill pill-provisional" id="v2-epistemic-badge">PROVISIONAL ILLUSTRATIVE SCENE</span>
+          </div>
+          <p class="card-desc">Follow where opposing forces and momentum go across <strong>Boundary A (DUT)</strong>, <strong>Boundary B (Chamber/Environment)</strong>, and <strong>Boundary C (Closed System)</strong>. 1D (N), 2D (N/m), and pending 3D Exodus contexts are strictly segregated.</p>
+
+          <div class="v1-status-row">
+            <span class="v1-pill v2-pill-context" id="v2-context-pill">3D EXODUS SCHEMATIC (P2 PENDING)</span>
+            <span class="v1-pill v1-pill-transport" id="v2-transport-pill">STATIC 3D SCHEMATIC</span>
+          </div>
+        </div>
+
+        <!-- Chapter 5 Mathematical Scalar-Wave Isolation Guard -->
+        <div class="panel-card v2-card hidden" id="v2-wave-isolation-panel" role="status" aria-live="polite">
+          <div class="card-header-with-badge">
+            <h3 class="inner-title">Chapter 5 Mathematical Scalar-Wave Toy Active</h3>
+            <span class="provenance-pill pill-whatif">MATHEMATICAL TOY (ISOLATED)</span>
+          </div>
+          <p class="card-desc">Abstract scalar-wave contrast is isolated from electrostatic force ledgers and solver dispatch. Exit Chapter 5 wave view or choose a model mode in <strong>V1 Solver</strong> to inspect electrostatic force accounting.</p>
+        </div>
+
+        <!-- Main V2-A Force Story Content (hidden during Chapter 5 wave contrast) -->
+        <div id="v2-story-main-content" class="v2-main-stack">
+          <!-- Surface Depth: Non-Conflating Visual Overlay Toggles -->
+          <div class="panel-card v2-card">
+            <h3 class="inner-title">System-Boundary Visual Overlays (Non-Conflating)</h3>
+            <p class="card-desc">3D boundary shells outline schematic control volumes only (zero 1D/2D numbers on the 3D blade). 2D contours trace accepted P1 integration paths on the dedicated 2D cross-section canvas.</p>
+            <div class="toggle-group">
+              <label class="toggle-switch">
+                <input type="checkbox" id="v2-toggle-3d-boundaries">
+                <span class="slider"></span>
+                <span class="toggle-label">3D Boundary A (Cyan) &amp; Boundary B (Amber) Shells</span>
+              </label>
+              <label class="toggle-switch">
+                <input type="checkbox" id="v2-toggle-2d-contours" disabled aria-disabled="true">
+                <span class="slider"></span>
+                <span class="toggle-label">2D P1 Integration Contours (c<sub>left</sub>, c<sub>right</sub>, c<sub>enclosure</sub>)</span>
+              </label>
+            </div>
+          </div>
+
+          <!-- Shallow Depth: Segregated Comparison Surfaces A vs B (V2-SPEC-R1-M1) -->
+          <div class="panel-card v2-card">
+            <h3 class="inner-title">Segregated Comparison Surfaces</h3>
+            <div class="v2-surface-tabs" role="tablist" aria-label="V2 Comparison Surface Selector">
+              <button type="button" class="v2-surface-tab active" role="tab" id="v2-surface-tab-a" aria-selected="true" aria-controls="v2-surface-panel-a" tabindex="0">Surface A: 3D DUT (H0/H1/H2)</button>
+              <button type="button" class="v2-surface-tab" role="tab" id="v2-surface-tab-b" aria-selected="false" aria-controls="v2-surface-panel-b" tabindex="-1">Surface B: P0/P1 Analogue</button>
+            </div>
+
+            <!-- Surface A: Qualitative 3D Exodus DUT Hypotheses (ZERO 1D/2D numbers) -->
+            <div id="v2-surface-panel-a" role="tabpanel" aria-labelledby="v2-surface-tab-a" class="v2-surface-panel">
+              <div class="v1-banner v1-banner-warn" id="v2-surface-a-banner" role="note"></div>
+              <p class="card-desc" id="v2-surface-a-subtitle"></p>
+              <div id="v2-surface-a-cards" class="v2-cards-stack"></div>
+            </div>
+
+            <!-- Surface B: Separate Quantitative P0/P1 Benchmark Analogues -->
+            <div id="v2-surface-panel-b" role="tabpanel" aria-labelledby="v2-surface-tab-b" class="v2-surface-panel hidden">
+              <div class="v1-banner v1-banner-balanced" id="v2-surface-b-banner" role="note"></div>
+              <p class="card-desc" id="v2-surface-b-subtitle"></p>
+              <div class="v2-context-jump-row" role="group" aria-label="Switch P0/P1 Benchmark Context">
+                <button type="button" class="btn btn-sm btn-secondary v2-context-jump-btn" data-v2-jump-mode="parallel_plate_1d">Inspect 1D Plate (N)</button>
+                <button type="button" class="btn btn-sm btn-secondary v2-context-jump-btn" data-v2-jump-mode="grounded_box_2d">Inspect 2D Box (N/m)</button>
+                <button type="button" class="btn btn-sm btn-secondary v2-context-jump-btn" data-v2-jump-mode="schematic_3d">Return 3D Schematic</button>
+              </div>
+              <div id="v2-surface-b-active-summary"></div>
+            </div>
+          </div>
+
+          <!-- Synchronized Three-Boundary Force & Momentum Ledger -->
+          <div class="panel-card v2-card" id="v2-ledger-section">
+            <h3 class="inner-title">Synchronized Boundary A / B / C Force Ledger</h3>
+            <p class="v2-sync-meta" id="v2-sync-identity-line">—</p>
+            <div id="v2-ledger-status-banner" class="v1-banner v1-banner-warn" role="status" aria-live="polite"></div>
+
+            <div class="ledger-table-wrapper">
+              <table class="ledger-table v2-ledger-table" aria-label="Synchronized Three-Boundary Force and Momentum Ledger">
+                <thead>
+                  <tr>
+                    <th scope="col">Boundary</th>
+                    <th scope="col">Component / Path</th>
+                    <th scope="col">Signed Quantity / Status</th>
+                  </tr>
+                </thead>
+                <tbody id="v2-ledger-tbody"></tbody>
+              </table>
+            </div>
+
+            <!-- Independent Multi-Grid Convergence Study Provenance Card (V2-SPEC-R2-L1, V2-SPEC-R3-M1) -->
+            <div id="v2-study-provenance-card" class="v2-study-card hidden" role="region" aria-label="Independent Multi-Grid Convergence Study Provenance">
+              <div class="v2-hyp-head">
+                <h4 class="v2-hyp-title">Multi-Grid Study Provenance (Independent of Primary Rows)</h4>
+                <span class="v2-status-chip v2-chip-muted" id="v2-study-status-badge">NOT_REQUESTED</span>
+              </div>
+              <p class="v2-sync-meta" id="v2-study-scope-label">source_scope: convergence_study</p>
+              <p class="card-desc" id="v2-study-levels-text"></p>
+              <div id="v2-study-failed-levels" class="hidden"></div>
+            </div>
+          </div>
+
+          <!-- Deeper Depth: Contested H1 Audit, Boundary Conservation Laws & Charter Crosswalk -->
+          <details class="v2-details-card">
+            <summary>Deeper: US11511891B2 Eq. (4)/Eq. (11) Contested-Derivation Audit</summary>
+            <div class="v2-details-body">
+              <div class="ledger-table-wrapper">
+                <table class="ledger-table v2-ledger-table" aria-label="US11511891B2 Contested-Derivation Audit Ledger">
+                  <thead>
+                    <tr>
+                      <th scope="col">Equation</th>
+                      <th scope="col">Claimed Statement</th>
+                      <th scope="col">Audit Note</th>
+                      <th scope="col">Disposition</th>
+                    </tr>
+                  </thead>
+                  <tbody id="v2-h1-audit-tbody"></tbody>
+                </table>
+              </div>
+            </div>
+          </details>
+
+          <details class="v2-details-card">
+            <summary>Deeper: Boundary A / B / C Control Volumes &amp; Conservation Laws</summary>
+            <div class="v2-details-body" id="v2-boundary-defs-list"></div>
+          </details>
+
+          <details class="v2-details-card">
+            <summary>Research: Epistemic Taxonomy &harr; Scientific Charter Crosswalk &amp; P2 Gate</summary>
+            <div class="v2-details-body">
+              <div class="ledger-table-wrapper">
+                <table class="ledger-table v2-ledger-table" aria-label="V2 Epistemic Class to Scientific Charter Crosswalk">
+                  <thead>
+                    <tr>
+                      <th scope="col">V2 Badge</th>
+                      <th scope="col">Charter Categories</th>
+                      <th scope="col">WHAT-IF Rule</th>
+                    </tr>
+                  </thead>
+                  <tbody id="v2-charter-crosswalk-tbody"></tbody>
+                </table>
+              </div>
+              <p class="v2-p2-gate-note"><strong>Track B Scientific Gate Notice:</strong> 3D Exodus quantitative whole-device electrostatic forces remain <code>PENDING_SCIENTIFIC_ACCEPTANCE</code> (Track B P2). Interactive H2 comparators, clearance sweeps, and the 6-control Null-Control Lab are scoped to future Slice V2-B (not yet authorized).</p>
+            </div>
+          </details>
+        </div>
+      </section>
+
       <!-- Epistemic Status Card -->
       <div class="thrust-status-card" role="note" aria-label="Whole-Body Thrust Measurement Status">
         <div class="status-header">
@@ -774,5 +924,8 @@
   <script src="explorer.js"></script>
   <!-- V1 Interactive Solver UI Integration (Slice B3) -->
   <script src="v1_solver_ui.js"></script>
+  <!-- V2-A Whole-Device Force Story Data, Validators & Synchronized Ledger UI -->
+  <script src="v2_force_story_data.js"></script>
+  <script src="v2_force_story_ui.js"></script>
 </body>
 </html>
