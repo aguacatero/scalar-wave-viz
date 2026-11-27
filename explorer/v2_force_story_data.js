@@ -264,7 +264,7 @@
     return {
       status: status,
       value: null,
-      unit: unit || "NONE",
+      unit: unit === undefined ? "NONE" : unit,
       note: note
     };
   }
@@ -344,23 +344,28 @@
       if (Array.isArray(fs.failed_levels)) {
         for (var i = 0; i < fs.failed_levels.length; i++) {
           var item = fs.failed_levels[i];
-          if (isPlainObject(item) && isStrictInteger(item.n) && typeof item.reason === "string" && item.reason.length > 0) {
+          if (isPlainObject(item) && isStrictInteger(item.n) && item.n >= 3 && typeof item.reason === "string" && item.reason.trim().length > 0) {
             nativeFailed.push({ n: item.n, reason: item.reason });
           } else {
-            throw new Error("Invalid native failed_levels record in force_study: expected { n: integer, reason: non-empty string }");
+            throw new Error("Invalid native failed_levels record in force_study: expected { n: integer >= 3, reason: non-empty string }");
           }
         }
       }
+      // V2-A-R2-M2: Preserve native rows / derived_sensitivity / value verbatim so malformed withheld
+      // studies with fabricated rows or non-null sensitivity are NEVER silently normalized away.
+      var nativeRows = Array.isArray(fs.rows) ? fs.rows.slice() : fs.rows;
+      var nativeSens = Object.prototype.hasOwnProperty.call(fs, "derived_sensitivity") ? fs.derived_sensitivity : null;
+      var nativeVal = Object.prototype.hasOwnProperty.call(fs, "value") ? fs.value : null;
       return {
         source_scope: "convergence_study",
         status: st,
         force_mesh_sensitivity_status: String(resp.force_mesh_sensitivity_status || st),
         study_n_list: nList,
         failed_levels: nativeFailed,
-        rows: [],
-        derived_sensitivity: null,
+        rows: nativeRows,
+        derived_sensitivity: nativeSens,
         native_v1_code: st,
-        value: null
+        value: nativeVal
       };
     }
 
@@ -370,8 +375,8 @@
         status: st,
         force_mesh_sensitivity_status: String(resp.force_mesh_sensitivity_status || st),
         study_n_list: nList,
-        failed_levels: [],
-        observed_order_status: String(fs.observed_order_status || "NOT_COMPUTED_NONUNIFORM_H_RATIO")
+        failed_levels: Array.isArray(fs.failed_levels) ? fs.failed_levels.slice() : fs.failed_levels,
+        observed_order_status: typeof fs.observed_order_status === "string" ? fs.observed_order_status : ""
       };
     }
 
@@ -425,14 +430,29 @@
     };
   }
 
+  /**
+   * V2-A-R2-M2: Extract provenance without EVER manufacturing frozen kernel hashes for solver responses.
+   * Explicitly distinguishes non-computed client placeholders from native solver response provenance.
+   */
   function extractProvenance(resp) {
-    var prov = isPlainObject(resp) && isPlainObject(resp.provenance) ? resp.provenance : {};
-    var k = isPlainObject(prov.kernel_blob_sha1) ? prov.kernel_blob_sha1 : FROZEN_KERNEL_BLOB_SHA1;
+    if (!isPlainObject(resp)) {
+      return {
+        provenance_source: "noncomputed_client_placeholder",
+        source_head_sha: null,
+        kernel_blob_sha1: {
+          electrostatics_baseline: FROZEN_KERNEL_BLOB_SHA1.electrostatics_baseline,
+          electrostatics_numerics: FROZEN_KERNEL_BLOB_SHA1.electrostatics_numerics
+        }
+      };
+    }
+    var prov = isPlainObject(resp.provenance) ? resp.provenance : null;
+    var k = prov && isPlainObject(prov.kernel_blob_sha1) ? prov.kernel_blob_sha1 : null;
     return {
-      source_head_sha: typeof prov.source_head_sha === "string" ? prov.source_head_sha : null,
+      provenance_source: "native_solver_response",
+      source_head_sha: prov && typeof prov.source_head_sha === "string" ? prov.source_head_sha : null,
       kernel_blob_sha1: {
-        electrostatics_baseline: String(k.electrostatics_baseline || FROZEN_KERNEL_BLOB_SHA1.electrostatics_baseline),
-        electrostatics_numerics: String(k.electrostatics_numerics || FROZEN_KERNEL_BLOB_SHA1.electrostatics_numerics)
+        electrostatics_baseline: k && typeof k.electrostatics_baseline === "string" ? k.electrostatics_baseline : null,
+        electrostatics_numerics: k && typeof k.electrostatics_numerics === "string" ? k.electrostatics_numerics : null
       }
     };
   }
@@ -649,13 +669,15 @@
     function primaryVectorQty(fx, fy, uncNote) {
       if (resp) {
         if (fbStatus === "COMPUTED" && fb && isStrictFiniteNumber(fx) && isStrictFiniteNumber(fy)) {
+          // V2-A-R2-M2: Preserve native force_budget.units verbatim (never silently coerce wrong/missing unit to "N/m")
+          var nativeUnit = typeof fb.units === "string" ? fb.units : null;
           return {
             status: "COMPUTED_VECTOR_2D",
             fx_n_per_m: fx,
             fy_n_per_m: fy,
             magnitude_n_per_m: Math.hypot(fx, fy),
-            unit: "N/m",
-            uncertainty: makeNullUncertainty("NUMERICAL_RESIDUAL_ONLY", uncNote, "N/m")
+            unit: nativeUnit,
+            uncertainty: makeNullUncertainty("NUMERICAL_RESIDUAL_ONLY", uncNote, nativeUnit)
           };
         }
         if (fbStatus === "WITHHELD_INVALID_CONTOUR_TOPOLOGY") {
@@ -704,16 +726,17 @@
         ) {
           var norm = fb.net_electrostatic_force_norm_n_per_m;
           var balanced = norm < FORCE_BALANCE_TOLERANCE_N_PER_M;
+          var nativeUnit = typeof fb.units === "string" ? fb.units : null;
           return {
             status: "COMPUTED_RESIDUAL_2D",
             net_fx_n_per_m: fb.net_electrostatic_force_fx_n_per_m,
             net_fy_n_per_m: fb.net_electrostatic_force_fy_n_per_m,
             norm_n_per_m: norm,
             relative_closure_residual: isStrictFiniteNumber(fb.relative_closure_residual) ? fb.relative_closure_residual : null,
-            tolerance_n_per_m: FORCE_BALANCE_TOLERANCE_N_PER_M,
-            is_force_balanced_to_tolerance: balanced,
-            force_closure_status: balanced ? "BALANCED_WITHIN_TOLERANCE" : "UNBALANCED_EXCEEDS_TOLERANCE",
-            unit: "N/m"
+            tolerance_n_per_m: Object.prototype.hasOwnProperty.call(fb, "tolerance_n_per_m") ? fb.tolerance_n_per_m : FORCE_BALANCE_TOLERANCE_N_PER_M,
+            is_force_balanced_to_tolerance: Object.prototype.hasOwnProperty.call(fb, "is_force_balanced_to_tolerance") ? fb.is_force_balanced_to_tolerance : balanced,
+            force_closure_status: Object.prototype.hasOwnProperty.call(fb, "force_closure_status") ? fb.force_closure_status : (balanced ? "BALANCED_WITHIN_TOLERANCE" : "UNBALANCED_EXCEEDS_TOLERANCE"),
+            unit: nativeUnit
           };
         }
         return primaryVectorQty(null, null, "");
@@ -1252,7 +1275,220 @@
   }
 
   /**
-   * Exhaustive strict validator for ForceLedgerSnapshot (§7.3, V2-A-R1-M2).
+   * V2-A-R2-M2: Validate native V1 solver response BEFORE normalization into ForceLedgerSnapshot.
+   * Ensures malformed HTTP-200 or offline source payloads cannot be silently masked by defaults:
+   * - Actual non-empty frozen P0/P1 kernel SHA-1 hashes required (never manufactured)
+   * - Native force_budget.units === "N/m", valid force_budget_status discriminants, consistent vector sums/norms
+   * - Native force_study discriminants, empty rows / null derived_sensitivity / verbatim failed_levels on withheld studies
+   * - Preserves valid live and offline B2 responses including simultaneous COMPUTED primary + withheld study
+   */
+  function validateNativeV1Response(resp, expectedMode) {
+    var errors = [];
+    if (!isPlainObject(resp)) {
+      return ["Native V1 response must be an object."];
+    }
+    if (expectedMode && resp.model_id !== expectedMode) {
+      errors.push("Native response model_id '" + String(resp.model_id) + "' does not match expected mode '" + String(expectedMode) + "'.");
+    }
+
+    // 1. Native provenance & actual frozen kernel SHA-1 hashes (NEVER manufactured)
+    if (!isPlainObject(resp.provenance)) {
+      errors.push("Native response requires provenance object.");
+    } else {
+      if (
+        Object.prototype.hasOwnProperty.call(resp.provenance, "whole_body_thrust_status") &&
+        resp.provenance.whole_body_thrust_status !== WHOLE_BODY_THRUST_STATUS
+      ) {
+        errors.push("Native response provenance.whole_body_thrust_status must equal 'NOT MEASURED / NOT ESTABLISHED'.");
+      }
+      var k = resp.provenance.kernel_blob_sha1;
+      if (!isPlainObject(k)) {
+        errors.push("Native response requires provenance.kernel_blob_sha1 object.");
+      } else {
+        if (!isNonEmptyString(k.electrostatics_baseline) || k.electrostatics_baseline !== FROZEN_KERNEL_BLOB_SHA1.electrostatics_baseline) {
+          errors.push("Native response missing or invalid provenance.kernel_blob_sha1.electrostatics_baseline (expected frozen P0 SHA-1).");
+        }
+        if (!isNonEmptyString(k.electrostatics_numerics) || k.electrostatics_numerics !== FROZEN_KERNEL_BLOB_SHA1.electrostatics_numerics) {
+          errors.push("Native response missing or invalid provenance.kernel_blob_sha1.electrostatics_numerics (expected frozen P1 SHA-1).");
+        }
+      }
+    }
+
+    var mode = expectedMode || resp.model_id;
+    if (mode === "parallel_plate_1d") {
+      if (Object.prototype.hasOwnProperty.call(resp, "units") && resp.units !== "N") {
+        errors.push("Native 1D response units must be 'N' when provided (got " + JSON.stringify(resp.units) + ").");
+      }
+      var fpOk = isStrictFiniteNumber(resp.force_on_positive_plate_n);
+      var fnOk = isStrictFiniteNumber(resp.force_on_negative_plate_n);
+      var netOk = isStrictFiniteNumber(resp.net_pair_force_n);
+      if (!fpOk) errors.push("Native 1D response requires finite force_on_positive_plate_n.");
+      if (!fnOk) errors.push("Native 1D response requires finite force_on_negative_plate_n.");
+      if (!netOk) errors.push("Native 1D response requires finite net_pair_force_n.");
+      if (fpOk && fnOk && netOk) {
+        var sum1d = resp.force_on_positive_plate_n + resp.force_on_negative_plate_n;
+        var tol1d = Math.max(1e-12, 1e-9 * Math.max(Math.abs(resp.force_on_positive_plate_n), Math.abs(resp.force_on_negative_plate_n), Math.abs(resp.net_pair_force_n)));
+        if (Math.abs(sum1d - resp.net_pair_force_n) > tol1d) {
+          errors.push("Native 1D net_pair_force_n inconsistent with force_on_positive_plate_n + force_on_negative_plate_n.");
+        }
+      }
+      return errors;
+    }
+
+    if (mode === "grounded_box_2d") {
+      var fbStatus = resp.force_budget_status;
+      var validPrimaryStatuses = ["COMPUTED", "WITHHELD_INVALID_CONTOUR_TOPOLOGY", "WITHHELD_INELIGIBLE_PRIMARY_GRID"];
+      if (validPrimaryStatuses.indexOf(fbStatus) === -1) {
+        errors.push("Native 2D response invalid force_budget_status: " + String(fbStatus));
+      } else if (fbStatus === "COMPUTED") {
+        var fb = resp.force_budget;
+        if (!isPlainObject(fb)) {
+          errors.push("Native 2D COMPUTED response requires force_budget object.");
+        } else {
+          if (fb.units !== "N/m") {
+            errors.push("Native 2D force_budget.units must equal 'N/m' (got " + JSON.stringify(fb.units) + ").");
+          }
+          var reqNums = [
+            "left_electrode_fx_n_per_m",
+            "left_electrode_fy_n_per_m",
+            "right_electrode_fx_n_per_m",
+            "right_electrode_fy_n_per_m",
+            "enclosure_reaction_fx_n_per_m",
+            "enclosure_reaction_fy_n_per_m",
+            "net_electrostatic_force_fx_n_per_m",
+            "net_electrostatic_force_fy_n_per_m",
+            "net_electrostatic_force_norm_n_per_m"
+          ];
+          var allNumsOk = true;
+          for (var ri = 0; ri < reqNums.length; ri++) {
+            if (!isStrictFiniteNumber(fb[reqNums[ri]])) {
+              errors.push("Native 2D force_budget requires finite numeric " + reqNums[ri] + ".");
+              allNumsOk = false;
+            }
+          }
+          if (allNumsOk) {
+            if (fb.net_electrostatic_force_norm_n_per_m < 0) {
+              errors.push("Native 2D force_budget.net_electrostatic_force_norm_n_per_m must be non-negative.");
+            }
+            var expNetFx = fb.left_electrode_fx_n_per_m + fb.right_electrode_fx_n_per_m + fb.enclosure_reaction_fx_n_per_m;
+            var expNetFy = fb.left_electrode_fy_n_per_m + fb.right_electrode_fy_n_per_m + fb.enclosure_reaction_fy_n_per_m;
+            var maxComp = Math.max(
+              Math.abs(fb.left_electrode_fx_n_per_m), Math.abs(fb.left_electrode_fy_n_per_m),
+              Math.abs(fb.right_electrode_fx_n_per_m), Math.abs(fb.right_electrode_fy_n_per_m),
+              Math.abs(fb.enclosure_reaction_fx_n_per_m), Math.abs(fb.enclosure_reaction_fy_n_per_m),
+              Math.abs(fb.net_electrostatic_force_fx_n_per_m), Math.abs(fb.net_electrostatic_force_fy_n_per_m)
+            );
+            var sumTol = Math.max(1e-11, 1e-8 * maxComp);
+            if (Math.abs(fb.net_electrostatic_force_fx_n_per_m - expNetFx) > sumTol ||
+                Math.abs(fb.net_electrostatic_force_fy_n_per_m - expNetFy) > sumTol) {
+              errors.push("Native 2D force_budget net_electrostatic_force_(fx,fy) inconsistent with F_left + F_right + F_enclosure.");
+            }
+            var expNorm = Math.hypot(fb.net_electrostatic_force_fx_n_per_m, fb.net_electrostatic_force_fy_n_per_m);
+            var normTol = Math.max(1e-12, 1e-9 * Math.max(expNorm, fb.net_electrostatic_force_norm_n_per_m));
+            if (Math.abs(fb.net_electrostatic_force_norm_n_per_m - expNorm) > normTol) {
+              errors.push("Native 2D force_budget.net_electrostatic_force_norm_n_per_m inconsistent with hypot(net_fx, net_fy).");
+            }
+            var expBal = fb.net_electrostatic_force_norm_n_per_m < FORCE_BALANCE_TOLERANCE_N_PER_M;
+            if (Object.prototype.hasOwnProperty.call(fb, "tolerance_n_per_m") && fb.tolerance_n_per_m !== FORCE_BALANCE_TOLERANCE_N_PER_M) {
+              errors.push("Native 2D force_budget.tolerance_n_per_m must equal 1e-4.");
+            }
+            if (Object.prototype.hasOwnProperty.call(fb, "is_force_balanced_to_tolerance") && fb.is_force_balanced_to_tolerance !== expBal) {
+              errors.push("Native 2D force_budget.is_force_balanced_to_tolerance inconsistent with norm < 1e-4.");
+            }
+            var expStatus = expBal ? "BALANCED_WITHIN_TOLERANCE" : "UNBALANCED_EXCEEDS_TOLERANCE";
+            if (Object.prototype.hasOwnProperty.call(fb, "force_closure_status") && fb.force_closure_status !== expStatus) {
+              errors.push("Native 2D force_budget.force_closure_status inconsistent with norm < 1e-4.");
+            }
+            if (
+              Object.prototype.hasOwnProperty.call(fb, "relative_closure_residual") &&
+              fb.relative_closure_residual !== null &&
+              (!isStrictFiniteNumber(fb.relative_closure_residual) || fb.relative_closure_residual < 0)
+            ) {
+              errors.push("Native 2D force_budget.relative_closure_residual must be non-negative finite number or null.");
+            }
+          }
+        }
+      } else {
+        // WITHHELD_INVALID_CONTOUR_TOPOLOGY or WITHHELD_INELIGIBLE_PRIMARY_GRID
+        if (resp.force_budget !== null) {
+          errors.push("Native 2D withheld force_budget_status (" + fbStatus + ") requires force_budget === null.");
+        }
+      }
+
+      // 2. Native force_study validation BEFORE normalization (NEVER discard malformed rows / sensitivity)
+      if (resp.force_study !== null && resp.force_study !== undefined) {
+        var fs = resp.force_study;
+        if (!isPlainObject(fs)) {
+          errors.push("Native 2D force_study must be an object or null.");
+        } else {
+          var st = fs.status;
+          var validStudyStatuses = [
+            "STABLE_WITHIN_STUDY_TOLERANCE",
+            "SENSITIVE_OR_UNBALANCED",
+            "WITHHELD_INELIGIBLE_MESH_LEVEL",
+            "WITHHELD_INVALID_CONTOUR_TOPOLOGY"
+          ];
+          if (validStudyStatuses.indexOf(st) === -1) {
+            errors.push("Native 2D force_study.status invalid: " + String(st));
+          } else {
+            if (
+              Object.prototype.hasOwnProperty.call(resp, "force_mesh_sensitivity_status") &&
+              resp.force_mesh_sensitivity_status !== null &&
+              resp.force_mesh_sensitivity_status !== st
+            ) {
+              errors.push("Native 2D force_mesh_sensitivity_status (" + String(resp.force_mesh_sensitivity_status) + ") disagrees with force_study.status (" + st + ").");
+            }
+            errors = errors.concat(validateStudyNList(fs.study_n_list, "Native force_study"));
+
+            if (st === "WITHHELD_INELIGIBLE_MESH_LEVEL" || st === "WITHHELD_INVALID_CONTOUR_TOPOLOGY") {
+              if (!Array.isArray(fs.rows) || fs.rows.length !== 0) {
+                errors.push("Native withheld force_study (" + st + ") MUST have empty rows: [] (rejects fabricated study rows).");
+              }
+              if (fs.derived_sensitivity !== null) {
+                errors.push("Native withheld force_study (" + st + ") MUST have derived_sensitivity === null.");
+              }
+              if (Object.prototype.hasOwnProperty.call(fs, "value") && fs.value !== null) {
+                errors.push("Native withheld force_study (" + st + ") MUST NOT carry non-null value.");
+              }
+              if (!Array.isArray(fs.failed_levels) || fs.failed_levels.length === 0) {
+                errors.push("Native withheld force_study (" + st + ") requires non-empty failed_levels: { n, reason }[].");
+              } else {
+                for (var fi = 0; fi < fs.failed_levels.length; fi++) {
+                  var fl = fs.failed_levels[fi];
+                  if (!isPlainObject(fl) || !isStrictInteger(fl.n) || fl.n < 3 || !isNonEmptyString(fl.reason)) {
+                    errors.push("Native withheld force_study failed_levels[" + fi + "] must be { n: integer >= 3, reason: non-empty string }.");
+                  }
+                }
+              }
+            } else {
+              // Computed study: STABLE_WITHIN_STUDY_TOLERANCE | SENSITIVE_OR_UNBALANCED
+              if (!Array.isArray(fs.failed_levels) || fs.failed_levels.length !== 0) {
+                errors.push("Native computed force_study (" + st + ") requires failed_levels === [].");
+              }
+              if (!Array.isArray(fs.rows) || fs.rows.length === 0) {
+                errors.push("Native computed force_study (" + st + ") requires non-empty rows.");
+              }
+              if (!isPlainObject(fs.derived_sensitivity)) {
+                errors.push("Native computed force_study (" + st + ") requires derived_sensitivity object.");
+              } else if (Object.prototype.hasOwnProperty.call(fs.derived_sensitivity, "units") && fs.derived_sensitivity.units !== "N/m") {
+                errors.push("Native computed force_study derived_sensitivity.units must equal 'N/m' (got " + JSON.stringify(fs.derived_sensitivity.units) + ").");
+              }
+              if (!isNonEmptyString(fs.observed_order_status)) {
+                errors.push("Native computed force_study (" + st + ") requires non-empty observed_order_status.");
+              }
+            }
+          }
+        }
+      }
+      return errors;
+    }
+
+    errors.push("Unsupported native response mode: " + String(mode));
+    return errors;
+  }
+
+  /**
+   * Exhaustive strict validator for ForceLedgerSnapshot (§7.3, V2-A-R1-M2, V2-A-R2-M2).
    */
   function validateForceLedgerSnapshot(snap) {
     var errors = [];
@@ -1321,6 +1557,10 @@
     if (!isPlainObject(snap.provenance)) {
       errors.push("provenance object is required.");
     } else {
+      var pSrc = snap.provenance.provenance_source;
+      if (pSrc !== undefined && pSrc !== "native_solver_response" && pSrc !== "noncomputed_client_placeholder") {
+        errors.push("provenance.provenance_source invalid: " + String(pSrc));
+      }
       if (snap.provenance.source_head_sha !== null && !isNonEmptyString(snap.provenance.source_head_sha)) {
         errors.push("provenance.source_head_sha must be non-empty string or null.");
       }
@@ -1389,6 +1629,12 @@
       }
     }
 
+    if (hasComputedRow && isPlainObject(snap.provenance)) {
+      if (snap.provenance.provenance_source === "noncomputed_client_placeholder") {
+        errors.push("Computed snapshot MUST carry native_solver_response provenance (never noncomputed_client_placeholder).");
+      }
+    }
+
     if (hasComputedRow && isPlainObject(snap.sync_identity)) {
       if (snap.sync_identity.response_origin_transport !== snap.transport_mode) {
         errors.push("Computed snapshot sync_identity.response_origin_transport must match transport_mode (V2-SPEC-R2-M1).");
@@ -1423,6 +1669,7 @@
     computeExactP1IntegrationContours: computeExactP1IntegrationContours,
     buildConvergenceStudyProvenance: buildConvergenceStudyProvenance,
     buildForceLedgerSnapshot: buildForceLedgerSnapshot,
+    validateNativeV1Response: validateNativeV1Response,
     validateNullableUncertainty: validateNullableUncertainty,
     validateLedgerRowValue: validateLedgerRowValue,
     validateConvergenceStudyRecord: validateConvergenceStudyRecord,

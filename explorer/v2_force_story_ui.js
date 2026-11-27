@@ -27,6 +27,7 @@
   var lastSnapshot = null;
   var lastEventType = "init";
   var lastV1State = null;
+  var lastSyncOk = false;
   var lastDrawn2DContours = null;
   var lastValidationErrors = [];
 
@@ -188,7 +189,7 @@
       chk2D.setAttribute("aria-disabled", is2D ? "false" : "true");
     }
 
-    if (!is2D || !show2DContourOverlay) {
+    if (!is2D || !show2DContourOverlay || !lastSyncOk || lastValidationErrors.length > 0) {
       lastDrawn2DContours = null;
     }
 
@@ -198,16 +199,50 @@
   }
 
   /**
-   * V2-A-R1-M1: Optional 2D P1 Boundary A/B/C contour overlay drawn cleanly on #v1-2d-canvas.
+   * V2-A-R2-M1 & V2-A-R2-M2: Atomic 8-predicate + response-identity + native-validation gate
+   * governing whether V2 2D Maxwell-stress contour overlays may be painted on #v1-2d-canvas.
+   */
+  function canDrawSynchronized2DContours(resp) {
+    if (!show2DContourOverlay || !resp) return false;
+    if (!lastV1State || !lastSnapshot) return false;
+    if (!lastSyncOk || lastValidationErrors.length > 0) return false;
+    if (lastV1State.activeViewContext === "scalar_wave_contrast") return false;
+    if (lastV1State.activeModelMode !== "grounded_box_2d" || lastV1State.activeViewContext !== "v1_2d") return false;
+    if (lastSnapshot.context_id !== "grounded_box_2d") return false;
+
+    var liveV1 = (window.__v1SolverUI && typeof window.__v1SolverUI.getState === "function")
+      ? window.__v1SolverUI.getState()
+      : lastV1State;
+    var syncCheck = Data.evaluateV1SyncPredicates(liveV1, lastRenderedV2Generation);
+    if (!syncCheck.ok) return false;
+
+    if (liveV1.lastRenderedResponse !== resp) return false;
+    if (resp.request_id !== lastSnapshot.sync_identity.request_id) return false;
+    if (resp.input_fingerprint !== lastSnapshot.sync_identity.input_fingerprint) return false;
+    if (liveV1.transportMode !== lastSnapshot.transport_mode) return false;
+    if (liveV1.transportEpoch !== lastSnapshot.sync_identity.transport_epoch) return false;
+    if (
+      !liveV1.lastRenderedOrigin ||
+      liveV1.lastRenderedOrigin.transportMode !== lastSnapshot.sync_identity.response_origin_transport ||
+      liveV1.lastRenderedOrigin.transportEpoch !== lastSnapshot.sync_identity.transport_epoch
+    ) {
+      return false;
+    }
+
+    if (Data.validateNativeV1Response(resp, "grounded_box_2d").length > 0) return false;
+    return true;
+  }
+
+  /**
+   * V2-A-R1-M1 & V2-A-R2-M1: Optional 2D P1 Boundary A/B/C contour overlay drawn cleanly on #v1-2d-canvas.
    * Uses exact snapped P1 integration paths (electrostatics_numerics.py dynamic margin_x/margin_y,
    * unequal electrode radii, 2.5*h enclosure margin, and grid-node snapping).
-   * Strictly suppressed whenever primary force_budget_status !== "COMPUTED" or schema validation failed.
+   * Strictly gated by all 8 V1 -> V2 synchronization predicates, response identity, transport epoch,
+   * native payload validation, and COMPUTED force budget status.
    */
   function draw2DBoundaryContours(ctx, resp, bounds) {
     lastDrawn2DContours = null;
-    if (!show2DContourOverlay || !resp || !bounds) return;
-    if (lastV1State && lastV1State.activeViewContext === "scalar_wave_contrast") return;
-    if (lastValidationErrors.length > 0) return;
+    if (!bounds || !canDrawSynchronized2DContours(resp)) return;
 
     var contours = Data.computeExactP1IntegrationContours(resp);
     if (!contours) return;
@@ -262,6 +297,12 @@
     ctx.restore();
 
     lastDrawn2DContours = {
+      sync_identity: {
+        request_id: lastSnapshot.sync_identity.request_id,
+        input_fingerprint: lastSnapshot.sync_identity.input_fingerprint,
+        transport_mode: lastSnapshot.transport_mode,
+        transport_epoch: lastSnapshot.sync_identity.transport_epoch
+      },
       world_contours: contours,
       canvas_rects: {
         c_left: rectLeft,
@@ -421,6 +462,8 @@
   function renderSnapshot(v1State, eventType) {
     lastV1State = v1State || null;
     lastEventType = eventType || "sync";
+    lastSyncOk = false;
+    lastDrawn2DContours = null;
 
     var isWave = Boolean(v1State && v1State.activeViewContext === "scalar_wave_contrast");
     var wavePanel = el("v2-wave-isolation-panel");
@@ -430,27 +473,27 @@
     if (mainBody) mainBody.classList.toggle("hidden", isWave);
 
     var syncCheck = Data.evaluateV1SyncPredicates(v1State, lastRenderedV2Generation);
-    var snap;
+    var snap = null;
     var validationErrors = [];
-    try {
-      snap = Data.buildForceLedgerSnapshot(v1State, lastRenderedV2Generation);
-      validationErrors = Data.validateForceLedgerSnapshot(snap);
-    } catch (buildErr) {
-      validationErrors = [buildErr && buildErr.message ? buildErr.message : String(buildErr)];
-      snap = Data.buildForceLedgerSnapshot(
-        Object.assign({}, v1State || {}, {
-          solveState: "error",
-          lastRenderedResponse: null,
-          lastRenderedOrigin: null,
-          lastError: { code: "V2_SCHEMA_VALIDATION_FAILED", message: validationErrors[0], httpStatus: null }
-        }),
-        lastRenderedV2Generation
-      );
+
+    // V2-A-R2-M2: Validate native V1 scientific payload BEFORE normalizing into a ForceLedgerSnapshot
+    if (syncCheck.ok && v1State && v1State.lastRenderedResponse) {
+      validationErrors = Data.validateNativeV1Response(v1State.lastRenderedResponse, v1State.activeModelMode);
     }
 
-    // V2-A-R1-M2: Fail closed before rendering if any built snapshot violates §7.3 schema validation
+    if (validationErrors.length === 0) {
+      try {
+        snap = Data.buildForceLedgerSnapshot(v1State, lastRenderedV2Generation);
+        validationErrors = Data.validateForceLedgerSnapshot(snap);
+      } catch (buildErr) {
+        validationErrors = [buildErr && buildErr.message ? buildErr.message : String(buildErr)];
+      }
+    }
+
+    // V2-A-R1-M2 & V2-A-R2-M2: Fail closed before rendering if native payload or built snapshot violates §7.3
     if (validationErrors.length > 0) {
       lastValidationErrors = validationErrors.slice();
+      lastSyncOk = false;
       lastDrawn2DContours = null;
       snap = Data.buildForceLedgerSnapshot(
         Object.assign({}, v1State || {}, {
@@ -468,6 +511,7 @@
       syncCheck = { ok: false, failedPredicate: null, reasonCode: "V2_SCHEMA_VALIDATION_FAILED" };
     } else {
       lastValidationErrors = [];
+      lastSyncOk = Boolean(syncCheck.ok);
       if (syncCheck.ok && v1State && typeof v1State.clientStateGeneration === "number") {
         lastRenderedV2Generation = v1State.clientStateGeneration;
       }

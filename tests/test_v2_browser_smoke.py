@@ -272,7 +272,14 @@ class V2ForceStoryBrowserTests(unittest.TestCase):
                         "probe_stability_status": "NOT_ASSESSED",
                         "force_study": None,
                         "probe_study": None,
-                        "provenance": {"source_head_sha": "test", "kernel_blob_sha1": {}},
+                        "provenance": {
+                            "source_head_sha": "test",
+                            "kernel_blob_sha1": {
+                                "electrostatics_baseline": "97f65dfa25db7730323edd5e52c98b17371fdeaa",
+                                "electrostatics_numerics": "a29f1f3a55946f33760179677dd3dbeb6a2ebde2",
+                            },
+                            "whole_body_thrust_status": "NOT MEASURED / NOT ESTABLISHED",
+                        },
                     }),
                 )
 
@@ -684,8 +691,169 @@ class V2ForceStoryBrowserTests(unittest.TestCase):
         finally:
             ctx.close()
 
+    def test_atomic_contour_sync_bidirectional_transport_ready_and_pending_canvas_strokes(self):
+        """V2-A-R2-M1: Bidirectional live<->offline transport switches (ready & pending) immediately remove V2 contour strokes and metadata while preserving V1."""
+        url = f"http://127.0.0.1:{self.live_port}/index.html"
+        ctx, page, errors = self._open_page(url)
+        try:
+            # Helper to count actual V2 contour stroke pixels on #v1-2d-canvas along the known snapped perimeter rectangles:
+            # - c_enclosure_inner bottom horizontal edge (amber #f59e0b; V1 never draws amber along bottom border)
+            # - c_left left vertical edge (cyan #38bdf8; V1 never draws cyan at x ~ -22 mm)
+            count_contour_strokes_js = """(rects) => {
+              const canvas = document.getElementById('v1-2d-canvas');
+              const ctx2d = canvas.getContext('2d');
+              const img = ctx2d.getImageData(0, 0, canvas.width, canvas.height).data;
+              const w = canvas.width;
+              const h = canvas.height;
+              function px(x, y) {
+                const ix = Math.max(0, Math.min(w - 1, Math.round(x)));
+                const iy = Math.max(0, Math.min(h - 1, Math.round(y)));
+                const o = (iy * w + ix) * 4;
+                return [img[o], img[o + 1], img[o + 2], img[o + 3]];
+              }
+              let amberEncBottom = 0;
+              const enc = rects.c_enclosure_inner;
+              const encY = enc.y + enc.height;
+              for (let x = enc.x + 8; x <= enc.x + enc.width - 8; x += 1) {
+                for (let dy = -2; dy <= 2; dy += 1) {
+                  const [r, g, b] = px(x, encY + dy);
+                  if (r > 200 && g > 120 && g < 200 && b < 70) {
+                    amberEncBottom += 1;
+                    break;
+                  }
+                }
+              }
+              let cyanLeftEdge = 0;
+              const cl = rects.c_left;
+              for (let y = cl.y + 4; y <= cl.y + cl.height - 4; y += 1) {
+                for (let dx = -2; dx <= 2; dx += 1) {
+                  const [r, g, b] = px(cl.x + dx, y);
+                  if (r < 110 && g > 150 && b > 200) {
+                    cyanLeftEdge += 1;
+                    break;
+                  }
+                }
+              }
+              return { amberEncBottom, cyanLeftEdge };
+            }"""
+
+            page.click("#tab-btn-v2-story")
+            page.evaluate("() => window.__v1SolverUI.setMode('grounded_box_2d')")
+            self._wait_solve_state(page, "ready")
+
+            # Enable 2D P1 contour overlay in ready LIVE state
+            page.click("#v2-toggle-2d-contours")
+            ready_live = page.evaluate("() => ({ v1: window.__v1SolverUI.getState(), v2: window.__v2ForceStoryUI.getState() })")
+            self.assertIsNotNone(ready_live["v2"]["lastDrawn2DContours"])
+            self.assertEqual(ready_live["v2"]["lastDrawn2DContours"]["sync_identity"]["transport_mode"], "live")
+            saved_rects_live = ready_live["v2"]["lastDrawn2DContours"]["canvas_rects"]
+
+            strokes_live = page.evaluate(count_contour_strokes_js, saved_rects_live)
+            self.assertGreater(strokes_live["amberEncBottom"], 15, f"Expected amber enclosure contour strokes before switch: {strokes_live}")
+            self.assertGreater(strokes_live["cyanLeftEdge"], 10, f"Expected cyan left-electrode contour strokes before switch: {strokes_live}")
+
+            # 1. Direct ready LIVE -> OFFLINE transport switch (ZERO replacement dispatch):
+            # V1 preserves non-pending solveState='ready' & lastRenderedResponse, while V2 MUST clear contours & metadata synchronously!
+            after_l2o = page.evaluate(
+                """() => {
+                  window.__v1SolverUI.setTransportMode('offline');
+                  return { v1: window.__v1SolverUI.getState(), v2: window.__v2ForceStoryUI.getState() };
+                }"""
+            )
+            self.assertEqual(after_l2o["v1"]["transportMode"], "offline")
+            self.assertEqual(after_l2o["v1"]["solveState"], "ready")
+            self.assertIsNotNone(after_l2o["v1"]["lastRenderedResponse"])
+            self.assertEqual(after_l2o["v2"]["snapshot"]["rows"][0]["quantity"]["status"], "CLEARED_PENDING_OR_INACTIVE")
+            self.assertEqual(after_l2o["v2"]["snapshot"]["rows"][0]["quantity"]["reason_code"], "TRANSPORT_EPOCH_MISMATCH")
+            self.assertIsNone(after_l2o["v2"]["lastDrawn2DContours"])
+
+            strokes_after_l2o = page.evaluate(count_contour_strokes_js, saved_rects_live)
+            self.assertEqual(strokes_after_l2o["amberEncBottom"], 0, f"Stale amber contour strokes persisted after live->offline: {strokes_after_l2o}")
+            self.assertEqual(strokes_after_l2o["cyanLeftEdge"], 0, f"Stale cyan contour strokes persisted after live->offline: {strokes_after_l2o}")
+
+            # 2. Fresh verified OFFLINE 2D snapshot under new epoch -> contours redraw cleanly with offline identity
+            page.evaluate("() => window.__v1SolverUI.setMode('grounded_box_2d')")
+            self._wait_solve_state(page, "ready")
+            ready_off = page.evaluate("() => window.__v2ForceStoryUI.getState()")
+            self.assertIsNotNone(ready_off["lastDrawn2DContours"])
+            self.assertEqual(ready_off["lastDrawn2DContours"]["sync_identity"]["transport_mode"], "offline")
+            saved_rects_off = ready_off["lastDrawn2DContours"]["canvas_rects"]
+
+            strokes_off = page.evaluate(count_contour_strokes_js, saved_rects_off)
+            self.assertGreater(strokes_off["amberEncBottom"], 15, f"Expected amber contour strokes in ready offline state: {strokes_off}")
+            self.assertGreater(strokes_off["cyanLeftEdge"], 10, f"Expected cyan contour strokes in ready offline state: {strokes_off}")
+
+            # 3. Reverse ready OFFLINE -> LIVE direct transport switch (ZERO replacement dispatch):
+            after_o2l = page.evaluate(
+                """() => {
+                  window.__v1SolverUI.setTransportMode('live');
+                  return { v1: window.__v1SolverUI.getState(), v2: window.__v2ForceStoryUI.getState() };
+                }"""
+            )
+            self.assertEqual(after_o2l["v1"]["transportMode"], "live")
+            self.assertEqual(after_o2l["v1"]["solveState"], "ready")
+            self.assertIsNotNone(after_o2l["v1"]["lastRenderedResponse"])
+            self.assertEqual(after_o2l["v2"]["snapshot"]["rows"][0]["quantity"]["reason_code"], "TRANSPORT_EPOCH_MISMATCH")
+            self.assertIsNone(after_o2l["v2"]["lastDrawn2DContours"])
+
+            strokes_after_o2l = page.evaluate(count_contour_strokes_js, saved_rects_off)
+            self.assertEqual(strokes_after_o2l["amberEncBottom"], 0, f"Stale amber contour strokes persisted after offline->live: {strokes_after_o2l}")
+            self.assertEqual(strokes_after_o2l["cyanLeftEdge"], 0, f"Stale cyan contour strokes persisted after offline->live: {strokes_after_o2l}")
+
+            # 4. Pending invalidation & pending transport switches (live->offline and offline->live) with contours enabled
+            page.evaluate("() => window.__v1SolverUI.setMode('grounded_box_2d')")
+            self._wait_solve_state(page, "ready")
+            self.assertIsNotNone(page.evaluate("() => window.__v2ForceStoryUI.getState().lastDrawn2DContours"))
+
+            pending_check = page.evaluate(
+                """() => {
+                  const slider = document.getElementById('v1-2d-vleft');
+                  slider.value = '-15000';
+                  slider.dispatchEvent(new Event('input', { bubbles: true }));
+                  const duringPending = {
+                    solveState: window.__v1SolverUI.getState().solveState,
+                    contours: window.__v2ForceStoryUI.getState().lastDrawn2DContours
+                  };
+                  window.__v1SolverUI.setTransportMode('offline');
+                  const afterPendingSwitch = {
+                    solveState: window.__v1SolverUI.getState().solveState,
+                    contours: window.__v2ForceStoryUI.getState().lastDrawn2DContours
+                  };
+                  return { duringPending, afterPendingSwitch };
+                }"""
+            )
+            self.assertEqual(pending_check["duringPending"]["solveState"], "pending")
+            self.assertIsNone(pending_check["duringPending"]["contours"])
+            self.assertEqual(pending_check["afterPendingSwitch"]["solveState"], "idle")
+            self.assertIsNone(pending_check["afterPendingSwitch"]["contours"])
+            strokes_pending = page.evaluate(count_contour_strokes_js, saved_rects_live)
+            self.assertEqual(strokes_pending["amberEncBottom"], 0)
+            self.assertEqual(strokes_pending["cyanLeftEdge"], 0)
+
+            self.assertEqual(errors, [])
+        finally:
+            ctx.close()
+
     def test_malformed_payload_fails_closed_in_v2_ui(self):
-        """V2-A-R1-M2: Malformed HTTP-200 payload violating §7.3 invariants fails closed in V2 UI (value: null, contours suppressed)."""
+        """V2-A-R1-M2 & V2-A-R2-M2: Adversarial HTTP-200 payloads (missing/empty hashes, wrong units, malformed withheld studies, bad norm) fail closed with valid live/offline positive controls."""
+        # Prepare a legitimate simultaneous COMPUTED primary + WITHHELD_INELIGIBLE_MESH_LEVEL study payload
+        study_norm = adapter.validate_and_normalize_request(
+            "/api/v1/study",
+            {
+                "request_id": 1,
+                "mode": "grounded_box_2d",
+                "parameters": {
+                    "n": 101,
+                    "box_width_m": 0.160,
+                    "left_electrode": {"center_x_m": -0.015, "center_y_m": 0.0, "radius_m": 0.007, "voltage_v": -20000.0},
+                    "right_electrode": {"center_x_m": 0.015, "center_y_m": 0.0, "radius_m": 0.007, "voltage_v": 0.0},
+                },
+                "probe_xy_m": [0.0, 0.0],
+                "study_n_list": [41, 81, 101],
+            },
+        )
+        _, real_withheld_study_resp = adapter.solve_normalized_request(study_norm)
+
         url = f"http://127.0.0.1:{self.live_port}/index.html"
         ctx, page, errors = self._open_page(url)
         try:
@@ -694,54 +862,123 @@ class V2ForceStoryBrowserTests(unittest.TestCase):
             self._wait_solve_state(page, "ready")
             good_resp = page.evaluate("() => window.__v1SolverUI.getState().lastRenderedResponse")
 
-            # Enable 2D contours so we also prove malformed payloads suppress contour rendering
+            # Positive control 1: Live 2D with contours enabled passes validation with native provenance
             page.click("#v2-toggle-2d-contours")
-            self.assertIsNotNone(page.evaluate("() => window.__v2ForceStoryUI.getState().lastDrawn2DContours"))
+            pos_live = page.evaluate("() => window.__v2ForceStoryUI.getState()")
+            self.assertEqual(pos_live["lastValidationErrors"], [])
+            self.assertEqual(pos_live["snapshot"]["provenance"]["provenance_source"], "native_solver_response")
+            self.assertIsNotNone(pos_live["lastDrawn2DContours"])
 
-            # Case 1: Inconsistent residual norm_n_per_m (999.0 != hypot(net_fx, net_fy))
-            def route_bad_norm(route):
-                post = json.loads(route.request.post_data or "{}")
-                fp = page.evaluate("() => window.__v1SolverUI.getState().currentCanonicalFingerprint")
-                patched = json.loads(json.dumps(good_resp))
-                patched["request_id"] = post.get("request_id")
-                patched["input_fingerprint"] = fp
-                patched["force_budget"]["net_electrostatic_force_norm_n_per_m"] = 999.0
-                route.fulfill(status=200, content_type="application/json", body=json.dumps(patched))
-
-            page.route("**/api/v1/solve", route_bad_norm)
-            page.evaluate("() => window.__v1SolverUI.setMode('grounded_box_2d')")
+            # Positive control 2: Offline 2D snapshot passes validation cleanly with contours drawn
+            page.evaluate("() => { window.__v1SolverUI.setTransportMode('offline'); window.__v1SolverUI.setMode('grounded_box_2d'); }")
             self._wait_solve_state(page, "ready")
-            page.unroute("**/api/v1/solve", route_bad_norm)
+            pos_off = page.evaluate("() => window.__v2ForceStoryUI.getState()")
+            self.assertEqual(pos_off["lastValidationErrors"], [])
+            self.assertEqual(pos_off["snapshot"]["transport_mode"], "offline")
+            self.assertEqual(pos_off["snapshot"]["provenance"]["provenance_source"], "native_solver_response")
+            self.assertIsNotNone(pos_off["lastDrawn2DContours"])
 
-            st1 = page.evaluate("() => window.__v2ForceStoryUI.getState()")
-            self.assertGreater(len(st1["lastValidationErrors"]), 0)
-            self.assertEqual(st1["snapshot"]["rows"][0]["quantity"]["status"], "UNAVAILABLE_SOLVER_ERROR")
-            self.assertEqual(st1["snapshot"]["rows"][0]["quantity"]["native_v1_code"], "V2_SCHEMA_VALIDATION_FAILED")
-            self.assertIsNone(st1["snapshot"]["rows"][0]["quantity"]["value"])
-            self.assertIsNone(st1["lastDrawn2DContours"])
+            # Switch back to live for adversarial HTTP-200 injections
+            page.evaluate("() => window.__v1SolverUI.setTransportMode('live')")
+
+            def run_adversarial_http_200(base_payload, mutator, expected_err_substr):
+                def _route(route):
+                    post = json.loads(route.request.post_data or "{}")
+                    fp = page.evaluate("() => window.__v1SolverUI.getState().currentCanonicalFingerprint")
+                    patched = json.loads(json.dumps(base_payload))
+                    patched["request_id"] = post.get("request_id")
+                    patched["input_fingerprint"] = fp
+                    mutator(patched)
+                    route.fulfill(status=200, content_type="application/json", body=json.dumps(patched))
+
+                page.route("**/api/v1/solve", _route)
+                page.evaluate("() => window.__v1SolverUI.setMode('grounded_box_2d')")
+                self._wait_solve_state(page, "ready")
+                page.unroute("**/api/v1/solve", _route)
+
+                st = page.evaluate("() => window.__v2ForceStoryUI.getState()")
+                self.assertGreater(len(st["lastValidationErrors"]), 0, f"Expected validation error containing '{expected_err_substr}'")
+                self.assertTrue(
+                    any(expected_err_substr in e for e in st["lastValidationErrors"]),
+                    f"Expected '{expected_err_substr}' in {st['lastValidationErrors']}",
+                )
+                self.assertEqual(st["snapshot"]["rows"][0]["quantity"]["status"], "UNAVAILABLE_SOLVER_ERROR")
+                self.assertEqual(st["snapshot"]["rows"][0]["quantity"]["native_v1_code"], "V2_SCHEMA_VALIDATION_FAILED")
+                self.assertIsNone(st["snapshot"]["rows"][0]["quantity"]["value"])
+                self.assertIsNone(st["lastDrawn2DContours"])
+                return st
+
+            # Case 1: Missing provenance.kernel_blob_sha1 ({}) — must NOT be manufactured
+            run_adversarial_http_200(
+                good_resp,
+                lambda p: p["provenance"].update({"kernel_blob_sha1": {}}),
+                "electrostatics_baseline",
+            )
+
+            # Case 2: Empty kernel hash strings ("")
+            run_adversarial_http_200(
+                good_resp,
+                lambda p: p["provenance"]["kernel_blob_sha1"].update({"electrostatics_baseline": "", "electrostatics_numerics": ""}),
+                "electrostatics_baseline",
+            )
+
+            # Case 3: Wrong native force_budget.units ("N" instead of "N/m")
+            run_adversarial_http_200(
+                good_resp,
+                lambda p: p["force_budget"].update({"units": "N"}),
+                "force_budget.units",
+            )
+
+            # Case 4: Malformed withheld study with fabricated non-empty rows
+            run_adversarial_http_200(
+                real_withheld_study_resp,
+                lambda p: p["force_study"].update({"rows": [{"n": 41, "left_electrode_fx_n_per_m": 0.0}]}),
+                "empty rows",
+            )
+
+            # Case 5: Malformed withheld study with non-null derived_sensitivity
+            run_adversarial_http_200(
+                real_withheld_study_resp,
+                lambda p: p["force_study"].update({"derived_sensitivity": {"units": "N/m", "max_component_last_step_diff_n_per_m": 0.0}}),
+                "derived_sensitivity === null",
+            )
+
+            # Case 6: Inconsistent residual norm_n_per_m (999.0)
+            run_adversarial_http_200(
+                good_resp,
+                lambda p: p["force_budget"].update({"net_electrostatic_force_norm_n_per_m": 999.0}),
+                "net_electrostatic_force_norm_n_per_m",
+            )
             self.assertNotIn("9.990e+2", page.locator("#v2-ledger-tbody").inner_text())
 
-            # Case 2: Tampered provenance.kernel_blob_sha1
-            def route_bad_sha(route):
+            # Case 7: Tampered non-empty kernel hash
+            run_adversarial_http_200(
+                good_resp,
+                lambda p: p["provenance"]["kernel_blob_sha1"].update({"electrostatics_numerics": "0" * 40}),
+                "electrostatics_numerics",
+            )
+
+            # Positive control 3: Legitimate simultaneous COMPUTED primary + WITHHELD_INELIGIBLE_MESH_LEVEL study still passes cleanly!
+            def _route_valid_withheld_study(route):
                 post = json.loads(route.request.post_data or "{}")
                 fp = page.evaluate("() => window.__v1SolverUI.getState().currentCanonicalFingerprint")
-                patched = json.loads(json.dumps(good_resp))
+                patched = json.loads(json.dumps(real_withheld_study_resp))
                 patched["request_id"] = post.get("request_id")
                 patched["input_fingerprint"] = fp
-                patched["provenance"]["kernel_blob_sha1"]["electrostatics_numerics"] = "0" * 40
                 route.fulfill(status=200, content_type="application/json", body=json.dumps(patched))
 
-            page.route("**/api/v1/solve", route_bad_sha)
+            page.route("**/api/v1/solve", _route_valid_withheld_study)
             page.evaluate("() => window.__v1SolverUI.setMode('grounded_box_2d')")
             self._wait_solve_state(page, "ready")
-            page.unroute("**/api/v1/solve", route_bad_sha)
+            page.unroute("**/api/v1/solve", _route_valid_withheld_study)
 
-            st2 = page.evaluate("() => window.__v2ForceStoryUI.getState()")
-            self.assertGreater(len(st2["lastValidationErrors"]), 0)
-            self.assertTrue(any("electrostatics_numerics" in e for e in st2["lastValidationErrors"]))
-            self.assertEqual(st2["snapshot"]["rows"][0]["quantity"]["status"], "UNAVAILABLE_SOLVER_ERROR")
-            self.assertEqual(st2["snapshot"]["rows"][0]["quantity"]["native_v1_code"], "V2_SCHEMA_VALIDATION_FAILED")
-            self.assertIsNone(st2["lastDrawn2DContours"])
+            pos_simul = page.evaluate("() => window.__v2ForceStoryUI.getState()")
+            self.assertEqual(pos_simul["lastValidationErrors"], [])
+            self.assertEqual(pos_simul["snapshot"]["rows"][0]["quantity"]["status"], "COMPUTED_VECTOR_2D")
+            self.assertEqual(pos_simul["snapshot"]["convergence_study_provenance"]["status"], "WITHHELD_INELIGIBLE_MESH_LEVEL")
+            self.assertEqual(pos_simul["snapshot"]["convergence_study_provenance"]["rows"], [])
+            self.assertIsNone(pos_simul["snapshot"]["convergence_study_provenance"]["derived_sensitivity"])
+            self.assertIsNotNone(pos_simul["lastDrawn2DContours"])
             self.assertEqual(errors, [])
         finally:
             ctx.close()

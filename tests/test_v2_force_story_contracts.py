@@ -445,11 +445,12 @@ class V2ForceStoryContractTests(unittest.TestCase):
               model_id: 'grounded_box_2d',
               force_budget_status: 'COMPUTED',
               force_budget: {
+                units: 'N/m',
                 left_electrode_fx_n_per_m: 0.08,
                 left_electrode_fy_n_per_m: 0.0,
                 right_electrode_fx_n_per_m: -0.16,
                 right_electrode_fy_n_per_m: 0.0,
-                enclosure_reaction_fx_n_per_m: 0.08,
+                enclosure_reaction_fx_n_per_m: 0.080001,
                 enclosure_reaction_fy_n_per_m: 0.0,
                 net_electrostatic_force_fx_n_per_m: 1e-6,
                 net_electrostatic_force_fy_n_per_m: 0.0,
@@ -902,6 +903,192 @@ class V2ForceStoryContractTests(unittest.TestCase):
         self.assertGreater(len(res["snapNegEpoch"]), 0)
         self.assertGreater(len(res["snapBadOrigin"]), 0)
         self.assertGreater(len(res["snapBadBoundary"]), 0)
+
+    def test_native_v1_response_validation_no_masking_and_offline_positive_controls(self):
+        """V2-A-R2-M2: Validate native V1 payloads before normalization; never manufacture hashes or mask bad units/studies; verify all offline B2 snapshots pass."""
+        req1d = adapter.validate_and_normalize_request(
+            "/api/v1/solve",
+            {"request_id": 1, "mode": "parallel_plate_1d", "parameters": {"area_m2": 0.01, "gap_m": 0.005, "voltage_v": 1000.0}},
+        )
+        _, live_1d = adapter.solve_normalized_request(req1d)
+
+        req2d = adapter.validate_and_normalize_request(
+            "/api/v1/study",
+            {
+                "request_id": 2,
+                "mode": "grounded_box_2d",
+                "parameters": {
+                    "n": 101,
+                    "box_width_m": 0.160,
+                    "left_electrode": {"center_x_m": -0.015, "center_y_m": 0.0, "radius_m": 0.007, "voltage_v": -20000.0},
+                    "right_electrode": {"center_x_m": 0.015, "center_y_m": 0.0, "radius_m": 0.007, "voltage_v": 0.0},
+                },
+                "probe_xy_m": [0.0, 0.0],
+                "study_n_list": [41, 81, 101],
+            },
+        )
+        _, live_2d_withheld_study = adapter.solve_normalized_request(req2d)
+        trimmed_live_2d = {k: v for k, v in live_2d_withheld_study.items() if k != "solution"}
+
+        res = run_node_v2(
+            """
+            const snapBundle = require(input.snapshotsPath);
+            const h = snapBundle.helpers;
+            const out = { offlineCount: 0, offlineErrors: [] };
+
+            // 1. Positive control: EVERY bundled offline B2 snapshot + offline 1D engine must pass native + snapshot validation
+            const off1d = h.evaluateParallelPlate1D({ area_m2: 0.01, gap_m: 0.005, voltage_v: 1000.0 }, 1);
+            const off1dErrs = D.validateNativeV1Response(off1d, 'parallel_plate_1d');
+            if (off1dErrs.length) out.offlineErrors.push({ id: 'eval1d', errs: off1dErrs });
+
+            for (const [fp, _entry] of Object.entries(snapBundle.by_fingerprint)) {
+              const s = h.lookupOfflineSnapshotByFingerprint(fp);
+              out.offlineCount += 1;
+              const nErrs = D.validateNativeV1Response(s, s.model_id);
+              if (nErrs.length) out.offlineErrors.push({ fp, model: s.model_id, errs: nErrs });
+              const st = {
+                activeModelMode: s.model_id,
+                activeViewContext: s.model_id === 'parallel_plate_1d' ? 'v1_1d' : 'v1_2d',
+                transportMode: 'offline',
+                transportEpoch: 1,
+                solveState: 'ready',
+                clientStateGeneration: 2,
+                currentCanonicalFingerprint: s.input_fingerprint,
+                latestDispatchedRequestId: s.request_id,
+                lastRenderedResponse: s,
+                lastRenderedOrigin: { transportMode: 'offline', transportEpoch: 1 },
+                lastError: null
+              };
+              const built = D.buildForceLedgerSnapshot(st, 1);
+              const sErrs = D.validateForceLedgerSnapshot(built);
+              if (sErrs.length) out.offlineErrors.push({ fp, phase: 'snapshot', errs: sErrs });
+              if (built.provenance.provenance_source !== 'native_solver_response') {
+                out.offlineErrors.push({ fp, phase: 'prov_source', got: built.provenance.provenance_source });
+              }
+            }
+
+            // 2. Positive control: Real live 1D and simultaneous computed-primary + withheld-study 2D responses pass
+            out.live1DErrs = D.validateNativeV1Response(input.live1d, 'parallel_plate_1d');
+            out.live2DWithheldStudyErrs = D.validateNativeV1Response(input.live2d, 'grounded_box_2d');
+
+            // 3. Noncomputed placeholder provenance is distinct and rejected on computed snapshots
+            const snap3d = D.buildForceLedgerSnapshot({ activeModelMode: 'schematic_3d', activeViewContext: '3d_schematic' }, 0);
+            out.placeholderSource = snap3d.provenance.provenance_source;
+            const liveState = {
+              activeModelMode: 'grounded_box_2d',
+              activeViewContext: 'v1_2d',
+              transportMode: 'live',
+              transportEpoch: 1,
+              solveState: 'ready',
+              clientStateGeneration: 3,
+              currentCanonicalFingerprint: input.live2d.input_fingerprint,
+              latestDispatchedRequestId: input.live2d.request_id,
+              lastRenderedResponse: input.live2d,
+              lastRenderedOrigin: { transportMode: 'live', transportEpoch: 1 },
+              lastError: null
+            };
+            const validBuilt = D.buildForceLedgerSnapshot(liveState, 2);
+            const forgedPlaceholder = JSON.parse(JSON.stringify(validBuilt));
+            forgedPlaceholder.provenance.provenance_source = 'noncomputed_client_placeholder';
+            out.forgedPlaceholderErrs = D.validateForceLedgerSnapshot(forgedPlaceholder);
+
+            // 4. Adversarial: missing/empty provenance hashes MUST fail BOTH native validator AND snapshot validator (zero manufacturing!)
+            const noProv = JSON.parse(JSON.stringify(input.live2d));
+            delete noProv.provenance;
+            out.missingProvNativeErrs = D.validateNativeV1Response(noProv, 'grounded_box_2d');
+            out.missingProvSnapErrs = D.validateForceLedgerSnapshot(
+              D.buildForceLedgerSnapshot(Object.assign({}, liveState, { lastRenderedResponse: noProv }), 2)
+            );
+
+            const emptyHashes = JSON.parse(JSON.stringify(input.live2d));
+            emptyHashes.provenance.kernel_blob_sha1 = { electrostatics_baseline: '', electrostatics_numerics: '' };
+            out.emptyHashNativeErrs = D.validateNativeV1Response(emptyHashes, 'grounded_box_2d');
+            out.emptyHashSnapErrs = D.validateForceLedgerSnapshot(
+              D.buildForceLedgerSnapshot(Object.assign({}, liveState, { lastRenderedResponse: emptyHashes }), 2)
+            );
+
+            const emptyObjHashes = JSON.parse(JSON.stringify(input.live1d));
+            emptyObjHashes.provenance.kernel_blob_sha1 = {};
+            out.emptyObj1DErrs = D.validateNativeV1Response(emptyObjHashes, 'parallel_plate_1d');
+
+            // 5. Adversarial: wrong or missing native force_budget.units MUST fail BOTH native AND snapshot validators
+            const wrongUnit = JSON.parse(JSON.stringify(input.live2d));
+            wrongUnit.force_budget.units = 'N';
+            out.wrongUnitNativeErrs = D.validateNativeV1Response(wrongUnit, 'grounded_box_2d');
+            out.wrongUnitSnapErrs = D.validateForceLedgerSnapshot(
+              D.buildForceLedgerSnapshot(Object.assign({}, liveState, { lastRenderedResponse: wrongUnit }), 2)
+            );
+
+            const missingUnit = JSON.parse(JSON.stringify(input.live2d));
+            delete missingUnit.force_budget.units;
+            out.missingUnitNativeErrs = D.validateNativeV1Response(missingUnit, 'grounded_box_2d');
+            out.missingUnitSnapErrs = D.validateForceLedgerSnapshot(
+              D.buildForceLedgerSnapshot(Object.assign({}, liveState, { lastRenderedResponse: missingUnit }), 2)
+            );
+
+            // 6. Adversarial: malformed withheld study with fabricated rows OR non-null derived_sensitivity MUST NOT be masked!
+            const badWithheldRows = JSON.parse(JSON.stringify(input.live2d));
+            badWithheldRows.force_study.rows = [{ n: 41, left_electrode_fx_n_per_m: 0.0 }];
+            out.badWithheldRowsNativeErrs = D.validateNativeV1Response(badWithheldRows, 'grounded_box_2d');
+            out.badWithheldRowsSnapErrs = D.validateForceLedgerSnapshot(
+              D.buildForceLedgerSnapshot(Object.assign({}, liveState, { lastRenderedResponse: badWithheldRows }), 2)
+            );
+
+            const badWithheldSens = JSON.parse(JSON.stringify(input.live2d));
+            badWithheldSens.force_study.derived_sensitivity = { units: 'N/m', max_component_last_step_diff_n_per_m: 0.0 };
+            out.badWithheldSensNativeErrs = D.validateNativeV1Response(badWithheldSens, 'grounded_box_2d');
+            out.badWithheldSensSnapErrs = D.validateForceLedgerSnapshot(
+              D.buildForceLedgerSnapshot(Object.assign({}, liveState, { lastRenderedResponse: badWithheldSens }), 2)
+            );
+
+            const badWithheldNoFailed = JSON.parse(JSON.stringify(input.live2d));
+            badWithheldNoFailed.force_study.failed_levels = [];
+            out.badWithheldNoFailedErrs = D.validateNativeV1Response(badWithheldNoFailed, 'grounded_box_2d');
+
+            // 7. Adversarial: invalid force_budget_status discriminant & withheld primary carrying non-null budget
+            const badDisc = JSON.parse(JSON.stringify(input.live2d));
+            badDisc.force_budget_status = 'COMPUTED_FAKE';
+            out.badDiscErrs = D.validateNativeV1Response(badDisc, 'grounded_box_2d');
+
+            const withheldWithBudget = JSON.parse(JSON.stringify(input.live2d));
+            withheldWithBudget.force_budget_status = 'WITHHELD_INVALID_CONTOUR_TOPOLOGY';
+            out.withheldWithBudgetErrs = D.validateNativeV1Response(withheldWithBudget, 'grounded_box_2d');
+
+            return out;
+            """,
+            {
+                "snapshotsPath": str(EXPLORER_DIR / "v1_reference_snapshots.js"),
+                "live1d": live_1d,
+                "live2d": trimmed_live_2d,
+            },
+        )
+
+        self.assertGreater(res["offlineCount"], 0)
+        self.assertEqual(res["offlineErrors"], [], f"Offline B2 snapshot errors: {res['offlineErrors']}")
+        self.assertEqual(res["live1DErrs"], [])
+        self.assertEqual(res["live2DWithheldStudyErrs"], [])
+        self.assertEqual(res["placeholderSource"], "noncomputed_client_placeholder")
+        self.assertGreater(len(res["forgedPlaceholderErrs"]), 0)
+
+        for key in (
+            "missingProvNativeErrs",
+            "missingProvSnapErrs",
+            "emptyHashNativeErrs",
+            "emptyHashSnapErrs",
+            "emptyObj1DErrs",
+            "wrongUnitNativeErrs",
+            "wrongUnitSnapErrs",
+            "missingUnitNativeErrs",
+            "missingUnitSnapErrs",
+            "badWithheldRowsNativeErrs",
+            "badWithheldRowsSnapErrs",
+            "badWithheldSensNativeErrs",
+            "badWithheldSensSnapErrs",
+            "badWithheldNoFailedErrs",
+            "badDiscErrs",
+            "withheldWithBudgetErrs",
+        ):
+            self.assertGreater(len(res[key]), 0, f"Expected non-empty rejection errors for {key}")
 
 
 if __name__ == "__main__":
