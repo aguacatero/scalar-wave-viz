@@ -370,6 +370,11 @@
     }
 
     if (st === "STABLE_WITHIN_STUDY_TOLERANCE" || st === "SENSITIVE_OR_UNBALANCED") {
+      // V2-A-R3-M1: Fail closed BEFORE projecting/discarding native rows or derived_sensitivity
+      var compErrs = validateNativeComputedForceStudy(fs);
+      if (compErrs.length > 0) {
+        throw new Error("Invalid native computed force_study: " + compErrs[0]);
+      }
       return {
         source_scope: "convergence_study",
         status: st,
@@ -1275,7 +1280,176 @@
   }
 
   /**
-   * V2-A-R2-M2: Validate native V1 solver response BEFORE normalization into ForceLedgerSnapshot.
+   * V2-A-R3-M1: Exhaustive native validation of computed force_study payloads (STABLE_WITHIN_STUDY_TOLERANCE |
+   * SENSITIVE_OR_UNBALANCED) matching v1_solver_adapter.py::_run_gated_studies() BEFORE projection/normalization.
+   */
+  function validateNativeComputedForceStudy(fs) {
+    var errors = [];
+    if (!isPlainObject(fs)) {
+      return ["Native computed force_study must be an object."];
+    }
+    var st = fs.status;
+    if (st !== "STABLE_WITHIN_STUDY_TOLERANCE" && st !== "SENSITIVE_OR_UNBALANCED") {
+      errors.push("Native computed force_study invalid status: " + String(st));
+    }
+    if (!Array.isArray(fs.failed_levels) || fs.failed_levels.length !== 0) {
+      errors.push("Native computed force_study (" + String(st) + ") requires failed_levels === [].");
+    }
+    if (!isNonEmptyString(fs.observed_order_status)) {
+      errors.push("Native computed force_study (" + String(st) + ") requires non-empty observed_order_status.");
+    }
+
+    var nListErrs = validateStudyNList(fs.study_n_list, "Native computed force_study");
+    var hasValidNList = nListErrs.length === 0;
+    var lastRowResMag = null;
+
+    if (!Array.isArray(fs.rows) || fs.rows.length === 0) {
+      errors.push("Native computed force_study (" + String(st) + ") requires non-empty rows.");
+    } else {
+      if (hasValidNList && fs.rows.length !== fs.study_n_list.length) {
+        errors.push(
+          "Native computed force_study rows length (" + String(fs.rows.length) +
+          ") must match study_n_list length (" + String(fs.study_n_list.length) + ")."
+        );
+      }
+      var reqRowNums = [
+        "left_electrode_fx_n_per_m",
+        "left_electrode_fy_n_per_m",
+        "right_electrode_fx_n_per_m",
+        "right_electrode_fy_n_per_m",
+        "enclosure_reaction_fx_n_per_m",
+        "enclosure_reaction_fy_n_per_m",
+        "net_residual_fx_n_per_m",
+        "net_residual_fy_n_per_m",
+        "net_residual_magnitude_n_per_m"
+      ];
+      for (var ri = 0; ri < fs.rows.length; ri++) {
+        var row = fs.rows[ri];
+        var prefix = "Native computed force_study rows[" + ri + "]";
+        if (!isPlainObject(row)) {
+          errors.push(prefix + " must be an object.");
+          continue;
+        }
+        if (!isStrictInteger(row.n) || row.n < 3) {
+          errors.push(prefix + ".n must be an integer >= 3 (got " + JSON.stringify(row.n) + ").");
+        } else if (hasValidNList && ri < fs.study_n_list.length && row.n !== fs.study_n_list[ri]) {
+          errors.push(prefix + ".n (" + String(row.n) + ") must match study_n_list[" + ri + "] (" + String(fs.study_n_list[ri]) + ").");
+        }
+        if (!isStrictFiniteNumber(row.grid_spacing_m) || row.grid_spacing_m <= 0) {
+          errors.push(prefix + ".grid_spacing_m must be a positive finite number.");
+        }
+        var rowNumsOk = true;
+        for (var ci = 0; ci < reqRowNums.length; ci++) {
+          var key = reqRowNums[ci];
+          if (!isStrictFiniteNumber(row[key])) {
+            errors.push(prefix + "." + key + " must be a finite number.");
+            rowNumsOk = false;
+          }
+        }
+        if (rowNumsOk) {
+          if (row.net_residual_magnitude_n_per_m < 0) {
+            errors.push(prefix + ".net_residual_magnitude_n_per_m must be non-negative.");
+          }
+          var expRx = row.left_electrode_fx_n_per_m + row.right_electrode_fx_n_per_m + row.enclosure_reaction_fx_n_per_m;
+          var expRy = row.left_electrode_fy_n_per_m + row.right_electrode_fy_n_per_m + row.enclosure_reaction_fy_n_per_m;
+          var maxRComp = Math.max(
+            Math.abs(row.left_electrode_fx_n_per_m), Math.abs(row.left_electrode_fy_n_per_m),
+            Math.abs(row.right_electrode_fx_n_per_m), Math.abs(row.right_electrode_fy_n_per_m),
+            Math.abs(row.enclosure_reaction_fx_n_per_m), Math.abs(row.enclosure_reaction_fy_n_per_m),
+            Math.abs(row.net_residual_fx_n_per_m), Math.abs(row.net_residual_fy_n_per_m)
+          );
+          var rSumTol = Math.max(1e-11, 1e-8 * maxRComp);
+          if (Math.abs(row.net_residual_fx_n_per_m - expRx) > rSumTol ||
+              Math.abs(row.net_residual_fy_n_per_m - expRy) > rSumTol) {
+            errors.push(prefix + " net_residual_(fx,fy) inconsistent with left + right + enclosure force components.");
+          }
+          var expRNorm = Math.hypot(row.net_residual_fx_n_per_m, row.net_residual_fy_n_per_m);
+          var rNormTol = Math.max(1e-12, 1e-9 * Math.max(expRNorm, row.net_residual_magnitude_n_per_m));
+          if (Math.abs(row.net_residual_magnitude_n_per_m - expRNorm) > rNormTol) {
+            errors.push(prefix + ".net_residual_magnitude_n_per_m inconsistent with hypot(net_residual_fx, net_residual_fy).");
+          }
+          if (ri === fs.rows.length - 1) {
+            lastRowResMag = row.net_residual_magnitude_n_per_m;
+          }
+        }
+        if (
+          Object.prototype.hasOwnProperty.call(row, "max_abs_change_to_prev") &&
+          row.max_abs_change_to_prev !== null &&
+          (!isStrictFiniteNumber(row.max_abs_change_to_prev) || row.max_abs_change_to_prev < 0)
+        ) {
+          errors.push(prefix + ".max_abs_change_to_prev must be a non-negative finite number or null.");
+        }
+        if (
+          Object.prototype.hasOwnProperty.call(row, "max_relative_change_to_prev") &&
+          row.max_relative_change_to_prev !== null &&
+          (!isStrictFiniteNumber(row.max_relative_change_to_prev) || row.max_relative_change_to_prev < 0)
+        ) {
+          errors.push(prefix + ".max_relative_change_to_prev must be a non-negative finite number or null.");
+        }
+        if (
+          Object.prototype.hasOwnProperty.call(row, "row_tolerance_n_per_m") &&
+          (!isStrictFiniteNumber(row.row_tolerance_n_per_m) || row.row_tolerance_n_per_m <= 0)
+        ) {
+          errors.push(prefix + ".row_tolerance_n_per_m must be a positive finite number.");
+        }
+      }
+    }
+
+    var ds = fs.derived_sensitivity;
+    if (!isPlainObject(ds)) {
+      errors.push("Native computed force_study (" + String(st) + ") requires derived_sensitivity object.");
+    } else {
+      if (ds.units !== "N/m") {
+        errors.push("Native computed force_study derived_sensitivity.units must equal 'N/m' (got " + JSON.stringify(ds.units) + ").");
+      }
+      var perComp = ds.per_component_last_step_diff_n_per_m;
+      var reqPerCompKeys = ["left_fx", "left_fy", "right_fx", "right_fy", "box_fx", "box_fy"];
+      if (!isPlainObject(perComp)) {
+        errors.push("Native computed force_study derived_sensitivity.per_component_last_step_diff_n_per_m must be an object.");
+      } else {
+        for (var pk = 0; pk < reqPerCompKeys.length; pk++) {
+          var pKey = reqPerCompKeys[pk];
+          if (!isStrictFiniteNumber(perComp[pKey]) || perComp[pKey] < 0) {
+            errors.push("Native computed force_study derived_sensitivity.per_component_last_step_diff_n_per_m." + pKey + " must be a non-negative finite number.");
+          }
+        }
+      }
+      var reqSensNums = [
+        "max_component_last_step_diff_n_per_m",
+        "max_vector_last_step_diff_n_per_m",
+        "max_component_relative_change",
+        "finest_net_residual_magnitude_n_per_m"
+      ];
+      for (var si = 0; si < reqSensNums.length; si++) {
+        var sKey = reqSensNums[si];
+        if (!isStrictFiniteNumber(ds[sKey]) || ds[sKey] < 0) {
+          errors.push("Native computed force_study derived_sensitivity." + sKey + " must be a non-negative finite number.");
+        }
+      }
+      if (lastRowResMag !== null && isStrictFiniteNumber(ds.finest_net_residual_magnitude_n_per_m)) {
+        var finestTol = Math.max(1e-12, 1e-9 * Math.max(lastRowResMag, ds.finest_net_residual_magnitude_n_per_m));
+        if (Math.abs(ds.finest_net_residual_magnitude_n_per_m - lastRowResMag) > finestTol) {
+          errors.push("Native computed force_study derived_sensitivity.finest_net_residual_magnitude_n_per_m inconsistent with finest study row residual magnitude.");
+        }
+      }
+      if (typeof ds.is_converged_to_tolerance !== "boolean") {
+        errors.push("Native computed force_study derived_sensitivity.is_converged_to_tolerance must be a boolean.");
+      } else {
+        var expectedConv = st === "STABLE_WITHIN_STUDY_TOLERANCE";
+        if ((st === "STABLE_WITHIN_STUDY_TOLERANCE" || st === "SENSITIVE_OR_UNBALANCED") && ds.is_converged_to_tolerance !== expectedConv) {
+          errors.push(
+            "Native computed force_study status '" + st +
+            "' contradicts derived_sensitivity.is_converged_to_tolerance (" + String(ds.is_converged_to_tolerance) + ")."
+          );
+        }
+      }
+    }
+
+    return errors;
+  }
+
+  /**
+   * V2-A-R2-M2 & V2-A-R3-M1: Validate native V1 solver response BEFORE normalization into ForceLedgerSnapshot.
    * Ensures malformed HTTP-200 or offline source payloads cannot be silently masked by defaults:
    * - Actual non-empty frozen P0/P1 kernel SHA-1 hashes required (never manufactured)
    * - Native force_budget.units === "N/m", valid force_budget_status discriminants, consistent vector sums/norms
@@ -1461,21 +1635,8 @@
                 }
               }
             } else {
-              // Computed study: STABLE_WITHIN_STUDY_TOLERANCE | SENSITIVE_OR_UNBALANCED
-              if (!Array.isArray(fs.failed_levels) || fs.failed_levels.length !== 0) {
-                errors.push("Native computed force_study (" + st + ") requires failed_levels === [].");
-              }
-              if (!Array.isArray(fs.rows) || fs.rows.length === 0) {
-                errors.push("Native computed force_study (" + st + ") requires non-empty rows.");
-              }
-              if (!isPlainObject(fs.derived_sensitivity)) {
-                errors.push("Native computed force_study (" + st + ") requires derived_sensitivity object.");
-              } else if (Object.prototype.hasOwnProperty.call(fs.derived_sensitivity, "units") && fs.derived_sensitivity.units !== "N/m") {
-                errors.push("Native computed force_study derived_sensitivity.units must equal 'N/m' (got " + JSON.stringify(fs.derived_sensitivity.units) + ").");
-              }
-              if (!isNonEmptyString(fs.observed_order_status)) {
-                errors.push("Native computed force_study (" + st + ") requires non-empty observed_order_status.");
-              }
+              // V2-A-R3-M1: Computed study (STABLE_WITHIN_STUDY_TOLERANCE | SENSITIVE_OR_UNBALANCED)
+              errors = errors.concat(validateNativeComputedForceStudy(fs));
             }
           }
         }

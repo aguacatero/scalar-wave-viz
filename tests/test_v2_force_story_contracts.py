@@ -1090,6 +1090,145 @@ class V2ForceStoryContractTests(unittest.TestCase):
         ):
             self.assertGreater(len(res[key]), 0, f"Expected non-empty rejection errors for {key}")
 
+    def test_computed_convergence_study_native_validation_adversarial_matrix(self):
+        """V2-A-R3-M1: Real adapter-generated computed studies pass; malformed study rows, units, sensitivity metrics, and status contradictions fail closed before projection."""
+        # Positive fixture 1: Canonical 40 mm preset -> STABLE_WITHIN_STUDY_TOLERANCE
+        stable_norm = adapter.validate_and_normalize_request(
+            "/api/v1/study",
+            {
+                "request_id": 31,
+                "mode": "grounded_box_2d",
+                "parameters": {
+                    "n": 101,
+                    "box_width_m": 0.040,
+                    "left_electrode": {"center_x_m": -0.008, "center_y_m": 0.0, "radius_m": 0.003, "voltage_v": 500.0},
+                    "right_electrode": {"center_x_m": 0.008, "center_y_m": 0.0, "radius_m": 0.003, "voltage_v": -500.0},
+                },
+                "probe_xy_m": [0.0, 0.0],
+                "study_n_list": [41, 81, 101],
+            },
+        )
+        http_s, stable_resp = adapter.solve_normalized_request(stable_norm)
+        self.assertEqual(http_s, 200)
+        self.assertEqual(stable_resp["force_study"]["status"], "STABLE_WITHIN_STUDY_TOLERANCE")
+        self.assertTrue(stable_resp["force_study"]["derived_sensitivity"]["is_converged_to_tolerance"])
+
+        # Positive fixture 2: Asymmetric HV 80 mm bench -> SENSITIVE_OR_UNBALANCED
+        sens_norm = adapter.validate_and_normalize_request(
+            "/api/v1/study",
+            {
+                "request_id": 32,
+                "mode": "grounded_box_2d",
+                "parameters": {
+                    "n": 101,
+                    "box_width_m": 0.080,
+                    "left_electrode": {"center_x_m": -0.015, "center_y_m": 0.0, "radius_m": 0.007, "voltage_v": -20000.0},
+                    "right_electrode": {"center_x_m": 0.015, "center_y_m": 0.0, "radius_m": 0.007, "voltage_v": 0.0},
+                },
+                "probe_xy_m": [0.0, 0.0],
+                "study_n_list": [41, 81, 101],
+            },
+        )
+        http_u, sens_resp = adapter.solve_normalized_request(sens_norm)
+        self.assertEqual(http_u, 200)
+        self.assertEqual(sens_resp["force_study"]["status"], "SENSITIVE_OR_UNBALANCED")
+        self.assertFalse(sens_resp["force_study"]["derived_sensitivity"]["is_converged_to_tolerance"])
+
+        trimmed_stable = {k: v for k, v in stable_resp.items() if k != "solution"}
+        trimmed_sens = {k: v for k, v in sens_resp.items() if k != "solution"}
+
+        res = run_node_v2(
+            """
+            function clone(obj) { return JSON.parse(JSON.stringify(obj)); }
+            function testCase(baseResp, mutateFn) {
+              const bad = clone(baseResp);
+              mutateFn(bad);
+              const nativeErrs = D.validateNativeV1Response(bad, 'grounded_box_2d');
+              let buildThrew = false;
+              try {
+                D.buildConvergenceStudyProvenance(bad);
+              } catch (_e) {
+                buildThrew = true;
+              }
+              return { nativeErrs, buildThrew };
+            }
+
+            const out = {};
+            // Positive controls
+            out.stableNativeErrs = D.validateNativeV1Response(input.stable, 'grounded_box_2d');
+            out.stableProj = D.buildConvergenceStudyProvenance(input.stable);
+            out.stableRecErrs = D.validateConvergenceStudyRecord(out.stableProj);
+
+            out.sensNativeErrs = D.validateNativeV1Response(input.sens, 'grounded_box_2d');
+            out.sensProj = D.buildConvergenceStudyProvenance(input.sens);
+            out.sensRecErrs = D.validateConvergenceStudyRecord(out.sensProj);
+
+            // 1. String-valued mesh level in row (+ Review #6083919717 concrete counterexample)
+            out.stringMeshLevel = testCase(input.stable, (r) => { r.force_study.rows[0].n = '41'; });
+            out.reviewCounterexample = testCase(input.stable, (r) => {
+              r.force_study.rows = [{ n: '41' }];
+              r.force_study.derived_sensitivity = {};
+            });
+
+            // 2. Missing study-row force components
+            out.missingForceComp = testCase(input.stable, (r) => { delete r.force_study.rows[1].left_electrode_fx_n_per_m; });
+
+            // 3. Non-finite / invalid numeric study values (null / string / negative norm / inconsistent residual)
+            out.invalidNumericNull = testCase(input.stable, (r) => { r.force_study.rows[2].right_electrode_fy_n_per_m = null; });
+            out.negativeResidualNorm = testCase(input.stable, (r) => { r.force_study.rows[2].net_residual_magnitude_n_per_m = -1e-6; });
+            out.inconsistentResidualSum = testCase(input.stable, (r) => { r.force_study.rows[1].net_residual_fx_n_per_m = 5.0; });
+            out.nonFiniteValue = testCase(input.stable, (r) => { r.force_study.rows[0].grid_spacing_m = Number.NaN; });
+
+            // 4. Missing derived_sensitivity.units
+            out.missingSensUnits = testCase(input.stable, (r) => { delete r.force_study.derived_sensitivity.units; });
+
+            // 5. Wrong derived_sensitivity.units
+            out.wrongSensUnits = testCase(input.stable, (r) => { r.force_study.derived_sensitivity.units = 'N'; });
+
+            // 6. Missing or incorrectly typed sensitivity metrics
+            out.missingSensMetric = testCase(input.stable, (r) => { delete r.force_study.derived_sensitivity.max_component_last_step_diff_n_per_m; });
+            out.badTypedSensMetric = testCase(input.stable, (r) => { r.force_study.derived_sensitivity.max_vector_last_step_diff_n_per_m = '1e-6'; });
+            out.missingPerCompKey = testCase(input.stable, (r) => { delete r.force_study.derived_sensitivity.per_component_last_step_diff_n_per_m.box_fy; });
+            out.badBoolFlag = testCase(input.stable, (r) => { r.force_study.derived_sensitivity.is_converged_to_tolerance = 'true'; });
+
+            // 7. Contradiction between computed status and native is_converged_to_tolerance (both directions)
+            out.contradictStableFalse = testCase(input.stable, (r) => { r.force_study.derived_sensitivity.is_converged_to_tolerance = false; });
+            out.contradictSensTrue = testCase(input.sens, (r) => { r.force_study.derived_sensitivity.is_converged_to_tolerance = true; });
+
+            return out;
+            """,
+            {"stable": trimmed_stable, "sens": trimmed_sens},
+        )
+
+        # Positive controls must pass cleanly
+        self.assertEqual(res["stableNativeErrs"], [])
+        self.assertEqual(res["stableRecErrs"], [])
+        self.assertEqual(res["stableProj"]["status"], "STABLE_WITHIN_STUDY_TOLERANCE")
+        self.assertEqual(res["sensNativeErrs"], [])
+        self.assertEqual(res["sensRecErrs"], [])
+        self.assertEqual(res["sensProj"]["status"], "SENSITIVE_OR_UNBALANCED")
+
+        # Every adversarial case MUST fail BOTH validateNativeV1Response AND throw in buildConvergenceStudyProvenance
+        for key in (
+            "stringMeshLevel",
+            "reviewCounterexample",
+            "missingForceComp",
+            "invalidNumericNull",
+            "negativeResidualNorm",
+            "inconsistentResidualSum",
+            "nonFiniteValue",
+            "missingSensUnits",
+            "wrongSensUnits",
+            "missingSensMetric",
+            "badTypedSensMetric",
+            "missingPerCompKey",
+            "badBoolFlag",
+            "contradictStableFalse",
+            "contradictSensTrue",
+        ):
+            self.assertGreater(len(res[key]["nativeErrs"]), 0, f"Expected native validation error for {key}")
+            self.assertTrue(res[key]["buildThrew"], f"Expected buildConvergenceStudyProvenance to fail closed for {key}")
+
 
 if __name__ == "__main__":
     unittest.main()

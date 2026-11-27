@@ -983,6 +983,119 @@ class V2ForceStoryBrowserTests(unittest.TestCase):
         finally:
             ctx.close()
 
+    def test_computed_study_http_200_adversarial_rejection_and_positive_control(self):
+        """V2-A-R3-M1: Real adapter-generated computed study passes; malformed HTTP-200 computed studies fail closed with V2_SCHEMA_VALIDATION_FAILED and zero contours."""
+        # Legitimate adapter-generated computed multi-grid study (STABLE_WITHIN_STUDY_TOLERANCE)
+        study_norm = adapter.validate_and_normalize_request(
+            "/api/v1/study",
+            {
+                "request_id": 1,
+                "mode": "grounded_box_2d",
+                "parameters": {
+                    "n": 101,
+                    "box_width_m": 0.040,
+                    "left_electrode": {"center_x_m": -0.008, "center_y_m": 0.0, "radius_m": 0.003, "voltage_v": 500.0},
+                    "right_electrode": {"center_x_m": 0.008, "center_y_m": 0.0, "radius_m": 0.003, "voltage_v": -500.0},
+                },
+                "probe_xy_m": [0.0, 0.0],
+                "study_n_list": [41, 81, 101],
+            },
+        )
+        _, valid_computed_study_resp = adapter.solve_normalized_request(study_norm)
+        self.assertEqual(valid_computed_study_resp["force_study"]["status"], "STABLE_WITHIN_STUDY_TOLERANCE")
+
+        url = f"http://127.0.0.1:{self.live_port}/index.html"
+        ctx, page, errors = self._open_page(url)
+        try:
+            count_amber_bottom_js = """(rects) => {
+              const canvas = document.getElementById('v1-2d-canvas');
+              const ctx2d = canvas.getContext('2d');
+              const img = ctx2d.getImageData(0, 0, canvas.width, canvas.height).data;
+              const w = canvas.width;
+              const h = canvas.height;
+              let count = 0;
+              const enc = rects.c_enclosure_inner;
+              const encY = enc.y + enc.height;
+              for (let x = enc.x + 8; x <= enc.x + enc.width - 8; x += 1) {
+                for (let dy = -2; dy <= 2; dy += 1) {
+                  const ix = Math.max(0, Math.min(w - 1, Math.round(x)));
+                  const iy = Math.max(0, Math.min(h - 1, Math.round(encY + dy)));
+                  const o = (iy * w + ix) * 4;
+                  if (img[o] > 200 && img[o + 1] > 120 && img[o + 1] < 200 && img[o + 2] < 70) {
+                    count += 1;
+                    break;
+                  }
+                }
+              }
+              return count;
+            }"""
+
+            page.click("#tab-btn-v2-story")
+            page.evaluate("() => window.__v1SolverUI.setMode('grounded_box_2d')")
+            self._wait_solve_state(page, "ready")
+            page.click("#v2-toggle-2d-contours")
+
+            def inject_study_http_200(mutator):
+                def _route(route):
+                    post = json.loads(route.request.post_data or "{}")
+                    fp = page.evaluate("() => window.__v1SolverUI.getState().currentCanonicalFingerprint")
+                    patched = json.loads(json.dumps(valid_computed_study_resp))
+                    patched["request_id"] = post.get("request_id")
+                    patched["input_fingerprint"] = fp
+                    if mutator is not None:
+                        mutator(patched)
+                    route.fulfill(status=200, content_type="application/json", body=json.dumps(patched))
+
+                page.route("**/api/v1/solve", _route)
+                page.evaluate("() => window.__v1SolverUI.setMode('grounded_box_2d')")
+                self._wait_solve_state(page, "ready")
+                page.unroute("**/api/v1/solve", _route)
+                return page.evaluate("() => window.__v2ForceStoryUI.getState()")
+
+            # Positive control: legitimate computed multi-grid study renders cleanly with contours drawn
+            pos_st = inject_study_http_200(None)
+            self.assertEqual(pos_st["lastValidationErrors"], [])
+            self.assertEqual(pos_st["snapshot"]["rows"][0]["quantity"]["status"], "COMPUTED_VECTOR_2D")
+            self.assertEqual(pos_st["snapshot"]["convergence_study_provenance"]["status"], "STABLE_WITHIN_STUDY_TOLERANCE")
+            self.assertIsNotNone(pos_st["lastDrawn2DContours"])
+            saved_rects = pos_st["lastDrawn2DContours"]["canvas_rects"]
+            self.assertGreater(page.evaluate(count_amber_bottom_js, saved_rects), 15)
+            self.assertIn("STABLE_WITHIN_STUDY_TOLERANCE", page.locator("#v2-study-status-badge").inner_text())
+
+            # Adversarial HTTP-200 computed-study mutations (all 7 required classes + exact Review #6083919717 counterexample)
+            adversarial_cases = [
+                ("review_counterexample_string_n_empty_sens", lambda p: (
+                    p["force_study"].update({"rows": [{"n": "41"}], "derived_sensitivity": {}})
+                )),
+                ("string_valued_mesh_level", lambda p: p["force_study"]["rows"][0].update({"n": "41"})),
+                ("missing_study_row_force_component", lambda p: p["force_study"]["rows"][1].pop("left_electrode_fx_n_per_m")),
+                ("invalid_numeric_study_value", lambda p: p["force_study"]["rows"][2].update({"net_residual_magnitude_n_per_m": -0.5})),
+                ("missing_sensitivity_units", lambda p: p["force_study"]["derived_sensitivity"].pop("units")),
+                ("wrong_sensitivity_units", lambda p: p["force_study"]["derived_sensitivity"].update({"units": "N"})),
+                ("missing_sensitivity_metric", lambda p: p["force_study"]["derived_sensitivity"].pop("max_component_last_step_diff_n_per_m")),
+                ("contradicted_convergence_flag", lambda p: p["force_study"]["derived_sensitivity"].update({"is_converged_to_tolerance": False})),
+            ]
+
+            for label, mut in adversarial_cases:
+                st = inject_study_http_200(mut)
+                self.assertGreater(len(st["lastValidationErrors"]), 0, f"Expected validation error for {label}")
+                self.assertEqual(st["snapshot"]["rows"][0]["quantity"]["status"], "UNAVAILABLE_SOLVER_ERROR", label)
+                self.assertEqual(st["snapshot"]["rows"][0]["quantity"]["native_v1_code"], "V2_SCHEMA_VALIDATION_FAILED", label)
+                self.assertIsNone(st["snapshot"]["rows"][0]["quantity"]["value"], label)
+                self.assertIsNone(st["snapshot"]["convergence_study_provenance"], label)
+                self.assertIsNone(st["lastDrawn2DContours"], label)
+                self.assertEqual(page.evaluate(count_amber_bottom_js, saved_rects), 0, f"Stale contour strokes drawn for {label}")
+                self.assertTrue(page.locator("#v2-study-provenance-card").is_hidden(), f"Study card must not render valid status for {label}")
+
+            # Re-verify positive control recovers cleanly after adversarial injections
+            pos_after = inject_study_http_200(None)
+            self.assertEqual(pos_after["lastValidationErrors"], [])
+            self.assertEqual(pos_after["snapshot"]["convergence_study_provenance"]["status"], "STABLE_WITHIN_STUDY_TOLERANCE")
+            self.assertIsNotNone(pos_after["lastDrawn2DContours"])
+            self.assertEqual(errors, [])
+        finally:
+            ctx.close()
+
 
 if __name__ == "__main__":
     unittest.main()
