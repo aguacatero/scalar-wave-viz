@@ -359,8 +359,9 @@
   let raycaster, mouse;
   let componentMeshes = {};
   let pickableObjects = [];
-  let fieldGroup, forceGroup, geometryGroup, enclosureGroup, scalarWaveGroup;
+  let fieldGroup, forceGroup, geometryGroup, enclosureGroup, scalarWaveGroup, boundaryOverlayGroup;
   let isScalarWaveContrastActive = false;
+  let isV2BoundaryOverlayEnabled = false;
   let scalarWaveShells = [];
   let selectedComponentId = null;
   let hoveredObject = null;
@@ -396,6 +397,22 @@
     return tEnclosure ? tEnclosure.checked : true;
   }
 
+  function shouldShowBoundaryOverlay() {
+    if (!isV2BoundaryOverlayEnabled) return false;
+    if (isScalarWaveContrastActive) return false;
+    if (window.__v1SolverUI && typeof window.__v1SolverUI.isComputed2DActive === 'function' && window.__v1SolverUI.isComputed2DActive()) {
+      return false;
+    }
+    return true;
+  }
+
+  function setBoundaryOverlayVisible(visible) {
+    isV2BoundaryOverlayEnabled = Boolean(visible);
+    if (boundaryOverlayGroup) {
+      boundaryOverlayGroup.visible = shouldShowBoundaryOverlay();
+    }
+  }
+
   function syncAllLayerVisibilities() {
     if (isScalarWaveContrastActive) {
       if (geometryGroup) geometryGroup.visible = false;
@@ -403,12 +420,14 @@
       if (fieldGroup) fieldGroup.visible = false;
       if (forceGroup) forceGroup.visible = false;
       if (enclosureGroup) enclosureGroup.visible = false;
+      if (boundaryOverlayGroup) boundaryOverlayGroup.visible = false;
     } else {
       if (geometryGroup) geometryGroup.visible = shouldShowGeometry();
       if (annotationGroup) annotationGroup.visible = shouldShowGeometry();
       if (fieldGroup) fieldGroup.visible = shouldShowFieldLines();
       if (forceGroup) forceGroup.visible = shouldShowForces();
       if (enclosureGroup) enclosureGroup.visible = shouldShowEnclosure();
+      if (boundaryOverlayGroup) boundaryOverlayGroup.visible = shouldShowBoundaryOverlay();
     }
   }
 
@@ -585,6 +604,42 @@
     scalarWaveGroup.visible = false;
     scene.add(scalarWaveGroup);
 
+    // Optional V2-A Non-Conflating 3D Boundary A (DUT Shell) & Boundary B (Chamber Wall) Wireframe Overlay
+    // Strictly schematic control-volume outlines — ZERO 1D N or 2D N/m numerical vectors attached.
+    boundaryOverlayGroup = new THREE.Group();
+    boundaryOverlayGroup.userData = { isBoundaryOverlayGroup: true, hasNumericVectors: false };
+    boundaryOverlayGroup.visible = false;
+
+    const bndAGeo = new THREE.EdgesGeometry(new THREE.BoxGeometry(86, 54, 60));
+    const bndAMat = new THREE.LineDashedMaterial({
+      color: 0x38bdf8,
+      dashSize: 3,
+      gapSize: 2,
+      transparent: true,
+      opacity: 0.85
+    });
+    const bndAShell = new THREE.LineSegments(bndAGeo, bndAMat);
+    bndAShell.computeLineDistances();
+    bndAShell.position.set(8, -2, 0);
+    bndAShell.userData = { boundaryId: 'boundary_a_dut', isNumericVector: false };
+    boundaryOverlayGroup.add(bndAShell);
+
+    const bndBGeo = new THREE.EdgesGeometry(new THREE.BoxGeometry(152, 112, 112));
+    const bndBMat = new THREE.LineDashedMaterial({
+      color: 0xf59e0b,
+      dashSize: 5,
+      gapSize: 3,
+      transparent: true,
+      opacity: 0.75
+    });
+    const bndBShell = new THREE.LineSegments(bndBGeo, bndBMat);
+    bndBShell.computeLineDistances();
+    bndBShell.position.set(0, 0, 0);
+    bndBShell.userData = { boundaryId: 'boundary_b_environment', isNumericVector: false };
+    boundaryOverlayGroup.add(bndBShell);
+
+    scene.add(boundaryOverlayGroup);
+
     // Expose test hooks for automated browser smoke testing
     window.__explorer = {
       scene: scene,
@@ -596,6 +651,9 @@
       forceGroup: forceGroup,
       enclosureGroup: enclosureGroup,
       scalarWaveGroup: scalarWaveGroup,
+      boundaryOverlayGroup: boundaryOverlayGroup,
+      setBoundaryOverlayVisible: setBoundaryOverlayVisible,
+      isBoundaryOverlayVisible: () => Boolean(boundaryOverlayGroup && boundaryOverlayGroup.visible),
       toggleScalarWaveContrast: toggleScalarWaveContrast,
       isScalarWaveContrastActive: () => isScalarWaveContrastActive,
       syncAllLayerVisibilities: syncAllLayerVisibilities,

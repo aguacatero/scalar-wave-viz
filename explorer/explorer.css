@@ -1598,15 +1598,18 @@ kbd {
   gap: 0.75rem;
 }
 
-#tab-solver {
+#tab-solver,
+#tab-v2-story {
   display: none;
 }
 
-#tab-solver.active {
+#tab-solver.active,
+#tab-v2-story.active {
   display: flex;
 }
 
-.sidebar-container:has(#tab-solver.active) .tab-panel:not(#tab-solver) {
+.sidebar-container:has(#tab-solver.active) .tab-panel:not(#tab-solver),
+.sidebar-container:has(#tab-v2-story.active) .tab-panel:not(#tab-v2-story) {
   display: none;
 }
 
@@ -2129,4 +2132,304 @@ kbd {
   .v1-2d-canvas-legend {
     font-size: 0.64rem;
   }
+}
+
+/* --- V2-A Whole-Device Force Story Styles --- */
+.v2-card.hidden,
+.v2-main-stack.hidden,
+.v2-surface-panel.hidden,
+.v2-study-card.hidden,
+#v2-study-failed-levels.hidden {
+  display: none !important;
+}
+
+.v2-main-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.v2-pill-context {
+  background: rgba(56, 189, 248, 0.16);
+  color: #7dd3fc;
+  border: 1px solid rgba(56, 189, 248, 0.45);
+}
+
+.v2-surface-tabs {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.35rem;
+  margin-bottom: 0.6rem;
+}
+
+.v2-surface-tab {
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  color: var(--text-secondary);
+  font-size: 0.71rem;
+  font-weight: 600;
+  padding: 0.42rem 0.4rem;
+  cursor: pointer;
+  text-align: center;
+  transition: all 0.15s ease;
+}
+
+.v2-surface-tab:hover {
+  background: var(--bg-card-hover);
+  color: var(--text-primary);
+}
+
+.v2-surface-tab.active {
+  background: linear-gradient(135deg, #0284c7, #0369a1);
+  border-color: #38bdf8;
+  color: #ffffff;
+}
+
+.v2-surface-tab:focus-visible {
+  outline: 2px solid var(--border-focus);
+  outline-offset: 1px;
+}
+
+.v2-cards-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+}
+
+.v2-hyp-card,
+.v2-analogue-card,
+.v2-study-card {
+  background: rgba(10, 14, 20, 0.48);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  padding: 0.6rem;
+  font-size: 0.73rem;
+  line-height: 1.42;
+}
+
+.v2-study-card {
+  margin-top: 0.65rem;
+}
+
+.v2-hyp-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.35rem;
+  margin-bottom: 0.35rem;
+}
+
+.v2-hyp-title {
+  font-size: 0.77rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin: 0;
+}
+
+.v2-hyp-text,
+.v2-hyp-meta,
+.v2-hyp-cite {
+  margin: 0.25rem 0 0;
+  color: var(--text-secondary);
+  word-break: break-word;
+}
+
+.v2-hyp-cite a {
+  color: #38bdf8;
+}
+
+.v2-context-jump-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin-bottom: 0.6rem;
+}
+
+.v2-sync-meta {
+  font-family: var(--font-mono);
+  font-size: 0.66rem;
+  color: var(--text-secondary);
+  margin: 0 0 0.45rem;
+  word-break: break-word;
+}
+
+.v2-ledger-table th,
+.v2-ledger-table td {
+  font-size: 0.69rem;
+  padding: 0.36rem 0.38rem;
+  vertical-align: top;
+  word-break: break-word;
+}
+
+.v2-bnd-tag {
+  display: inline-block;
+  font-size: 0.62rem;
+  font-weight: 700;
+  padding: 0.12rem 0.36rem;
+  border-radius: 4px;
+  white-space: nowrap;
+}
+
+.v2-tag-boundary_a_dut {
+  background: rgba(56, 189, 248, 0.18);
+  color: #7dd3fc;
+  border: 1px solid rgba(56, 189, 248, 0.45);
+}
+
+.v2-tag-boundary_b_environment {
+  background: rgba(245, 158, 11, 0.18);
+  color: #fde68a;
+  border: 1px solid rgba(245, 158, 11, 0.45);
+}
+
+.v2-tag-boundary_c_closed {
+  background: rgba(16, 185, 129, 0.16);
+  color: #6ee7b7;
+  border: 1px solid rgba(16, 185, 129, 0.45);
+}
+
+.v2-vec-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 0.12rem;
+  font-family: var(--font-mono);
+}
+
+.v2-num-val {
+  font-family: var(--font-mono);
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.v2-vec-mag {
+  font-family: var(--font-mono);
+  color: var(--text-secondary);
+  font-size: 0.65rem;
+}
+
+.v2-null-val {
+  font-family: var(--font-mono);
+  color: var(--text-muted);
+  margin-right: 0.25rem;
+}
+
+.v2-status-chip {
+  display: inline-block;
+  font-family: var(--font-mono);
+  font-size: 0.6rem;
+  font-weight: 700;
+  padding: 0.1rem 0.35rem;
+  border-radius: 4px;
+  word-break: break-word;
+}
+
+.v2-chip-ok {
+  background: rgba(5, 150, 105, 0.2);
+  color: #6ee7b7;
+  border: 1px solid rgba(52, 211, 153, 0.45);
+}
+
+.v2-chip-warn {
+  background: rgba(217, 119, 6, 0.2);
+  color: #fde68a;
+  border: 1px solid rgba(245, 158, 11, 0.5);
+}
+
+.v2-chip-err,
+.v2-chip-pending {
+  background: rgba(220, 38, 38, 0.2);
+  color: #fecaca;
+  border: 1px solid rgba(248, 113, 113, 0.5);
+}
+
+.v2-chip-muted {
+  background: rgba(148, 163, 184, 0.16);
+  color: var(--text-secondary);
+  border: 1px solid var(--border-color);
+}
+
+.v2-residual-tag {
+  font-size: 0.6rem;
+  font-weight: 700;
+  color: #fbbf24;
+}
+
+.v2-cleared-note {
+  margin: 0.35rem 0 0;
+  color: #fde68a;
+  font-size: 0.71rem;
+}
+
+.v2-study-withheld-note {
+  background: rgba(217, 119, 6, 0.14);
+  border: 1px solid rgba(245, 158, 11, 0.45);
+  border-radius: 6px;
+  padding: 0.45rem 0.55rem;
+  color: #fde68a;
+  font-size: 0.7rem;
+}
+
+.v2-study-withheld-note ul {
+  margin: 0.3rem 0 0;
+  padding-left: 1.1rem;
+}
+
+.v2-study-ok-note {
+  margin: 0.25rem 0 0;
+  color: #6ee7b7;
+  font-size: 0.7rem;
+}
+
+.v2-details-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 0.55rem 0.7rem;
+  font-size: 0.74rem;
+}
+
+.v2-details-card summary {
+  cursor: pointer;
+  font-weight: 700;
+  color: #38bdf8;
+}
+
+.v2-details-body {
+  margin-top: 0.55rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.v2-bnd-def {
+  background: rgba(10, 14, 20, 0.45);
+  border: 1px solid var(--border-color);
+  border-left: 3px solid #38bdf8;
+  border-radius: 6px;
+  padding: 0.5rem 0.6rem;
+  font-size: 0.71rem;
+  color: var(--text-secondary);
+}
+
+.v2-bnd-def.v2-bnd-b { border-left-color: #f59e0b; }
+.v2-bnd-def.v2-bnd-c { border-left-color: #10b981; }
+
+.v2-bnd-def h4 {
+  margin: 0 0 0.25rem;
+  color: var(--text-primary);
+  font-size: 0.75rem;
+}
+
+.v2-bnd-def ul {
+  margin: 0.25rem 0 0;
+  padding-left: 1rem;
+}
+
+.v2-p2-gate-note {
+  margin: 0.25rem 0 0;
+  color: #fecaca;
+  font-size: 0.7rem;
+  line-height: 1.4;
 }
